@@ -30,24 +30,30 @@ add_executable(cmdr
 )
 target_link_libraries(cmdr PRIVATE cmdr_lib)
 
-enable_testing()
-find_package(Python3 COMPONENTS Interpreter REQUIRED)
+option(CMDR_BUILD_TESTS "Build the test suite and the check target" ON)
+if(CMDR_BUILD_TESTS)
+  enable_testing()
+  find_package(Python3 COMPONENTS Interpreter)
 
-add_executable(test_api tests/test_api.c)
-target_link_libraries(test_api PRIVATE cmdr_lib)
-set_target_properties(test_api PROPERTIES EXCLUDE_FROM_ALL TRUE)
+  add_executable(test_api tests/test_api.c)
+  target_link_libraries(test_api PRIVATE cmdr_lib)
+  set_target_properties(test_api PROPERTIES EXCLUDE_FROM_ALL TRUE)
+  add_test(NAME test_api COMMAND test_api)
+  if(Python3_Interpreter_FOUND)
+    add_test(
+      NAME test_cmdr
+      COMMAND ${CMAKE_COMMAND} -E env
+              "CMDR_BIN=$<TARGET_FILE:cmdr>"
+              "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_cmdr.py"
+    )
+  else()
+    message(STATUS "Python 3 not found: skipping the test_cmdr integration checks")
+  endif()
 
-add_test(NAME test_api COMMAND test_api)
-add_test(
-  NAME test_cmdr
-  COMMAND ${CMAKE_COMMAND} -E env
-          "CMDR_BIN=$<TARGET_FILE:cmdr>"
-          "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_cmdr.py"
-)
-
-add_custom_target(check
-  COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure
-  DEPENDS cmdr test_api
-  WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
-  COMMENT "Running cmdr checks"
-)
+  add_custom_target(check
+    COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure
+    DEPENDS cmdr test_api
+    WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+    COMMENT "Running cmdr checks"
+  )
+endif()

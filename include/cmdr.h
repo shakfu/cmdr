@@ -3,6 +3,14 @@
 
 #include <stddef.h>
 
+/* Recursion guards. */
+/* Composed commands (`.pipeline`, `map`, `try`) may nest at most this deep;
+ * exceeding it is reported as an error instead of a stack overflow. */
+#define CMDR_MAX_COMPOSITION_DEPTH 128
+/* Values nested deeper than this cannot be cloned or rendered; freeing is
+ * always iterative and has no depth limit. */
+#define CMDR_MAX_VALUE_DEPTH 1024
+
 typedef struct cmdr cmdr;
 typedef struct cmdr_value cmdr_value;
 
@@ -22,8 +30,12 @@ int cmdr_value_text(cmdr_value *out, const char *text, char **error);
 int cmdr_value_clone(const cmdr_value *value, cmdr_value *out, char **error);
 /* Move item into list on success; item remains owned by caller on failure. */
 int cmdr_value_push(cmdr_value *list, cmdr_value *item, char **error);
-/* Render lists as newline-delimited text. Use typed values to retain boundaries. */
+/* Render lists as newline-delimited text. Use typed values to retain boundaries.
+ * Fails with an error if the value nests deeper than CMDR_MAX_VALUE_DEPTH. */
 int cmdr_value_render(const cmdr_value *value, char **text, char **error);
+/* Return the text of the first captured failure anywhere inside value, or NULL.
+ * Iterative: safe on arbitrarily deep values. The returned pointer is borrowed. */
+const char *cmdr_value_failure(const cmdr_value *value);
 
 /* Arguments are borrowed for the duration of the call. On success, return a
  * malloc-owned, NUL-terminated string through result (NULL means no value).
@@ -40,7 +52,7 @@ typedef int (*cmdr_value_fn)(const cmdr *repl, void *user, size_t argc,
 
 typedef struct {
     const char *name;
-    const char *usage;
+    const char *usage; /* Command syntax; NULL falls back to name in help. */
     cmdr_fn run;
     void *user;
     cmdr_value_fn run_value;
@@ -49,6 +61,7 @@ typedef struct {
      * evaluated with the optional single argument as input (same rules as
      * piping into the first stage). The string must outlive the interpreter. */
     const char *pipeline;
+    const char *docstring; /* Optional help description, separate from usage. */
 } cmdr_command;
 
 /* The command table and its strings must outlive the interpreter. */
@@ -57,10 +70,17 @@ struct cmdr {
     size_t count;
     /* Optional fallback registry. Keep the chain acyclic and alive while used. */
     const cmdr *parent;
+    /* Internal: composition recursion guard. The interpreter copies this
+     * struct and bumps `depth` for nested `.pipeline`/`map`/`try` evaluation.
+     * Leave at zero when constructing a registry. */
+    unsigned depth;
 };
 
 /* Search local commands before parent registries. Returns NULL if absent. */
 const cmdr_command *cmdr_find(const cmdr *repl, const char *name);
+/* Format an error message into *error and return nonzero. *error is set to a
+ * fresh malloc-owned string on every failure (never left NULL except when the
+ * process is out of memory). Callers initialize *error to NULL and free it. */
 int cmdr_error(char **error, const char *format, ...);
 /* Call by name without parsing or interpolating arguments. Outputs are reset;
  * caller owns outputs, including on failure. Inputs must not alias outputs. */

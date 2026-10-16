@@ -10,6 +10,7 @@
 typedef struct {
     char **words;
     size_t count;
+    size_t capacity;
 } stage;
 
 int cmdr_error(char **error, const char *format, ...)
@@ -19,11 +20,20 @@ int cmdr_error(char **error, const char *format, ...)
     va_copy(copy, args);
     int n = vsnprintf(NULL, 0, format, copy);
     va_end(copy);
+    char *text = NULL;
     if (n >= 0) {
-        *error = malloc((size_t)n + 1);
-        if (*error) vsnprintf(*error, (size_t)n + 1, format, args);
+        text = malloc((size_t)n + 1);
+        if (text) vsnprintf(text, (size_t)n + 1, format, args);
     }
     va_end(args);
+    if (!text) {
+        /* Fall back so callers do not have to guard *error; only a genuine
+         * out-of-memory condition leaves it NULL. */
+        const char fallback[] = "cmdr: unspecified error";
+        text = malloc(sizeof(fallback));
+        if (text) memcpy(text, fallback, sizeof(fallback));
+    }
+    *error = text;
     return 1;
 }
 
@@ -59,9 +69,8 @@ static int parse(const char *line, stage **out, size_t *count, char **error)
             ++p;
             continue;
         }
-        char *word = malloc(length + 1);
-        if (!word) goto oom;
-        size_t used = 0;
+        char *word = NULL;
+        size_t used = 0, wcap = 0;
         char quote = 0;
         while (*p && (quote || (!isspace((unsigned char)*p) && *p != '|'))) {
             char c = *p++;
@@ -71,25 +80,45 @@ static int parse(const char *line, stage **out, size_t *count, char **error)
                     cmdr_error(error, "unfinished escape");
                     goto fail;
                 }
-                word[used++] = *p++;
+                c = *p++;
             } else if (quote && c == quote) {
                 quote = 0;
+                continue;
             } else if (!quote && (c == '\'' || c == '"')) {
                 quote = c;
-            } else {
-                word[used++] = c;
+                continue;
             }
+            /* Grow the fragment buffer on demand so short words allocate only
+             * a few bytes and parsing stays linear in the input; capacity
+             * keeps one spare byte so the NUL terminator always fits. */
+            if (used + 1 >= wcap) {
+                size_t next = wcap ? wcap * 2 : 16;
+                if (next > length + 1) next = length + 1;
+                if (next <= wcap) next = wcap + 1; /* overflow safety */
+                char *grown = realloc(word, next);
+                if (!grown) { free(word); goto oom; }
+                word = grown;
+                wcap = next;
+            }
+            word[used++] = c;
         }
         if (quote) {
             free(word);
             cmdr_error(error, "unclosed quote");
             goto fail;
         }
+        if (!word) word = malloc(1);
+        if (!word) goto oom;
         word[used] = '\0';
         stage *s = &stages[n - 1];
-        char **words = realloc(s->words, (s->count + 1) * sizeof(*words));
-        if (!words) { free(word); goto oom; }
-        s->words = words;
+        if (s->count == s->capacity) {
+            size_t capacity = s->capacity ? s->capacity * 2 : 8;
+            if (capacity <= s->capacity) capacity = s->count + 1; /* overflow */
+            char **words = realloc(s->words, capacity * sizeof(*words));
+            if (!words) { free(word); goto oom; }
+            s->words = words;
+            s->capacity = capacity;
+        }
         s->words[s->count++] = word;
     }
     if (n > 1 && !stages[n - 1].count) {
@@ -123,6 +152,12 @@ int cmdr_call(const cmdr *repl, const char *name, size_t argc,
     if (!command) return cmdr_error(error, "unknown command: %s", name);
     if (argc && argv[0].kind == CMDR_FAILURE && !command->handles_failure)
         return cmdr_value_clone(&argv[0], result, error);
+    if (repl->depth >= CMDR_MAX_COMPOSITION_DEPTH)
+        return cmdr_error(error, "command '%s' is nested too deeply "
+                          "(possible cycle in composed commands)", name);
+    cmdr recurse = *repl;
+    recurse.depth = repl->depth + 1;
+    repl = &recurse;
     int implementations = (command->run != NULL) + (command->run_value != NULL)
                         + (command->pipeline != NULL);
     if (implementations > 1)
@@ -144,7 +179,10 @@ int cmdr_call(const cmdr *repl, const char *name, size_t argc,
     for (size_t i = 0; i < argc; ++i) {
         if (argv[i].kind != CMDR_TEXT) {
             free(words);
-            return cmdr_error(error, "command '%s' expects text; use map or join for lists", name);
+            const char *failure = cmdr_value_failure(&argv[i]);
+            if (failure) return cmdr_error(error, "%s", failure);
+            return cmdr_error(error,
+                "command '%s' expects text; use map or join for lists", name);
         }
         words[i] = argv[i].text;
     }
@@ -156,13 +194,44 @@ int cmdr_call(const cmdr *repl, const char *name, size_t argc,
     return status;
 }
 
-static const char *unhandled_failure(const cmdr_value *value)
+const char *cmdr_value_failure(const cmdr_value *value)
 {
-    if (value->kind == CMDR_FAILURE) return value->text;
-    for (size_t i = 0; i < value->count; ++i) {
-        const char *failure = unhandled_failure(&value->items[i]);
-        if (failure) return failure;
+    /* Iterative scan so arbitrarily deep lists cannot overflow the stack;
+     * sibling frames are held on a growable heap stack. */
+    const cmdr_value **stack = NULL;
+    size_t cap = 0, top = 0;
+    for (;;) {
+        if (!value) {
+            if (!top) break;
+            value = stack[--top];
+            continue;
+        }
+        if (value->kind == CMDR_FAILURE) {
+            free(stack);
+            return value->text ? value->text : "captured failure";
+        }
+        if (value->kind == CMDR_LIST && value->count) {
+            for (size_t i = 1; i < value->count; ++i) {
+                if (top == cap) {
+                    size_t next = cap ? cap * 2 : 16;
+                    const cmdr_value **grown = realloc(stack, next * sizeof(*grown));
+                    if (!grown) {
+                        /* Conservatively report a failure rather than risk
+                         * silently discarding one on an out-of-memory scan. */
+                        free(stack);
+                        return "out of memory scanning values";
+                    }
+                    stack = grown;
+                    cap = next;
+                }
+                stack[top++] = &value->items[i];
+            }
+            value = &value->items[0];
+            continue;
+        }
+        value = NULL; /* leaf; pop the next pending sibling */
     }
+    free(stack);
     return NULL;
 }
 
@@ -171,6 +240,12 @@ int cmdr_eval_value(const cmdr *repl, const char *line, const cmdr_value *input,
 {
     *result = (cmdr_value){0};
     *error = NULL;
+    if (repl->depth >= CMDR_MAX_COMPOSITION_DEPTH)
+        return cmdr_error(error, "pipeline nesting is too deep "
+                          "(possible cycle in composed commands)");
+    cmdr recurse = *repl;
+    recurse.depth = repl->depth + 1;
+    repl = &recurse;
     stage *stages = NULL;
     size_t count = 0;
     if (parse(line, &stages, &count, error)) return 1;
@@ -203,7 +278,7 @@ int cmdr_eval_value(const cmdr *repl, const char *line, const cmdr_value *input,
         *result = next;
         if (status) goto done;
     }
-    const char *failure = unhandled_failure(result);
+    const char *failure = cmdr_value_failure(result);
     if (failure) status = cmdr_error(error, "%s", failure);
 done:
     dispose(stages, count);

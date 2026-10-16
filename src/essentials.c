@@ -11,6 +11,8 @@
 
 static int require_text(const cmdr_value *v, char **error)
 {
+    const char *failure = cmdr_value_failure(v);
+    if (failure) return cmdr_error(error, "%s", failure);
     return v->kind == CMDR_TEXT ? 0 : cmdr_error(error, "expected text");
 }
 
@@ -160,6 +162,8 @@ static int collection(enum operation op, size_t argc, const cmdr_value *argv,
     if (as_list(&argv[0], &list, error)) return 1;
     int status = 1;
     if (op == COUNT) {
+        const char *failure = cmdr_value_failure(&list);
+        if (failure) { status = cmdr_error(error, "%s", failure); goto done; }
         char text[3 * sizeof(size_t) + 1];
         snprintf(text, sizeof(text), "%zu", list.count);
         status = cmdr_value_text(result, text, error);
@@ -379,29 +383,29 @@ CALLBACK(recover_command)
     return cmdr_value_clone(argv[0].kind == CMDR_FAILURE ? &argv[1] : &argv[0], result, error);
 }
 
-#define ENTRY(n, u, f) {.name = n, .usage = u, .run_value = f}
+#define ENTRY(n, u, d, f) {.name = n, .usage = u, .docstring = d, .run_value = f}
 static const cmdr_command commands[] = {
-    ENTRY("list", "list [VALUE ...]             Construct an explicit list", list_command),
-    ENTRY("split", "split TEXT SEPARATOR         Split into an explicit list", split_command),
-    ENTRY("join", "join LIST_OR_LINES SEPARATOR  Join text items", join_command),
-    ENTRY("sort", "sort LIST_OR_LINES           Sort text items by byte order", sort_command),
-    ENTRY("uniq", "uniq LIST_OR_LINES           Remove adjacent duplicate text items", uniq_command),
-    ENTRY("head", "head LIST_OR_LINES N         Keep the first N items", head_command),
-    ENTRY("tail", "tail LIST_OR_LINES N         Keep the last N items", tail_command),
-    ENTRY("filter", "filter LIST_OR_LINES TEXT    Keep text items containing TEXT", filter_command),
-    ENTRY("count", "count LIST_OR_LINES          Count items", count_command),
-    ENTRY("map", "map LIST_OR_LINES COMMAND [ARG ...]  Apply a command to each item", map_command),
-    ENTRY("files", "files [DIRECTORY]            List regular files, sorted by path", files_command),
-    ENTRY("basename", "basename PATH                Return the final path component", basename_command),
-    ENTRY("dirname", "dirname PATH                 Return the parent path", dirname_command),
-    ENTRY("take", "take TEXT N                  Take the first N bytes", take_command),
-    ENTRY("drop", "drop TEXT N                  Drop the first N bytes", drop_command),
-    ENTRY("slice", "slice TEXT START LENGTH      Extract bytes at a zero-based offset", slice_command),
-    ENTRY("append", "append VALUE PATH            Append to a file, returning VALUE", append_command),
-    ENTRY("write", "write VALUE PATH             Replace a file, returning VALUE", write_command),
-    ENTRY("tee", "tee VALUE PATH               Replace a file, returning VALUE", tee_command),
-    ENTRY("try", "try [INPUT] 'PIPELINE'        Capture a pipeline failure", try_command),
-    {.name = "recover", .usage = "recover VALUE FALLBACK       Substitute FALLBACK after try fails",
+    ENTRY("list", "list [VALUE ...]", "Construct an explicit list", list_command),
+    ENTRY("split", "split TEXT SEPARATOR", "Split into an explicit list", split_command),
+    ENTRY("join", "join LIST_OR_LINES SEPARATOR", "Join text items", join_command),
+    ENTRY("sort", "sort LIST_OR_LINES", "Sort text items by byte order", sort_command),
+    ENTRY("uniq", "uniq LIST_OR_LINES", "Remove adjacent duplicate text items", uniq_command),
+    ENTRY("head", "head LIST_OR_LINES N", "Keep the first N items", head_command),
+    ENTRY("tail", "tail LIST_OR_LINES N", "Keep the last N items", tail_command),
+    ENTRY("filter", "filter LIST_OR_LINES TEXT", "Keep text items containing TEXT", filter_command),
+    ENTRY("count", "count LIST_OR_LINES", "Count items", count_command),
+    ENTRY("map", "map LIST_OR_LINES COMMAND [ARG ...]", "Apply a command to each item", map_command),
+    ENTRY("files", "files [DIRECTORY]", "List regular files, sorted by path", files_command),
+    ENTRY("basename", "basename PATH", "Return the final path component", basename_command),
+    ENTRY("dirname", "dirname PATH", "Return the parent path", dirname_command),
+    ENTRY("take", "take TEXT N", "Take the first N bytes", take_command),
+    ENTRY("drop", "drop TEXT N", "Drop the first N bytes", drop_command),
+    ENTRY("slice", "slice TEXT START LENGTH", "Extract bytes at a zero-based offset", slice_command),
+    ENTRY("append", "append VALUE PATH", "Append to a file, returning VALUE", append_command),
+    ENTRY("write", "write VALUE PATH", "Replace a file, returning VALUE", write_command),
+    ENTRY("tee", "tee VALUE PATH", "Replace a file, returning VALUE", tee_command),
+    ENTRY("try", "try [INPUT] 'PIPELINE'", "Capture a pipeline failure", try_command),
+    {.name = "recover", .usage = "recover VALUE FALLBACK", .docstring = "Substitute FALLBACK after try fails",
      .run_value = recover_command, .handles_failure = 1},
 };
 #undef ENTRY

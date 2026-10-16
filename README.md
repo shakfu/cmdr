@@ -2,7 +2,8 @@
 
 A small C REPL for commands with positional arguments, text and list values,
 and explicit effects.
-Requires a C11 compiler, POSIX `getline`, and CMake 3.16+ (Linux/macOS).
+Requires a C11 compiler and CMake 3.16+ on Linux/macOS, using POSIX-2008
+facilities (`getline`, `posix_spawn`, `fstatat`/`dirfd`, `F_DUPFD_CLOEXEC`).
 Make is an optional frontend for the same CMake build.
 
 ```sh
@@ -60,14 +61,18 @@ Define commands in [src/commands.c](src/commands.c): add an entry to the
 exposes that initializer, which `main.c` calls to load the command registry and
 prelude automatically. Application commands override prelude commands with the
 same name; `help` lists each active name once. Arguments exclude the command
-name.
+name. Set `.usage` to the command syntax and `.docstring` to its help
+description. `help` automatically aligns descriptions across all active commands;
+omitting `.usage` falls back to the command name, and `.docstring` is optional.
 
 To define a command as a pipeline of other commands, set `.pipeline`:
 
 ```c
 /* In the commands table: */
-/* {.name = "clean", .usage = "clean [TEXT]", .pipeline = "trim | lower"}, */
-/* {.name = "shout", .usage = "shout [TEXT]", .pipeline = "upper"}, */
+/* {.name = "clean", .usage = "clean [TEXT]",
+    .docstring = "Trim and lowercase text", .pipeline = "trim | lower"}, */
+/* {.name = "shout", .usage = "shout [TEXT]",
+    .docstring = "Uppercase text", .pipeline = "upper"}, */
 ```
 
 `text "  Hi  " | clean` and `clean "  Hi  "` both evaluate the body with that
@@ -93,7 +98,8 @@ static int first(void *user, size_t argc, const char *const *argv,
 }
 
 /* In the commands table: */
-/* {.name = "first", .usage = "first TEXT", .run = first}, */
+/* {.name = "first", .usage = "first TEXT",
+    .docstring = "Return the first byte", .run = first}, */
 ```
 
 Return zero on success. Set `*result` to a fresh malloc-owned string, or leave it
@@ -126,7 +132,7 @@ be reused across applications.
 | `uniq LINES` | Remove adjacent duplicates; use `sort \| uniq` for all duplicates |
 | `head LINES N`, `tail LINES N` | Keep the first/last N records; N is a nonnegative integer |
 | `filter LINES SUBSTRING` | Keep records containing a literal substring |
-| `count LINES` | Return the number of records |
+| `count LINES` | Return the number of records; fails on un-recovered failures |
 | `add A B [NUMBER ...]`, `mul A B [NUMBER ...]` | Add/multiply numbers |
 | `sub A B`, `div A B` | Subtract/divide in argument order |
 | `read PATH`, `write VALUE PATH` | Read/replace text files; write returns the original value |
@@ -161,7 +167,9 @@ lists or newline-separated text. For text input, empty text represents zero
 records and a terminal newline ends the last record without adding another.
 Blank records are preserved. `sort`, `uniq`, `filter`, `head`, and `tail` preserve
 the input representation: text in produces newline-terminated text; a list in
-produces a list. `count` always returns a text number.
+produces a list. `count` always returns a text number, but only after checking
+that the input holds no captured failures — a failure cannot be discarded by
+counting (use `map recover ""` first to substitute failed items).
 
 `list`, `split`, `files`, and `map` produce explicit lists. `split` preserves empty
 fields, including trailing fields; splitting empty text returns an empty list.
@@ -225,6 +233,13 @@ The outer pipeline's syntax and command names are checked before execution.
 Errors inside the quoted `try` pipeline, including unknown command names and
 syntax errors, can be recovered. Neither `try` nor `recover` rolls back effects.
 
+A captured failure is an ordinary value while it is being carried: commands that
+consume a whole list (such as `count`) fail if the list still contains one, so a
+failure is never silently discarded by counting or joining. Commands that
+require text items report the captured failure's message rather than a generic
+"expected text" error. Substitute first with `map recover ""` when a failed item
+is acceptable.
+
 Text operations work on bytes using the C locale, without Unicode case folding.
 Arithmetic uses finite double precision numbers and reports invalid numbers,
 overflow, and division by zero. `print` performs an immediate effect, so using
@@ -278,7 +293,10 @@ To override or extend the prelude, set `.commands` and `.count` to your own comm
 table while retaining `.parent = cmdr_prelude()`. The prelude has static storage
 and needs no initialization or cleanup. Leave `.parent` NULL for an interpreter
 with only your commands. Each registry in a parent chain must outlive evaluation;
-parent chains must not contain cycles.
+parent chains must not contain cycles. Composed commands must also not cycle:
+`.pipeline` bodies, `map`, and `try` are evaluated through the same interpreter,
+and runaway nesting is detected and reported as an error (`possible cycle in
+composed commands`) rather than looping or overflowing the stack.
 
 For explicit values, use `cmdr_eval_value` and release results with
 `cmdr_value_free`:
@@ -305,5 +323,7 @@ Initialize values with `{0}`; output values must not alias input values.
 ### Checks
 
 Run `make check` (or `cmake --build build --target check`) for integration
-checks and C embedding checks. Python 3 is required for the checks, but not for
-building or running cmdr.
+checks and C embedding checks. Python 3 is used for the integration checks; if
+Python 3 is not found at configure time, `test_cmdr` is skipped (the C embedding
+checks still run). Tests are enabled by default and can be turned off with
+`-DCMDR_BUILD_TESTS=OFF` — Python is never required to simply build or run cmdr.

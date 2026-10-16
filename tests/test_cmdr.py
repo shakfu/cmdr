@@ -1,5 +1,6 @@
 """Integration checks for value boundaries, effects, and error recovery."""
 import os
+import re
 from pathlib import Path
 import subprocess
 import tempfile
@@ -38,10 +39,19 @@ class Commands(unittest.TestCase):
             ('slice abc 1 99', 'bc\n'), ('slice abc 99 2', '\n'),
             ('take abc 0', '\n'), ('drop abc 0', 'abc\n'),
             ('slice abc 1 0', '\n'),
+            ('text "a"b"c"', 'abc\n'),
+            ('text a\\ b c', 'a b c\n'),
+            ('text "a b" "c d" | length', '7\n'),
         ]
         for source, expected in cases:
             with self.subTest(source=source):
                 self.run_line(source, expected)
+
+    def test_large_pipeline_line(self):
+        # One line with many tokens must stay fast and correct (regression:
+        # the parser used to allocate line-sized buffers per token).
+        source = 'text ' + ' '.join(['x'] * 20000) + ' | length'
+        self.run_line(source, '39999\n')
 
     def test_lists(self):
         cases = [
@@ -171,6 +181,15 @@ class Commands(unittest.TestCase):
             ('split x ""', 'nonempty'),
             ('div 1 0', 'division by zero'),
             ('text x |', 'expected a command'),
+            ('text x | | upper', 'expected a command before'),
+            ('text "a', 'unclosed quote'),
+            ("text a\\", 'unfinished escape'),
+            # Captured failures must fail the pipeline instead of being
+            # silently discarded or reported as "expected text".
+            ('list a b | map try "div 1 0" | count', 'arithmetic expects exactly two numbers'),
+            ('list a b | map try "div 1 0" | sort', 'arithmetic expects exactly two numbers'),
+            ('list a b | map try "div 1 0" | join ,', 'arithmetic expects exactly two numbers'),
+            ('list a b | map try "div 1 0" | basename', 'arithmetic expects exactly two numbers'),
         ]
         for source, error in cases:
             with self.subTest(source=source):
@@ -189,10 +208,22 @@ class Commands(unittest.TestCase):
 
     def test_help_and_repl(self):
         result = self.run_line('help')
-        names = [line.split()[0] for line in result.stdout.splitlines()[:-2]]
+        lines = result.stdout.splitlines()[:-2]
+        rows = [re.fullmatch(r'(\S(?:.*?\S)?) {2,}(\S.*)', line) for line in lines]
+        self.assertTrue(all(rows), result.stdout)
+        self.assertEqual(len({row.start(2) for row in rows}), 1, result.stdout)
+        self.assertEqual(rows[0].groups(), ('help', 'Show commands'))
+        self.assertIn(('map LIST_OR_LINES COMMAND [ARG ...]',
+                       'Apply a command to each item'), [row.groups() for row in rows])
+        names = [line.split()[0] for line in lines]
         self.assertEqual(len(names), len(set(names)))
         self.assertTrue({'map', 'files', 'list', 'take', 'append', 'tee', 'try', 'recover'} <= set(names))
         result = subprocess.run([str(BINARY)], input='run cat\ntext next\n',
+                                capture_output=True, text=True, timeout=20)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, '\nnext\n')
+        # Empty and whitespace-only lines are silent successes.
+        result = subprocess.run([str(BINARY)], input='run cat\n\n   \ntext next\n',
                                 capture_output=True, text=True, timeout=20)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout, '\nnext\n')
