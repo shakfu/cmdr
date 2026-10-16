@@ -352,7 +352,7 @@ CALLBACK(when_command)
     if (argc < 4)
         return cmdr_error(error, "usage: when VALUE COND THEN ELSE [ARG ...]");
     const char *labels[] = {"COND", "THEN", "ELSE"};
-    size_t needs[3], params = argc - 3, highest = 0;
+    size_t needs[3] = {0}, params = argc - 3, highest = 0;
     cmdr_value *args = calloc(params, sizeof(*args));
     if (!args) return cmdr_error(error, "out of memory");
     args[0] = argv[0];

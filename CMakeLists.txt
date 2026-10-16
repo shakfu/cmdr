@@ -39,6 +39,10 @@ if(CMDR_LINENOISE_DIR AND EXISTS "${CMDR_LINENOISE_DIR}/CMakeLists.txt")
   set(BUILD_TESTS OFF)
   set(WITH_TREESITTER OFF)
   add_subdirectory("${CMDR_LINENOISE_DIR}" linenoise EXCLUDE_FROM_ALL)
+  # linenoise declares no POSIX feature macros. Under strict C, strdup and
+  # fdopen are undeclared, their int returns truncate pointers, and the REPL
+  # crashes on Enter.
+  set_target_properties(linenoise PROPERTIES C_EXTENSIONS ON)
   target_sources(cmdr PRIVATE src/editor.c)
   target_link_libraries(cmdr PRIVATE linenoise)
   target_compile_definitions(cmdr PRIVATE CMDR_LINENOISE)
