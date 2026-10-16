@@ -215,7 +215,7 @@ class Commands(unittest.TestCase):
         errors = [
             ('text $1', 'reference $1 has no argument'),
             ("text x | try 'text $2' | recover ok", None),
-            ('text $name', 'unbound reference $name'),
+            ('text $name', "invalid reference '$name'"),
             ('text $_', "invalid reference '$_'"),
             ('text $1x', "invalid reference '$1x'"),
             ('text $0', "invalid reference '$0'"),
@@ -332,7 +332,6 @@ class Commands(unittest.TestCase):
         # Errors from a body name the command, giving a call chain.
         result = self.run_input("def inner 'equals x'\ndef outer 'trim | inner'\ntext y | outer\n")
         self.assertIn("outer: inner: equals: text differs from 'x'", result.stderr)
-        self.run_line('def as upper', error='def: cannot redefine as')
 
     def test_script_files(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -376,13 +375,9 @@ class Commands(unittest.TestCase):
             "list b a b | stats\n"
             "def clean-or 'trim | when nonempty upper \"$2\" $2'\n"
             "clean-or '  hi  ' none\n"
-            "text '   ' | clean-or none\n"
-            "def clean-or2 '$2 | as fallback | $1 | trim"
-            " | when nonempty upper \"$fallback\"'\n"
-            "clean-or2 '  hi  ' none\n"
-            "text '   ' | clean-or2 none\n")
+            "text '   ' | clean-or none\n")
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(result.stdout, '2 of 3\nHI\nnone\nHI\nnone\n')
+        self.assertEqual(result.stdout, '2 of 3\nHI\nnone\n')
         cases = [
             ("text a | when 'equals $2' 'text yes $1' 'text no $1' a", 'yes a\n'),
             ("text b | when 'equals $2' 'text yes $1' 'text no $1' a", 'no b\n'),
@@ -409,51 +404,17 @@ class Commands(unittest.TestCase):
             with self.subTest(source=source):
                 self.run_line(source, error=error)
 
-    def test_bindings(self):
-        cases = [
-            ('list b a b | as lines | count | as total | $lines | sort | uniq | count'
-             ' | text of $total', '2 of 3\n'),
-            # A stage that names the current value gets it only where named.
-            ('text v | as x | text a $x b', 'a v b\n'),
-            ('text v | as x | text a b', 'v a b\n'),
-            ('text a | as x | upper | $x', 'a\n'),
-            ('text a | as x | upper | text $x', 'A a\n'),
-            # A list binding stays one typed value.
-            ("list a b | as l | count | text $l", None),
-            ("list 'a b' c | each 'as item | text [ $item ]' | join ,", '[ a b ],[ c ]\n'),
-            # Nested strings see enclosing bindings, innermost first.
-            ("text a | as x | try 'text $x' | recover none", 'a a\n'),
-            ("text a | as x | each 'list $x' | count", '1\n'),
-            ("text a | as x | upper | try 'as x | text $x'", 'A\n'),
-            ("text a | as x | try 'try \"$x\"'", 'a\n'),
-            # Positional references stay local to each string.
-            ("text a | as x | try 'text $x $1'", 'a a\n'),
-            # A captured failure is not replaced by a value stage.
-            ("text a | as x | try bogus | $x | recover ok", 'ok\n'),
-        ]
-        for source, expected in cases:
-            with self.subTest(source=source):
-                if expected is None:
-                    self.run_line(source, error='expects text')
-                else:
-                    self.run_line(source, expected)
-        errors = [
-            ('text $y', 'unbound reference $y'),
-            ('text $y | as y', 'unbound reference $y'),
-            ('text x | as 1a', 'usage: as NAME'),
-            ('text x | as', 'usage: as NAME'),
-            ('text x | as a b', 'usage: as NAME'),
-            ('text x | as x | as x', 'as: $x is already bound'),
-            ('as x', 'as x: no pipeline value to bind'),
-            ('text $_', "invalid reference '$_'"),
-        ]
-        for source, error in errors:
-            with self.subTest(source=source):
-                self.run_line(source, error=error)
-        # A pipeline command's body does not see its caller's bindings.
-        result = self.run_input("def peek 'try \"text $x\"'\ntext v | as x | peek\n")
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn('unbound reference $x', result.stderr)
+    def test_no_bindings(self):
+        # `as` and $name references are not part of the language.
+        self.run_line('text x | as y', error='unknown command: as')
+        self.run_line('text $y', error="invalid reference '$y'")
+        result = self.run_input("def as 'upper'\ntext a | as\n")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, 'A\n')
+        # A captured failure is not replaced by a value stage.
+        result = self.run_input("def f 'try bogus | $1 | recover ok'\nf a\n")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, 'ok\n')
 
     def test_numeric_predicates(self):
         cases = [
@@ -529,13 +490,19 @@ class Commands(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout, 'a#b #\n')
         self.run_line("try '# skipped'", '')
+        # quit and exit end only the interactive REPL.
+        result = subprocess.run([str(BINARY)], input='exit\ntext after\n',
+                                capture_output=True, text=True, timeout=20)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn('unknown command: exit', result.stderr)
+        self.assertEqual(result.stdout, 'after\n')
 
 
 @unittest.skipUnless(os.environ.get("CMDR_LINENOISE") == "1", "built without linenoise")
 class Editor(unittest.TestCase):
     """Drive the interactive REPL through a pseudo-terminal."""
 
-    def session(self, home, keys):
+    def session(self, home, keys, end=b"\x04"):
         import pty
         import select
         import time
@@ -559,7 +526,7 @@ class Editor(unittest.TestCase):
                         os.write(fd, b"\x1b[1;200R")
 
         drain(0.3)
-        for key in keys + [b"\x04"]:
+        for key in keys + ([end] if end else []):
             os.write(fd, key)
             drain(0.3)
         deadline = time.time() + 5
@@ -567,10 +534,16 @@ class Editor(unittest.TestCase):
             if time.time() > deadline:
                 os.kill(pid, 9)
                 os.waitpid(pid, 0)
-                self.fail("REPL did not exit on Ctrl-D")
+                self.fail("REPL did not exit")
             drain(0.1)
         os.close(fd)
         return out
+
+    def test_quit_and_exit(self):
+        for word in [b"quit", b"  exit "]:
+            with tempfile.TemporaryDirectory() as home:
+                out = self.session(home, [b"text hi\r", word + b"\r"], end=None)
+                self.assertIn(b"hi\r\n", out)
 
     def test_completion_history_and_highlighting(self):
         with tempfile.TemporaryDirectory() as home:

@@ -4,7 +4,6 @@
 #include "linenoise.h"
 
 #include <ctype.h>
-#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -13,7 +12,8 @@ enum { COMMAND = 4, UNKNOWN = 1, STRING = 2, REFERENCE = 5, PIPE = 3, COMMENT = 
 
 struct editor {
     linenoise_context_t *ctx;
-    const cmdr *repl;
+    const char *const *names; /* Borrowed during editor_read. */
+    size_t count;
     char *history; /* NULL when $HOME is unset. */
 };
 
@@ -26,7 +26,7 @@ typedef struct {
     int plain;   /* No quotes or escapes, so the text is the word. */
 } token;
 
-/* Split buf[0, len) as parse() in cmdr.c does, calling visit per token and
+/* Split buf[0, len) as parse in cmdr.janet does, calling visit per token and
  * marking quoted bytes in colors when non-NULL. */
 static void scan(const char *buf, size_t len, char *colors,
                  void (*visit)(const token *, void *), void *data)
@@ -82,14 +82,12 @@ static void scan(const char *buf, size_t len, char *colors,
     }
 }
 
-/* Whether name, of length n, is `as` or an active command. */
-static int known(const cmdr *repl, const char *name, size_t n)
+/* Whether name, of length n, is an active command. */
+static int known(const editor *ed, const char *name, size_t n)
 {
-    char word[256];
-    if (n >= sizeof(word)) return 0;
-    memcpy(word, name, n);
-    word[n] = '\0';
-    return !strcmp(word, "as") || cmdr_find(repl, word);
+    for (size_t i = 0; i < ed->count; ++i)
+        if (strlen(ed->names[i]) == n && !memcmp(ed->names[i], name, n)) return 1;
+    return 0;
 }
 
 typedef struct {
@@ -109,7 +107,7 @@ static void paint_token(const token *t, void *data)
     else if (t->kind == REF) memset(at, REFERENCE, n);
     else if (t->command && t->plain) {
         /* A word still being typed is not marked unknown. */
-        if (known(p->ed->repl, p->buf + t->start, n)) memset(at, COMMAND, n);
+        if (known(p->ed, p->buf + t->start, n)) memset(at, COMMAND, n);
         else if (p->pos != t->end) memset(at, UNKNOWN, n);
     }
 }
@@ -140,23 +138,17 @@ static void complete(const char *buf, size_t pos, linenoise_completions_t *lc, v
     lc->start = start;
     const char *prefix = buf + start;
     size_t n = pos - start;
-    if (!strncmp("as", prefix, n)) linenoise_add_completion(lc, "as");
-    for (const cmdr *group = ed->repl; group; group = group->parent)
-        for (size_t i = 0; i < group->count; ++i) {
-            const cmdr_command *command = &group->commands[i];
-            if (cmdr_find(ed->repl, command->name) != command) continue;
-            if (!strncmp(command->name, prefix, n))
-                linenoise_add_completion(lc, command->name);
-        }
+    for (size_t i = 0; i < ed->count; ++i)
+        if (!strncmp(ed->names[i], prefix, n))
+            linenoise_add_completion(lc, ed->names[i]);
 }
 
-editor *editor_open(const cmdr *repl)
+editor *editor_open(void)
 {
     editor *ed = calloc(1, sizeof(*ed));
     if (!ed) return NULL;
     ed->ctx = linenoise_context_create();
     if (!ed->ctx) { free(ed); return NULL; }
-    ed->repl = repl;
     linenoise_set_multiline(ed->ctx, 1);
     linenoise_set_completion_callback(ed->ctx, complete, ed);
     linenoise_set_highlight_callback(ed->ctx, highlight, ed);
@@ -173,22 +165,19 @@ editor *editor_open(const cmdr *repl)
     return ed;
 }
 
-ssize_t editor_read(editor *ed, const char *prompt, char **line, size_t *capacity)
+char *editor_read(editor *ed, const char *prompt, const char *const *names,
+                  size_t count, int *interrupted)
 {
+    ed->names = names;
+    ed->count = count;
     char *text = linenoise_read(ed->ctx, prompt);
-    if (!text) return linenoise_get_error() == LINENOISE_ERR_INTERRUPTED ? -2 : -1;
-    size_t n = strlen(text);
-    if (n + 2 > *capacity) {
-        char *grown = realloc(*line, n + 2);
-        if (!grown) { linenoise_free(text); errno = ENOMEM; return -1; }
-        *line = grown;
-        *capacity = n + 2;
-    }
-    memcpy(*line, text, n);
-    (*line)[n] = '\n';
-    (*line)[n + 1] = '\0';
+    ed->names = NULL;
+    ed->count = 0;
+    *interrupted = !text && linenoise_get_error() == LINENOISE_ERR_INTERRUPTED;
+    if (!text) return NULL;
+    char *line = strdup(text); /* linenoise_free, not free, releases text. */
     linenoise_free(text);
-    return (ssize_t)n + 1;
+    return line;
 }
 
 void editor_remember(editor *ed, const char *pipeline)

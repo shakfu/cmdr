@@ -1,13 +1,15 @@
 # cmdr
 
-A small C REPL for commands with positional arguments, text and list values,
-and explicit effects.
-Requires a C11 compiler and CMake 3.16+ on Linux/macOS, using POSIX-2008
-facilities (`getline`, `posix_spawn`, `fstatat`/`dirfd`, `F_DUPFD_CLOEXEC`).
-Make is an optional frontend for the same CMake build.
-The interactive REPL uses [linenoise](../linenoise) when a checkout is found
-at `../linenoise`; set `-DCMDR_LINENOISE_DIR=PATH` to use another, or to empty
-to read plain lines. It adds:
+A small REPL for commands with positional arguments, text and list values,
+and explicit effects. The language is [src/cmdr.janet](src/cmdr.janet), written
+in [Janet](https://janet-lang.org); [src/main.c](src/main.c) embeds it with the
+Janet VM. Requires a C11 compiler and CMake 3.16+ on Linux/macOS. Janet 1.42.1
+and [linenoise](https://github.com/shakfu/linenoise) are vendored in
+`thirdparty/` (see each `VERSION` file). Set `-DCMDR_JANET_DIR=PATH` to link
+another Janet release or build tree instead. Make is an optional frontend for
+the same CMake build; pass CMake options as `make CMAKE_FLAGS=...`.
+The interactive REPL uses linenoise unless configured with
+`-DCMDR_LINENOISE=OFF`, which reads plain lines. It adds:
 
 - Line editing, with Tab completing command names at the start of a stage.
 - History in `~/.cmdr_history` (mode 0600), one line per pipeline.
@@ -37,7 +39,7 @@ HELLO WORLD
 ```
 
 Run `help` for the command list; it returns text, so `help | filter map` works.
-Exit with Ctrl-D; Ctrl-C discards the current line or continuation. For scripts, pass a pipeline
+Exit with `quit`, `exit`, or Ctrl-D; Ctrl-C discards the current line or continuation. For scripts, pass a pipeline
 with `./cmdr -c 'text hello | upper'`, run a file with `./cmdr FILE`, or feed
 one pipeline per line on stdin. Errors go to stderr; an uncaught failure stops
 its pipeline. The REPL continues after errors and exits with a nonzero status
@@ -67,10 +69,10 @@ cmdr> list a b | map wrap - | join ,
 ```
 
 `def NAME PIPELINE` registers a pipeline command for the rest of the session,
-with the same parameter rules as `.pipeline` (see below). The body's syntax and
+with the parameter rules below. The body's syntax and
 command names are checked when it is defined, so define helpers before the
 commands that use them. Arity is checked per call. A definition may shadow any
-command except `def` and `as`, including earlier definitions; `help` marks
+command except `def`, including earlier definitions; `help` marks
 definitions with `def:`. Definitions are lexically scoped: a body uses the
 commands that existed when it was defined. Redefining `upper` later does not
 change earlier bodies, and a body that names its own command calls the
@@ -83,10 +85,7 @@ A !
 ```
 
 Errors from a pipeline command's body are prefixed with its name, so nested
-definitions report a call chain (`outer: inner: equals: ...`). Definitions
-belong to the example REPL in `main.c` and `commands.c`; the embeddable core
-stays immutable. Set `.scope` on a `cmdr_command` for the same lexical
-resolution in C.
+definitions report a call chain (`outer: inner: equals: ...`).
 
 ## Composition
 
@@ -112,51 +111,20 @@ argument. A pipeline whose first nonblank character is `#` is a comment and
 returns no value; `#` elsewhere is literal. Unquoted words starting with `$`
 are parameter references (see below); quote or escape `$` for literal text.
 `a$1` is literal. There is no variable expansion, implicit shell execution, redirection, or
-background execution. Text values are NUL-terminated strings, not binary buffers.
+background execution. Text values are not binary buffers: `read` and `run`
+reject NUL bytes.
 
-## Adding C commands
+## Parameters
 
-Define commands in [src/commands.c](src/commands.c): add an entry to the
-`commands` table in `cmdr_commands_init`. Each entry sets exactly one of
-`.run`, `.run_value`, or `.pipeline`. [include/commands.h](include/commands.h)
-exposes that initializer, which `main.c` calls to load the command registry and
-prelude automatically. Application commands override prelude commands with the
-same name; `help` lists each active name once. Arguments exclude the command
-name. Set `.usage` to the command syntax and `.docstring` to its help
-description. `help` automatically aligns descriptions across all active commands;
-omitting `.usage` falls back to the command name, and `.docstring` is optional.
-
-To define a command as a pipeline of other commands, set `.pipeline`:
-
-```c
-/* In the commands table: */
-/* {.name = "clean", .usage = "clean [TEXT]",
-    .docstring = "Trim and lowercase text", .pipeline = "trim | lower"}, */
-/* {.name = "shout", .usage = "shout [TEXT]",
-    .docstring = "Uppercase text", .pipeline = "upper"}, */
-```
-
-`text "  Hi  " | clean` and `clean "  Hi  "` both evaluate the body with that
-value as pipeline input. Bodies
-resolve names through the active registry, so they see application overrides
-and can call other pipeline commands. Set `.handles_failure` when the body
-should consume a captured failure (for example a body that starts with
-`recover`).
-
-Bodies take parameters as `$1..$N`. `$1` is the first argument, piped or
+`def` bodies, and the pipeline strings that `try`, `each`, `keep`, `not`, and
+`when` take, have parameters `$1..$N`. `$1` is the first argument, piped or
 explicit. A body whose highest reference is `$N` requires exactly N arguments;
 a body without references accepts at most one. The first stage receives `$1`
 as input unless it references `$1` itself. References substitute typed values,
 not text: a list stays one argument, and a value containing `|` is not parsed.
 
-```c
-/* {.name = "wrap", .usage = "wrap TEXT MARK", .pipeline = "text $2 $1 $2"}, */
-/* {.name = "swap", .usage = "swap TEXT OLD NEW", .pipeline = "replace $2 $3"}, */
-```
-
-With those entries added:
-
 ```text
+cmdr> def wrap 'text $2 $1 $2'
 cmdr> wrap x '*'
 * x *
 cmdr> list a b | map wrap - | join ,
@@ -169,63 +137,56 @@ A stage that is a lone reference replaces the current value with that value,
 so a body can start from any parameter: `$2 | sort | uniq | count | text of $1`.
 A captured failure is not replaced.
 
-`as NAME` binds the current value to `$NAME` for the rest of the pipeline and
-passes it through. Bindings are immutable and must precede their use; names
-start with a letter and contain letters, digits, `_`, or `-`.
+The current value is named while it is `$1` (at the start) or a lone
+reference. A stage that references that name receives the value only where
+named; any other stage receives it as its first argument. So `text $2` as a
+first stage still receives `$1`; write `$2 | text` instead.
+
+A nested string has its own `$1..$N`; pass outer values as arguments. A
+reference without an argument, including `$1` at the top level, is an error.
+There are no named bindings. To reuse an intermediate value, pass it to a
+`def` as a parameter:
 
 ```text
-cmdr> list b a b | as lines | count | as total | $lines | sort | uniq | count | text of $total
+cmdr> def stats2 '$2 | sort | uniq | count | text of $1'
+cmdr> def stats 'count | stats2 $1'
+cmdr> list b a b | stats
 2 of 3
-cmdr> text v | as x | text a $x b
-a v b
 ```
 
-The current value is named while it is `$1` (at the start), a lone reference,
-or just bound by `as`. A stage that references that name receives the value
-only where named; any other stage receives it as its first argument. So
-`text $2` as a first stage still receives `$1`; write `$2 | text` or name `$1`.
+See [docs/dev/compose-ng.md](docs/dev/compose-ng.md) for the design and
+[docs/dev/janet-kernel.md](docs/dev/janet-kernel.md) for the Janet
+implementation.
 
-`try` strings bind their input as `$1`. A nested string has its own `$1..$N`
-but sees the enclosing pipelines' `as` bindings, innermost first. A pipeline
-command's body does not see its caller's bindings. `$_` is reserved. A reference without an argument or binding, including `$1` at the
-top level, is an error. See [docs/dev/compose-ng.md](docs/dev/compose-ng.md) for the
-design.
+## Adding commands
 
-For custom C logic, implement a `cmdr_fn` from [include/cmdr.h](include/cmdr.h):
+`register` in [src/cmdr.janet](src/cmdr.janet) adds an application command.
+Application commands override prelude commands with the same name; `help`
+lists each active name once.
 
-```c
-static int first(void *user, size_t argc, const char *const *argv,
-                 char **result, char **error)
-{
-    (void)user;
-    if (argc != 1) return cmdr_error(error, "usage: first TEXT");
-    *result = malloc(2);
-    if (!*result) return cmdr_error(error, "out of memory");
-    (*result)[0] = argv[0][0];
-    (*result)[1] = '\0';
-    return 0;
-}
-
-/* In the commands table: */
-/* {.name = "first", .usage = "first TEXT",
-    .docstring = "Return the first byte", .run = first}, */
+```janet
+(register "first" "first TEXT" "Return the first byte"
+          (fn [s] (string/slice s 0 (min 1 (length s)))))
 ```
 
-Return zero on success. Set `*result` to a fresh malloc-owned string, or leave it
-NULL for no value. Return nonzero and use `cmdr_error` on failure. The interpreter
-frees both outputs; do not return borrowed arguments or static strings. String
-callbacks receive only text arguments; use `map` to apply them to list items or
-`join` to turn a list into text. The
-opaque `user` pointer lets commands access application state. The interpreter
-in `cmdr.c` can also be embedded independently of the example REPL in `main.c`.
+`(register NAME USAGE DOC F &opt TYPED)` calls F with the arguments, pipeline
+input first. F returns a value, or nil for no value. By default every argument
+must be text; use `map` to apply F to list items or `join` to turn a list into
+text. With TYPED, F receives values as they are (see Embedding). F reports
+failure with `(error "usage: ...")`; a predicate that does not hold calls
+`(mismatch MSG)`.
+
+Call `register` from Janet code that imports `src/cmdr.janet`, or from
+`main.c` after it loads the module. A C function becomes a command the same
+way: define it with `janet_cfuns`, then pass it to `register`, as `main.c`
+passes its editor hooks to `use-editor`.
 
 ## Prelude
 
-[include/prelude.h](include/prelude.h) / [src/prelude.c](src/prelude.c) provide
-the standard library, with collection and composition commands in
-[src/essentials.c](src/essentials.c), all loaded automatically by
-`cmdr_commands_init`. Custom commands belong in `commands.c`, so the prelude can
-be reused across applications.
+[src/cmdr.janet](src/cmdr.janet) provides the standard library in two layers:
+`prelude` (text, numbers, files, programs) and `essentials` (collection and
+composition commands). The application layer (`help`, `def`, and registered
+commands) sits above them.
 
 | Commands | Behavior |
 | --- | --- |
@@ -353,7 +314,7 @@ referenced by at least one of them. ELSE is required: without it, use
 `COND | THEN`.
 
 ```text
-def clean-or '$2 | as fallback | $1 | trim | when nonempty upper "$fallback"'
+def clean-or 'trim | when nonempty upper "$2" $2'
 text a | when 'equals $2' 'text yes $1' 'text no $1' a      => yes a
 ```
 
@@ -435,103 +396,35 @@ stops the pipeline.
 
 ### Embedding
 
-`make` also builds `build/libcmdr.a`, containing the interpreter and prelude.
-Include `prelude.h` and link your application against that library:
+[src/cmdr.janet](src/cmdr.janet) is a Janet module. Import it, or load it into
+an environment as `main.c` does, and call:
 
-```c
-cmdr repl = { .parent = cmdr_prelude() };
-char *result, *error;
-int status = cmdr_eval(&repl, "add 2 3 | mul 4", &result, &error);
-/* Handle status; free(result) and free(error). */
+| Function | Behavior |
+| --- | --- |
+| `(eval-line LINE)` | Evaluate a pipeline; return its value or raise its error |
+| `(register NAME USAGE DOC F &opt TYPED)` | Add an application command |
+| `(command-names)` | Active command names, newest definition first |
+| `(mismatch? ERR)`, `(message ERR)` | Classify an error; get its text |
+| `(failure? VALUE)` | Whether VALUE is a captured failure |
+| `(use-editor READ REMEMBER)` | Read interactive lines through a host editor |
+| `(main & ARGS)` | The command-line driver; exits the process |
+
+```janet
+(import ./src/cmdr :as cmdr)
+(cmdr/eval-line "list 'a\nb' c | map upper")   # => ("A\nB" "C")
 ```
 
-To override or extend the prelude, set `.commands` and `.count` to your own command
-table while retaining `.parent = cmdr_prelude()`. The prelude has static storage
-and needs no initialization or cleanup. Leave `.parent` NULL for an interpreter
-with only your commands. Each registry in a parent chain must outlive evaluation;
-parent chains must not contain cycles. Composed commands must also not cycle:
-`.pipeline` bodies, `map`, and `try` are evaluated through the same interpreter,
-and runaway nesting is detected and reported as an error (`possible cycle in
-composed commands`) rather than looping or overflowing the stack.
-
-For explicit values, use `cmdr_eval_value` and release results with
-`cmdr_value_free`:
-
-```c
-cmdr_value result = {0};
-char *error = NULL;
-int status = cmdr_eval_value(&repl, "list 'a\nb' c | map upper", NULL,
-                              &result, &error);
-/* On success: result.kind == CMDR_LIST, result.count == 2. */
-cmdr_value_free(&result);
-free(error);
-```
-
-`cmdr_eval` remains available as a text interface and serializes final lists as
-newline-delimited text. Use `cmdr_call` to invoke a registered command directly
-with values, bypassing parsing. `cmdr_eval_args` evaluates a pipeline with
-typed values bound to `$1..$N`; `cmdr_check` validates a pipeline for a given
-argument count without running it. A predicate callback returns
-`CMDR_MISMATCH` (with an error message) when it does not hold, and 1 on error. For commands that consume/produce typed values,
-set `.run_value` to a `cmdr_value_fn` instead of setting `.run`. Its `repl` argument
-is the active registry, and its positional arguments include pipeline input as
-the first value. Values passed to callbacks are borrowed. Return owned values
-through `result`, using the clone, text, push, and free helpers in `cmdr.h`.
-Initialize values with `{0}`; output values must not alias input values.
-
-A `.run_value` callback can call other commands with `cmdr_call` and use C for
-branching, loops, and intermediate values. `clean-or TEXT FALLBACK` trims its
-input, returns FALLBACK when the result is empty, and otherwise uppercases it:
-
-```c
-static int clean_or(const cmdr *repl, void *user, size_t argc,
-                    const cmdr_value *argv, cmdr_value *result, char **error)
-{
-    (void)user;
-    if (argc != 2 || argv[0].kind != CMDR_TEXT || argv[1].kind != CMDR_TEXT)
-        return cmdr_error(error, "usage: clean-or TEXT FALLBACK");
-
-    cmdr_value trimmed = {0};
-    int status = cmdr_call(repl, "trim", 1, argv, &trimmed, error);
-    if (status) goto done;
-
-    /* Overrides can return typed values, including captured failures. */
-    if (trimmed.kind != CMDR_TEXT) {
-        status = cmdr_error(error, "clean-or: trim must return text");
-        goto done;
-    }
-    if (trimmed.text[0] == '\0')
-        status = cmdr_value_clone(&argv[1], result, error);
-    else
-        status = cmdr_call(repl, "upper", 1, &trimmed, result, error);
-
-done:
-    cmdr_value_free(&trimmed);
-    return status;
-}
-
-/* In the commands table: */
-/* {.name = "clean-or", .usage = "clean-or TEXT FALLBACK",
-    .docstring = "Trim and uppercase text, or return FALLBACK when empty",
-    .run_value = clean_or}, */
-```
-
-```text
-cmdr> clean-or '  hello  ' '(empty)'
-HELLO
-cmdr> text '   ' | clean-or '(empty)'
-(empty)
-```
-
-`argv` is borrowed, so the fallback branch clones it. `trimmed` is owned and is
-freed on every path; `result` is owned by the caller. Earlier calls' effects are
-not rolled back on failure. For a fixed pipeline, use
-`cmdr_eval_value(repl, "trim | upper", &argv[0], result, error)` instead.
+Text is a string, a list is a tuple, and no value is nil. A predicate that does
+not hold raises `{:mismatch MSG}`; other errors raise a string. `eval-line`
+raises when a captured failure remains in the result, including inside a list.
+Composed commands nest at most `max-depth` (128) levels; deeper nesting is an
+error, not a stack overflow.
 
 ### Checks
 
-Run `make check` or `make test` (or `cmake --build build --target check`) for integration
-checks and C embedding checks. Python 3 is used for the integration checks; if
-Python 3 is not found at configure time, `test_cmdr` is skipped (the C embedding
-checks still run). Tests are enabled by default and can be turned off with
-`-DCMDR_BUILD_TESTS=OFF` — Python is never required to simply build or run cmdr.
+Run `make check` or `make test` (or `cmake --build build --target check`) for
+the integration checks (`tests/test_cmdr.py`, Python 3) and the module checks
+(`tests/test_api.janet`, run by a `janet` executable built from
+`thirdparty/janet`, or found in `CMDR_JANET_DIR`). Each is skipped if its
+interpreter is not found at configure time. Tests are
+enabled by default and can be turned off with `-DCMDR_BUILD_TESTS=OFF`.

@@ -1,0 +1,3 @@
+linenoise core library: include/, src/linenoise.c, src/internal/ (POSIX terminal).
+Source: https://github.com/shakfu/linenoise commit 9014e2df4fe6cca899edd7b9bf39f927ac1caca7
+Omitted: tree-sitter, syntax themes, Windows terminal, tests, docs.

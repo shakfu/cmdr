@@ -1,122 +1,86 @@
-#define _POSIX_C_SOURCE 200809L
-#include "commands.h"
-
-#include <ctype.h>
-#include <errno.h>
-#include <stdio.h>
+/* Host for cmdr.janet: runs the Janet VM and, with linenoise, the line editor. */
+#include <janet.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
+
+#include "cmdr_janet.h" /* src/cmdr.janet as a byte array; see cmake/embed.cmake. */
 
 #ifdef CMDR_LINENOISE
 #include "editor.h"
-#endif
 
-/* where, if non-NULL, prefixes errors with a source location. */
-static int evaluate(cmdr *repl, const char *line, const char *where)
-{
-    char *result, *error;
-    int status = cmdr_eval(repl, line, &result, &error);
-    fflush(stdout); /* Keep errors in order with earlier output. */
-    if (status)
-        fprintf(stderr, "cmdr: %s%s\n", where ? where : "", error ? error : "command failed");
-    else if (result) {
-        fputs(result, stdout);
-        size_t n = strlen(result);
-        if (!n || result[n - 1] != '\n') putchar('\n');
-        if (ferror(stdout)) { fprintf(stderr, "cmdr: output failed\n"); status = 1; }
-    }
-    free(result);
-    free(error);
-    return status;
-}
+static editor *ed;
 
-static int blank_or_comment(const char *line)
+static void close_editor(void)
 {
-    while (isspace((unsigned char)*line)) ++line;
-    return !*line || *line == '#';
-}
-
-/* A line whose last nonblank character is an unescaped '|' continues. */
-static int continues(const char *line, size_t n)
-{
-    while (n && isspace((unsigned char)line[n - 1])) --n;
-    return n && line[n - 1] == '|' && (n < 2 || line[n - 2] != '\\')
-        && !blank_or_comment(line);
-}
-
-/* Evaluate one pipeline per line, joining continued lines; comment lines
- * inside a continuation are skipped. A script (path non-NULL) stops at the
- * first failure, since later lines may depend on earlier ones; stdin
- * continues. Errors report the pipeline's first line. */
-static int run(cmdr *repl, FILE *in, const char *path)
-{
-    int interactive = !path && isatty(STDIN_FILENO);
-    char *line = NULL, *pipeline = NULL, where[4096];
-    size_t capacity = 0, used = 0;
-    unsigned long number = 0, first = 0;
-    int status = 0;
-#ifdef CMDR_LINENOISE
-    editor *ed = interactive ? editor_open(repl) : NULL;
-#endif
-    for (;;) {
-        const char *prompt = used ? "...> " : "cmdr> ";
-        ssize_t n;
-#ifdef CMDR_LINENOISE
-        if (ed) {
-            n = editor_read(ed, prompt, &line, &capacity);
-            if (n == -2) { used = 0; continue; }
-        } else
-#endif
-        {
-            if (interactive) { fputs(prompt, stdout); fflush(stdout); }
-            n = getline(&line, &capacity, in);
-        }
-        if (n >= 0) {
-            ++number;
-            if (used && blank_or_comment(line)) continue;
-            if (!used) first = number;
-            char *grown = realloc(pipeline, used + (size_t)n + 1);
-            if (!grown) { fprintf(stderr, "cmdr: out of memory\n"); status = 1; break; }
-            pipeline = grown;
-            memcpy(pipeline + used, line, (size_t)n + 1);
-            used += (size_t)n;
-            if (continues(pipeline, used)) continue;
-        }
-        if (!used) break;
-        if (path) snprintf(where, sizeof(where), "%s:%lu: ", path, first);
-        used = 0;
-#ifdef CMDR_LINENOISE
-        if (ed) editor_remember(ed, pipeline);
-#endif
-        if (evaluate(repl, pipeline, path ? where : NULL)) {
-            status = 1;
-            if (path) break;
-        }
-        if (n < 0) break;
-    }
-    if (ferror(in)) { fprintf(stderr, "cmdr: %s: %s\n", path ? path : "stdin", strerror(errno)); status = 1; }
-#ifdef CMDR_LINENOISE
     editor_close(ed);
+}
+
+/* (editor/read prompt names): a line with its newline, nil, or :interrupt. */
+static Janet editor_read_cfun(int32_t argc, Janet *argv)
+{
+    janet_fixarity(argc, 2);
+    const char *prompt = janet_getcstring(argv, 0);
+    JanetView names = janet_getindexed(argv, 1);
+    if (!ed) {
+        if (!(ed = editor_open())) janet_panic("cannot open the line editor");
+        atexit(close_editor);
+    }
+    const char **list = janet_smalloc(((size_t)names.len + 1) * sizeof(*list));
+    for (int32_t i = 0; i < names.len; ++i) list[i] = janet_getcstring(names.items, i);
+    int interrupted = 0;
+    char *text = editor_read(ed, prompt, list, (size_t)names.len, &interrupted);
+    janet_sfree(list);
+    if (!text) return interrupted ? janet_ckeywordv("interrupt") : janet_wrap_nil();
+    size_t n = strlen(text);
+    uint8_t *line = janet_string_begin((int32_t)n + 1);
+    memcpy(line, text, n);
+    line[n] = '\n';
+    free(text);
+    return janet_wrap_string(janet_string_end(line));
+}
+
+static Janet editor_remember_cfun(int32_t argc, Janet *argv)
+{
+    janet_fixarity(argc, 1);
+    if (ed) editor_remember(ed, janet_getcstring(argv, 0));
+    return janet_wrap_nil();
+}
 #endif
-    free(line);
-    free(pipeline);
-    return status;
+
+static JanetFunction *resolve(JanetTable *env, const char *name)
+{
+    Janet out = janet_wrap_nil();
+    janet_resolve(env, janet_csymbol(name), &out);
+    if (!janet_checktype(out, JANET_FUNCTION)) janet_panicf("cmdr.janet: missing %s", name);
+    return janet_unwrap_function(out);
 }
 
 int main(int argc, char **argv)
 {
-    cmdr repl;
-    cmdr_commands_init(&repl);
-    if (argc == 3 && !strcmp(argv[1], "-c")) return evaluate(&repl, argv[2], NULL) ? 1 : 0;
-    if (argc == 1) return run(&repl, stdin, NULL);
-    if (argc != 2 || argv[1][0] == '-') {
-        fprintf(stderr, "usage: cmdr [-c PIPELINE | FILE]\n");
-        return 2;
-    }
-    FILE *file = fopen(argv[1], "r");
-    if (!file) { fprintf(stderr, "cmdr: %s: %s\n", argv[1], strerror(errno)); return 1; }
-    int status = run(&repl, file, argv[1]);
-    fclose(file);
-    return status;
+    janet_init();
+    JanetTable *env = janet_core_env(NULL);
+    if (janet_dobytes(env, cmdr_janet, (int32_t)cmdr_janet_len, "cmdr.janet", NULL))
+        return 1;
+    /* Add application commands here: define C functions with janet_cfuns,
+     * then pass them to `register`, as the editor hooks below are passed. */
+#ifdef CMDR_LINENOISE
+    const JanetReg hooks[] = {
+        {"editor/read", editor_read_cfun, "(editor/read prompt names)"},
+        {"editor/remember", editor_remember_cfun, "(editor/remember pipeline)"},
+        {NULL, NULL, NULL},
+    };
+    janet_cfuns(env, NULL, hooks);
+    if (janet_dostring(env, "(use-editor editor/read editor/remember)", "main.c", NULL))
+        return 1;
+#endif
+    Janet *args = janet_tuple_begin(argc - 1);
+    for (int i = 1; i < argc; ++i) args[i - 1] = janet_cstringv(argv[i]);
+    /* main exits through os/exit. A scheduled fiber lets core functions
+     * that wait on the event loop, such as os/execute, run. */
+    JanetFiber *fiber = janet_fiber(resolve(env, "main"), 64, argc - 1,
+                                    janet_tuple_end(args));
+    fiber->env = env;
+    int status = janet_loop_fiber(fiber);
+    janet_deinit();
+    return status ? 1 : 0;
 }
