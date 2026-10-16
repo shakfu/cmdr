@@ -5,6 +5,16 @@ and explicit effects.
 Requires a C11 compiler and CMake 3.16+ on Linux/macOS, using POSIX-2008
 facilities (`getline`, `posix_spawn`, `fstatat`/`dirfd`, `F_DUPFD_CLOEXEC`).
 Make is an optional frontend for the same CMake build.
+The interactive REPL uses [linenoise](../linenoise) when a checkout is found
+at `../linenoise`; set `-DCMDR_LINENOISE_DIR=PATH` to use another, or to empty
+to read plain lines. It adds:
+
+- Line editing, with Tab completing command names at the start of a stage.
+- History in `~/.cmdr_history` (mode 0600), one line per pipeline.
+- Highlighting of commands, unknown commands, quotes, `$` references, `|`,
+  and comments.
+
+Pipes and files always read plain lines.
 
 ```sh
 make
@@ -26,10 +36,57 @@ cmdr> read greeting.txt | upper
 HELLO WORLD
 ```
 
-Run `help` for the command list. Exit with Ctrl-D. For scripts, pass a pipeline
-with `./cmdr -c 'text hello | upper'`, or feed one pipeline per line on stdin.
-Errors go to stderr; an uncaught failure stops its pipeline. The REPL continues after
-errors and exits with a nonzero status if any line failed.
+Run `help` for the command list; it returns text, so `help | filter map` works.
+Exit with Ctrl-D; Ctrl-C discards the current line or continuation. For scripts, pass a pipeline
+with `./cmdr -c 'text hello | upper'`, run a file with `./cmdr FILE`, or feed
+one pipeline per line on stdin. Errors go to stderr; an uncaught failure stops
+its pipeline. The REPL continues after errors and exits with a nonzero status
+if any line failed. A script file stops at its first failing line and reports
+`FILE:LINE:`, since later lines may depend on earlier ones. `#` lines,
+including a `#!/usr/bin/env cmdr` shebang, are comments. In files and on
+stdin, a line ending in an unescaped `|` continues on the next line; blank and
+comment lines inside a continuation are skipped, and errors report the first
+line.
+
+```text
+def report 'read |
+  lines |
+  # Distinct lines only
+  sort | uniq'
+```
+
+### Definitions
+
+```text
+cmdr> def clean-or 'trim | try "nonempty | upper" | recover $2'
+cmdr> text '   ' | clean-or none
+none
+cmdr> def wrap 'text $2 $1 $2'
+cmdr> list a b | map wrap - | join ,
+- a -,- b -
+```
+
+`def NAME PIPELINE` registers a pipeline command for the rest of the session,
+with the same parameter rules as `.pipeline` (see below). The body's syntax and
+command names are checked when it is defined, so define helpers before the
+commands that use them. Arity is checked per call. A definition may shadow any
+command except `def` and `as`, including earlier definitions; `help` marks
+definitions with `def:`. Definitions are lexically scoped: a body uses the
+commands that existed when it was defined. Redefining `upper` later does not
+change earlier bodies, and a body that names its own command calls the
+command it shadows:
+
+```text
+cmdr> def upper 'upper | text !'
+cmdr> text a | upper
+A !
+```
+
+Errors from a pipeline command's body are prefixed with its name, so nested
+definitions report a call chain (`outer: inner: equals: ...`). Definitions
+belong to the example REPL in `main.c` and `commands.c`; the embeddable core
+stays immutable. Set `.scope` on a `cmdr_command` for the same lexical
+resolution in C.
 
 ## Composition
 
@@ -49,8 +106,12 @@ individual commands validate their arguments when called.
 
 Whitespace separates arguments. Single and double quotes preserve spaces and
 literal pipes, including empty arguments (`""`). Backslash escapes the next
-character outside single quotes. Adjacent quoted/unquoted fragments form one
-argument. There is no variable expansion, implicit shell execution, redirection, or
+character outside single quotes; inside double quotes, `\n` and `\t` are a
+newline and a tab. Adjacent quoted/unquoted fragments form one
+argument. A pipeline whose first nonblank character is `#` is a comment and
+returns no value; `#` elsewhere is literal. Unquoted words starting with `$`
+are parameter references (see below); quote or escape `$` for literal text.
+`a$1` is literal. There is no variable expansion, implicit shell execution, redirection, or
 background execution. Text values are NUL-terminated strings, not binary buffers.
 
 ## Adding C commands
@@ -76,11 +137,59 @@ To define a command as a pipeline of other commands, set `.pipeline`:
 ```
 
 `text "  Hi  " | clean` and `clean "  Hi  "` both evaluate the body with that
-value as pipeline input. A pipeline command accepts at most one value. Bodies
+value as pipeline input. Bodies
 resolve names through the active registry, so they see application overrides
 and can call other pipeline commands. Set `.handles_failure` when the body
 should consume a captured failure (for example a body that starts with
 `recover`).
+
+Bodies take parameters as `$1..$N`. `$1` is the first argument, piped or
+explicit. A body whose highest reference is `$N` requires exactly N arguments;
+a body without references accepts at most one. The first stage receives `$1`
+as input unless it references `$1` itself. References substitute typed values,
+not text: a list stays one argument, and a value containing `|` is not parsed.
+
+```c
+/* {.name = "wrap", .usage = "wrap TEXT MARK", .pipeline = "text $2 $1 $2"}, */
+/* {.name = "swap", .usage = "swap TEXT OLD NEW", .pipeline = "replace $2 $3"}, */
+```
+
+With those entries added:
+
+```text
+cmdr> wrap x '*'
+* x *
+cmdr> list a b | map wrap - | join ,
+- a -,- b -
+cmdr> text x | try 'text pre $1'
+pre x
+```
+
+A stage that is a lone reference replaces the current value with that value,
+so a body can start from any parameter: `$2 | sort | uniq | count | text of $1`.
+A captured failure is not replaced.
+
+`as NAME` binds the current value to `$NAME` for the rest of the pipeline and
+passes it through. Bindings are immutable and must precede their use; names
+start with a letter and contain letters, digits, `_`, or `-`.
+
+```text
+cmdr> list b a b | as lines | count | as total | $lines | sort | uniq | count | text of $total
+2 of 3
+cmdr> text v | as x | text a $x b
+a v b
+```
+
+The current value is named while it is `$1` (at the start), a lone reference,
+or just bound by `as`. A stage that references that name receives the value
+only where named; any other stage receives it as its first argument. So
+`text $2` as a first stage still receives `$1`; write `$2 | text` or name `$1`.
+
+`try` strings bind their input as `$1`. A nested string has its own `$1..$N`
+but sees the enclosing pipelines' `as` bindings, innermost first. A pipeline
+command's body does not see its caller's bindings. `$_` is reserved. A reference without an argument or binding, including `$1` at the
+top level, is an error. See [docs/dev/compose-ng.md](docs/dev/compose-ng.md) for the
+design.
 
 For custom C logic, implement a `cmdr_fn` from [include/cmdr.h](include/cmdr.h):
 
@@ -126,6 +235,7 @@ be reused across applications.
 | `length TEXT` | Return the byte length |
 | `replace TEXT OLD NEW` | Replace all nonoverlapping literal matches; OLD must be nonempty |
 | `list [VALUE ...]` | Construct an explicit list; empty arguments and embedded newlines remain intact |
+| `lines LIST_OR_LINES` | Split text into a list of lines; lists pass through unchanged |
 | `split TEXT SEPARATOR` | Split text into an explicit list; separator must be nonempty |
 | `join LIST_OR_LINES SEPARATOR` | Join text items with a separator |
 | `sort LINES` | Sort records by byte order |
@@ -139,6 +249,13 @@ be reused across applications.
 | `files [DIRECTORY]` | List regular file paths, sorted by byte order; defaults to `.` |
 | `basename PATH`, `dirname PATH` | Extract a filename or parent path without accessing the filesystem |
 | `map LIST_OR_LINES COMMAND [ARG ...]` | Apply a registered command to each item in order |
+| `each LIST_OR_LINES PIPELINE [ARG ...]` | Run a pipeline per item, with the item as `$1` and ARGs as `$2...` |
+| `keep LIST_OR_LINES PIPELINE [ARG ...]` | Keep items whose pipeline succeeds |
+| `not VALUE PIPELINE [ARG ...]` | Return VALUE if the pipeline mismatches; mismatch if it succeeds |
+| `lt NUMBER LIMIT`, `gt NUMBER LIMIT` | Numeric predicates; use `not` for `>=` and `<=` |
+| `when VALUE COND THEN ELSE [ARG ...]` | Run THEN if COND holds, ELSE on a mismatch; errors propagate |
+| `nonempty VALUE` | Predicate: VALUE is not empty text or an empty list |
+| `equals TEXT EXPECTED`, `contains TEXT SUBSTRING` | Predicates on text |
 | `take TEXT N`, `drop TEXT N` | Keep/drop the first N bytes |
 | `slice TEXT START LENGTH` | Extract bytes at a zero-based offset |
 | `append VALUE PATH` | Append to a file, returning the original value |
@@ -171,12 +288,12 @@ produces a list. `count` always returns a text number, but only after checking
 that the input holds no captured failures — a failure cannot be discarded by
 counting (use `map recover ""` first to substitute failed items).
 
-`list`, `split`, `files`, and `map` produce explicit lists. `split` preserves empty
+`lines`, `list`, `split`, `files`, and `map` produce explicit lists. `split` preserves empty
 fields, including trailing fields; splitting empty text returns an empty list.
 It supports embedded newlines in fields and arbitrary nonempty separators.
 `list ""` constructs a list containing one empty string; `list` constructs an empty
-list. `join` joins text items and rejects nested lists. Use actual newlines in
-quoted input or `read`: the parser does not translate backslash-n into a newline.
+list. `join` joins text items and rejects nested lists. Write a newline as
+`"\n"` (double quotes only), as in `join "\n"`.
 
 ### Mapping and files
 
@@ -210,6 +327,45 @@ are clamped; an offset past the end returns empty text. They operate on bytes.
 `tee`, and `append` also accept lists: they serialize items with newline
 terminators for the file, then return the original typed value. Serialization
 and REPL display are text exports; use the typed API to retain list boundaries.
+
+### Pipelines per item and predicates
+
+```text
+list a bb '' | keep nonempty | join ,                => a,bb
+files . | keep 'read | contains TODO'
+files . | keep 'read | not "contains TODO"'
+list a b c | keep 'not "equals $2" $2' b | join ,    => a,c
+list 'a b' c | each 'text $2 $1' pre | join ,        => pre a b,pre c
+text '   ' | trim | try 'nonempty | upper' | recover none
+```
+
+`each` and `keep` take a pipeline string, unlike `map`, which takes a command
+name. The item is `$1` and feeds the first stage; extra arguments are `$2...`.
+A nested string has its own `$1..$N`, so pass outer parameters explicitly, as
+in `'not "equals $2" $2'`, or bind them with `as` and use the name. `each` returns a list. `keep` preserves the input
+representation, like `filter`.
+
+`when VALUE COND THEN ELSE [ARG ...]` runs COND with VALUE as `$1` and ARGs
+as `$2...`, then THEN if COND holds or ELSE on a mismatch. An error in COND
+is reported, not treated as false; `try` cannot make that distinction. Each
+pipeline receives only the parameters it references, and every ARG must be
+referenced by at least one of them. ELSE is required: without it, use
+`COND | THEN`.
+
+```text
+def clean-or '$2 | as fallback | $1 | trim | when nonempty upper "$fallback"'
+text a | when 'equals $2' 'text yes $1' 'text no $1' a      => yes a
+```
+
+Predicates return their input when they hold, so they compose mid-pipeline.
+When they do not hold, they fail with the status `CMDR_MISMATCH`. `keep` and
+`not` treat only that status as false. Any other failure, including one nested
+inside the pipeline (a usage error, a missing file), is an error. Their
+pipeline's syntax, command names, and arity are checked before any item runs.
+Truth comes only from success or mismatch; empty text and `"0"` are not
+false. `try`/`recover` capture mismatches like other failures, which gives
+branching. `each` reports any failure, so its pipeline must recover captured
+failures itself; use `map try` to carry failures per item.
 
 ### Recovery
 
@@ -313,16 +469,68 @@ free(error);
 
 `cmdr_eval` remains available as a text interface and serializes final lists as
 newline-delimited text. Use `cmdr_call` to invoke a registered command directly
-with values, bypassing parsing. For commands that consume/produce typed values,
+with values, bypassing parsing. `cmdr_eval_args` evaluates a pipeline with
+typed values bound to `$1..$N`; `cmdr_check` validates a pipeline for a given
+argument count without running it. A predicate callback returns
+`CMDR_MISMATCH` (with an error message) when it does not hold, and 1 on error. For commands that consume/produce typed values,
 set `.run_value` to a `cmdr_value_fn` instead of setting `.run`. Its `repl` argument
 is the active registry, and its positional arguments include pipeline input as
 the first value. Values passed to callbacks are borrowed. Return owned values
 through `result`, using the clone, text, push, and free helpers in `cmdr.h`.
 Initialize values with `{0}`; output values must not alias input values.
 
+A `.run_value` callback can call other commands with `cmdr_call` and use C for
+branching, loops, and intermediate values. `clean-or TEXT FALLBACK` trims its
+input, returns FALLBACK when the result is empty, and otherwise uppercases it:
+
+```c
+static int clean_or(const cmdr *repl, void *user, size_t argc,
+                    const cmdr_value *argv, cmdr_value *result, char **error)
+{
+    (void)user;
+    if (argc != 2 || argv[0].kind != CMDR_TEXT || argv[1].kind != CMDR_TEXT)
+        return cmdr_error(error, "usage: clean-or TEXT FALLBACK");
+
+    cmdr_value trimmed = {0};
+    int status = cmdr_call(repl, "trim", 1, argv, &trimmed, error);
+    if (status) goto done;
+
+    /* Overrides can return typed values, including captured failures. */
+    if (trimmed.kind != CMDR_TEXT) {
+        status = cmdr_error(error, "clean-or: trim must return text");
+        goto done;
+    }
+    if (trimmed.text[0] == '\0')
+        status = cmdr_value_clone(&argv[1], result, error);
+    else
+        status = cmdr_call(repl, "upper", 1, &trimmed, result, error);
+
+done:
+    cmdr_value_free(&trimmed);
+    return status;
+}
+
+/* In the commands table: */
+/* {.name = "clean-or", .usage = "clean-or TEXT FALLBACK",
+    .docstring = "Trim and uppercase text, or return FALLBACK when empty",
+    .run_value = clean_or}, */
+```
+
+```text
+cmdr> clean-or '  hello  ' '(empty)'
+HELLO
+cmdr> text '   ' | clean-or '(empty)'
+(empty)
+```
+
+`argv` is borrowed, so the fallback branch clones it. `trimmed` is owned and is
+freed on every path; `result` is owned by the caller. Earlier calls' effects are
+not rolled back on failure. For a fixed pipeline, use
+`cmdr_eval_value(repl, "trim | upper", &argv[0], result, error)` instead.
+
 ### Checks
 
-Run `make check` (or `cmake --build build --target check`) for integration
+Run `make check` or `make test` (or `cmake --build build --target check`) for integration
 checks and C embedding checks. Python 3 is used for the integration checks; if
 Python 3 is not found at configure time, `test_cmdr` is skipped (the C embedding
 checks still run). Tests are enabled by default and can be turned off with

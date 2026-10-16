@@ -30,6 +30,23 @@ add_executable(cmdr
 )
 target_link_libraries(cmdr PRIVATE cmdr_lib)
 
+# Line editing for the interactive REPL; without it, cmdr reads plain lines.
+set(CMDR_LINENOISE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../linenoise"
+    CACHE PATH "linenoise source tree; empty disables line editing")
+if(CMDR_LINENOISE_DIR AND EXISTS "${CMDR_LINENOISE_DIR}/CMakeLists.txt")
+  set(CMAKE_POLICY_DEFAULT_CMP0077 NEW)
+  set(BUILD_EXAMPLES OFF)
+  set(BUILD_TESTS OFF)
+  set(WITH_TREESITTER OFF)
+  add_subdirectory("${CMDR_LINENOISE_DIR}" linenoise EXCLUDE_FROM_ALL)
+  target_sources(cmdr PRIVATE src/editor.c)
+  target_link_libraries(cmdr PRIVATE linenoise)
+  target_compile_definitions(cmdr PRIVATE CMDR_LINENOISE)
+  set(CMDR_LINENOISE_FOUND ON)
+else()
+  message(STATUS "linenoise not found at '${CMDR_LINENOISE_DIR}': no line editing")
+endif()
+
 option(CMDR_BUILD_TESTS "Build the test suite and the check target" ON)
 if(CMDR_BUILD_TESTS)
   enable_testing()
@@ -44,6 +61,7 @@ if(CMDR_BUILD_TESTS)
       NAME test_cmdr
       COMMAND ${CMAKE_COMMAND} -E env
               "CMDR_BIN=$<TARGET_FILE:cmdr>"
+              "CMDR_LINENOISE=$<BOOL:${CMDR_LINENOISE_FOUND}>"
               "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_cmdr.py"
     )
   else()

@@ -9,9 +9,32 @@
 
 typedef struct {
     char **words;
+    size_t *refs;  /* Per word: N for $N, else 0. */
+    size_t *binds; /* Per word: k for the k-th `as` binding, else 0. */
+    const cmdr_value **outer; /* Per word: an enclosing pipeline's binding. */
     size_t count;
     size_t capacity;
+    size_t bind;   /* k if this stage is `as NAME` creating binding k. */
 } stage;
+
+/* binds value for a $name reference until prepare resolves it. */
+#define UNRESOLVED SIZE_MAX
+
+typedef struct {
+    stage *stages;
+    size_t count;
+    size_t highest;  /* Highest $N referenced. */
+    size_t bindings; /* Number of `as` stages. */
+    const char **names; /* Borrowed binding names, in order. */
+} program;
+
+/* Bindings of an enclosing pipeline, visible to strings its stages evaluate. */
+struct cmdr_frame {
+    const char *const *names;
+    const cmdr_value *values;
+    size_t count;
+    const struct cmdr_frame *parent;
+};
 
 int cmdr_error(char **error, const char *format, ...)
 {
@@ -43,8 +66,31 @@ static void dispose(stage *stages, size_t count)
         for (size_t j = 0; j < stages[i].count; ++j)
             free(stages[i].words[j]);
         free(stages[i].words);
+        free(stages[i].refs);
+        free(stages[i].binds);
+        free(stages[i].outer);
     }
     free(stages);
+}
+
+/* Return N for the digits of a valid $N reference in [p, end), else 0. */
+static size_t reference(const char *p, const char *end)
+{
+    if (p == end || *p == '0') return 0;
+    size_t n = 0;
+    for (; p < end; ++p) {
+        if (*p < '0' || *p > '9' || n > (SIZE_MAX - (size_t)(*p - '0')) / 10) return 0;
+        n = n * 10 + (size_t)(*p - '0');
+    }
+    return n;
+}
+
+static int identifier(const char *p, const char *end)
+{
+    if (p == end || !isalpha((unsigned char)*p)) return 0;
+    for (; p < end; ++p)
+        if (!isalnum((unsigned char)*p) && *p != '_' && *p != '-') return 0;
+    return 1;
 }
 
 /* Parse the whole pipeline before performing any effects. */
@@ -55,6 +101,9 @@ static int parse(const char *line, stage **out, size_t *count, char **error)
     if (!stages) return cmdr_error(error, "out of memory");
     size_t n = 1;
     const char *p = line;
+    /* A pipeline whose first nonblank character is '#' is a comment. */
+    while (isspace((unsigned char)*p)) ++p;
+    if (*p == '#') p += strlen(p);
     while (*p) {
         if (isspace((unsigned char)*p)) { ++p; continue; }
         if (*p == '|') {
@@ -70,8 +119,25 @@ static int parse(const char *line, stage **out, size_t *count, char **error)
             continue;
         }
         char *word = NULL;
-        size_t used = 0, wcap = 0;
+        size_t used = 0, wcap = 0, ref = 0, bind = 0;
         char quote = 0;
+        if (*p == '$') {
+            /* Unquoted words starting with '$' are reserved for references. */
+            const char *start = p;
+            while (*p && !isspace((unsigned char)*p) && *p != '|') ++p;
+            ref = reference(start + 1, p);
+            if (!ref && identifier(start + 1, p)) bind = UNRESOLVED;
+            if (!ref && !bind) {
+                cmdr_error(error, "invalid reference '%.*s': only $1..$N and $name are "
+                           "supported; quote '$' for literal text",
+                           (int)(p - start), start);
+                goto fail;
+            }
+            used = (size_t)(p - start);
+            word = malloc(used + 1);
+            if (!word) goto oom;
+            memcpy(word, start, used);
+        }
         while (*p && (quote || (!isspace((unsigned char)*p) && *p != '|'))) {
             char c = *p++;
             if (c == '\\' && quote != '\'') {
@@ -81,6 +147,8 @@ static int parse(const char *line, stage **out, size_t *count, char **error)
                     goto fail;
                 }
                 c = *p++;
+                if (quote == '"' && c == 'n') c = '\n';
+                else if (quote == '"' && c == 't') c = '\t';
             } else if (quote && c == quote) {
                 quote = 0;
                 continue;
@@ -117,8 +185,20 @@ static int parse(const char *line, stage **out, size_t *count, char **error)
             char **words = realloc(s->words, capacity * sizeof(*words));
             if (!words) { free(word); goto oom; }
             s->words = words;
+            size_t *refs = realloc(s->refs, capacity * sizeof(*refs));
+            if (!refs) { free(word); goto oom; }
+            s->refs = refs;
+            size_t *binds = realloc(s->binds, capacity * sizeof(*binds));
+            if (!binds) { free(word); goto oom; }
+            s->binds = binds;
+            const cmdr_value **outer = realloc(s->outer, capacity * sizeof(*outer));
+            if (!outer) { free(word); goto oom; }
+            s->outer = outer;
             s->capacity = capacity;
         }
+        s->refs[s->count] = ref;
+        s->binds[s->count] = bind;
+        s->outer[s->count] = NULL;
         s->words[s->count++] = word;
     }
     if (n > 1 && !stages[n - 1].count) {
@@ -143,6 +223,10 @@ const cmdr_command *cmdr_find(const cmdr *repl, const char *name)
     return NULL;
 }
 
+static int evaluate(const cmdr *repl, const char *line, const char *name,
+                    size_t argc, const cmdr_value *params, cmdr_value *result,
+                    char **error);
+
 int cmdr_call(const cmdr *repl, const char *name, size_t argc,
               const cmdr_value *argv, cmdr_value *result, char **error)
 {
@@ -163,13 +247,17 @@ int cmdr_call(const cmdr *repl, const char *name, size_t argc,
     if (implementations > 1)
         return cmdr_error(error, "command '%s' has multiple implementations", name);
     if (command->pipeline) {
+        recurse.frame = NULL; /* Bodies are lexically scoped. */
+        cmdr scoped;
+        if (command->scope) {
+            scoped = *command->scope;
+            scoped.depth = recurse.depth;
+            scoped.frame = NULL;
+            repl = &scoped;
+        }
         if (!command->pipeline[0])
             return cmdr_error(error, "command '%s' has an empty pipeline", name);
-        if (argc > 1)
-            return cmdr_error(error, "pipeline command '%s' accepts at most one value",
-                              name);
-        return cmdr_eval_value(repl, command->pipeline, argc ? &argv[0] : NULL,
-                               result, error);
+        return evaluate(repl, command->pipeline, name, argc, argv, result, error);
     }
     if (command->run_value)
         return command->run_value(repl, command->user, argc, argv, result, error);
@@ -235,8 +323,127 @@ const char *cmdr_value_failure(const cmdr_value *value)
     return NULL;
 }
 
-int cmdr_eval_value(const cmdr *repl, const char *line, const cmdr_value *input,
-                    cmdr_value *result, char **error)
+static int is_reference(const stage *s, size_t j)
+{
+    return s->refs[j] || s->binds[j] || s->outer[j];
+}
+
+/* Resolve name in the enclosing pipelines' bindings, innermost first. */
+static const cmdr_value *lookup(const struct cmdr_frame *f, const char *name)
+{
+    for (; f; f = f->parent)
+        for (size_t k = f->count; k-- > 0;)
+            if (!strcmp(f->names[k], name)) return &f->values[k];
+    return NULL;
+}
+
+/* Parse line, resolve $name bindings, and check command names and arity for
+ * argc arguments. name labels pipeline-command errors; NULL otherwise. */
+static int prepare(const cmdr *repl, const char *line, const char *name,
+                   size_t argc, program *out, char **error)
+{
+    program pg = {0};
+    if (parse(line, &pg.stages, &pg.count, error)) return 1;
+    int status = 0;
+    const char **names = NULL; /* Borrowed binding names, in order. */
+    for (size_t i = 0; i < pg.count; ++i) {
+        stage *s = &pg.stages[i];
+        if (!s->count) continue;
+        /* A lone reference is a value stage; a reference cannot name a command. */
+        int lone = s->count == 1 && is_reference(s, 0);
+        if (!lone && is_reference(s, 0)) {
+            status = cmdr_error(error, "command name cannot be a reference: %s", s->words[0]);
+            goto done;
+        }
+        for (size_t j = 0; j < s->count; ++j) {
+            if (s->refs[j] > pg.highest) pg.highest = s->refs[j];
+            if (s->binds[j] != UNRESOLVED) continue;
+            size_t k = 0;
+            while (k < pg.bindings && strcmp(names[k], s->words[j] + 1)) ++k;
+            if (k == pg.bindings) {
+                s->binds[j] = 0;
+                if ((s->outer[j] = lookup(repl->frame, s->words[j] + 1))) continue;
+                status = cmdr_error(error, "unbound reference %s; bind it earlier "
+                                    "with 'as %s'", s->words[j], s->words[j] + 1);
+                goto done;
+            }
+            s->binds[j] = k + 1;
+        }
+        if (lone) continue;
+        if (!strcmp(s->words[0], "as")) {
+            const char *bound = s->count == 2 ? s->words[1] : "";
+            if (s->count != 2 || is_reference(s, 1)
+                || !identifier(bound, bound + strlen(bound))) {
+                status = cmdr_error(error, "usage: as NAME (a letter, then letters, "
+                                    "digits, '_' or '-')");
+                goto done;
+            }
+            for (size_t k = 0; k < pg.bindings; ++k)
+                if (!strcmp(names[k], bound)) {
+                    status = cmdr_error(error, "as: $%s is already bound", bound);
+                    goto done;
+                }
+            const char **grown = realloc(names, (pg.bindings + 1) * sizeof(*grown));
+            if (!grown) { status = cmdr_error(error, "out of memory"); goto done; }
+            names = grown;
+            names[pg.bindings++] = bound;
+            s->bind = pg.bindings;
+            continue;
+        }
+        if (!cmdr_find(repl, s->words[0])) {
+            status = cmdr_error(error, "unknown command: %s", s->words[0]);
+            goto done;
+        }
+    }
+    size_t highest = pg.highest;
+    if (argc != CMDR_ANY_ARITY && (highest ? argc != highest : argc > 1)) {
+        if (name && !highest)
+            status = cmdr_error(error, "pipeline command '%s' accepts at most one value", name);
+        else if (name)
+            status = cmdr_error(error, "command '%s' expects %zu argument%s, got %zu",
+                                name, highest, highest == 1 ? "" : "s", argc);
+        else if (!highest)
+            status = cmdr_error(error, "pipeline without references accepts at most "
+                                "one value (%zu given)", argc);
+        else
+            status = cmdr_error(error, "reference $%zu has no argument (%zu given)",
+                                highest, argc);
+        goto done;
+    }
+    pg.names = names;
+    *out = pg;
+    return 0;
+done:
+    free(names);
+    dispose(pg.stages, pg.count);
+    return status;
+}
+
+int cmdr_check(const cmdr *repl, const char *line, size_t argc, char **error)
+{
+    *error = NULL;
+    program pg;
+    if (prepare(repl, line, NULL, argc, &pg, error)) return 1;
+    free(pg.names);
+    dispose(pg.stages, pg.count);
+    return 0;
+}
+
+int cmdr_arity(const cmdr *repl, const char *line, size_t *highest, char **error)
+{
+    *error = NULL;
+    program pg;
+    if (prepare(repl, line, NULL, CMDR_ANY_ARITY, &pg, error)) return 1;
+    *highest = pg.highest;
+    free(pg.names);
+    dispose(pg.stages, pg.count);
+    return 0;
+}
+
+/* Evaluate line with params bound to $1..$N; name is as for prepare. */
+static int evaluate(const cmdr *repl, const char *line, const char *name,
+                    size_t argc, const cmdr_value *params, cmdr_value *result,
+                    char **error)
 {
     *result = (cmdr_value){0};
     *error = NULL;
@@ -246,44 +453,99 @@ int cmdr_eval_value(const cmdr *repl, const char *line, const cmdr_value *input,
     cmdr recurse = *repl;
     recurse.depth = repl->depth + 1;
     repl = &recurse;
-    stage *stages = NULL;
-    size_t count = 0;
-    if (parse(line, &stages, &count, error)) return 1;
+    program pg;
+    if (prepare(repl, line, name, argc, &pg, error)) return 1;
     int status = 0;
-    for (size_t i = 0; i < count; ++i) {
-        if (stages[i].count && !cmdr_find(repl, stages[i].words[0])) {
-            status = cmdr_error(error, "unknown command: %s", stages[i].words[0]);
-            goto done;
+    cmdr_value *bound = calloc(pg.bindings + 1, sizeof(*bound));
+    if (!bound) { status = cmdr_error(error, "out of memory"); goto done; }
+    struct cmdr_frame frame = {pg.names, bound, 0, repl->frame};
+    recurse.frame = &frame;
+    /* The current value is $1 to start, and keeps a name while it is a
+     * reference or was just bound. A stage that names the current value gets
+     * it only where named; any other stage receives it as its first argument. */
+    int have = argc && !(pg.stages[0].count == 1 && is_reference(&pg.stages[0], 0));
+    size_t cur_ref = have, cur_bind = 0;
+    if (have && cmdr_value_clone(&params[0], result, error)) { status = 1; goto done; }
+    for (size_t i = 0; i < pg.count && pg.stages[i].count; ++i) {
+        stage *s = &pg.stages[i];
+        if (s->count == 1 && is_reference(s, 0)) {
+            if (have && result->kind == CMDR_FAILURE) continue; /* Failures persist. */
+            const cmdr_value *v = s->refs[0] ? &params[s->refs[0] - 1]
+                                : s->binds[0] ? &bound[s->binds[0] - 1] : s->outer[0];
+            cmdr_value_free(result);
+            if (cmdr_value_clone(v, result, error)) { status = 1; goto done; }
+            have = 1;
+            cur_ref = s->refs[0];
+            cur_bind = s->binds[0];
+            continue;
         }
-    }
-    if (input && cmdr_value_clone(input, result, error)) { status = 1; goto done; }
-    for (size_t i = 0; i < count && stages[i].count; ++i) {
-        stage *s = &stages[i];
-        int piped = i != 0 || input != NULL;
+        if (s->bind) {
+            if (!have || result->kind == CMDR_NONE) {
+                status = cmdr_error(error, "as %s: no pipeline value to bind", s->words[1]);
+                goto done;
+            }
+            if (cmdr_value_clone(result, &bound[s->bind - 1], error)) { status = 1; goto done; }
+            frame.count = s->bind; /* Visible to later stages' strings. */
+            cur_ref = 0;
+            cur_bind = s->bind;
+            continue;
+        }
+        int named = 0;
+        for (size_t j = 1; j < s->count; ++j)
+            if ((cur_ref && s->refs[j] == cur_ref) || (cur_bind && s->binds[j] == cur_bind))
+                named = 1;
+        int piped = have && !named;
         if (piped && result->kind == CMDR_NONE) {
             status = cmdr_error(error, "command '%s' received no pipeline value", s->words[0]);
             goto done;
         }
-        size_t argc = s->count - 1 + piped;
-        cmdr_value *argv = calloc(argc + 1, sizeof(*argv));
+        size_t n = s->count - 1 + piped;
+        cmdr_value *argv = calloc(n + 1, sizeof(*argv));
         if (!argv) { status = cmdr_error(error, "out of memory"); goto done; }
         size_t at = 0;
         if (piped) argv[at++] = *result;
         for (size_t j = 1; j < s->count; ++j)
-            argv[at++] = (cmdr_value){.kind = CMDR_TEXT, .text = s->words[j]};
+            argv[at++] = s->refs[j] ? params[s->refs[j] - 1]
+                       : s->binds[j] ? bound[s->binds[j] - 1]
+                       : s->outer[j] ? *s->outer[j]
+                       : (cmdr_value){.kind = CMDR_TEXT, .text = s->words[j]};
         cmdr_value next = {0};
-        status = cmdr_call(repl, s->words[0], argc, argv, &next, error);
+        status = cmdr_call(repl, s->words[0], n, argv, &next, error);
         free(argv);
         cmdr_value_free(result);
         *result = next;
-        if (status) goto done;
+        have = 1;
+        cur_ref = cur_bind = 0;
+        if (status) {
+            if (name) { /* Name the pipeline command, giving a call chain. */
+                char *inner = *error;
+                cmdr_error(error, "%s: %s", name, inner ? inner : "command failed");
+                free(inner);
+            }
+            goto done;
+        }
     }
     const char *failure = cmdr_value_failure(result);
     if (failure) status = cmdr_error(error, "%s", failure);
 done:
-    dispose(stages, count);
+    for (size_t k = 0; bound && k < pg.bindings; ++k) cmdr_value_free(&bound[k]);
+    free(bound);
+    free(pg.names);
+    dispose(pg.stages, pg.count);
     if (status) cmdr_value_free(result);
     return status;
+}
+
+int cmdr_eval_value(const cmdr *repl, const char *line, const cmdr_value *input,
+                    cmdr_value *result, char **error)
+{
+    return evaluate(repl, line, NULL, input != NULL, input, result, error);
+}
+
+int cmdr_eval_args(const cmdr *repl, const char *line, size_t argc,
+                   const cmdr_value *argv, cmdr_value *result, char **error)
+{
+    return evaluate(repl, line, NULL, argc, argv, result, error);
 }
 
 int cmdr_eval(cmdr *repl, const char *line, char **result, char **error)

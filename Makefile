@@ -3,7 +3,7 @@ BUILD_DIR ?= build
 CMAKE ?= cmake
 BUILD_TYPE ?= RelWithDebInfo
 
-.PHONY: all configure check clean
+.PHONY: all configure check test clean
 
 all: configure
 	$(CMAKE) --build $(BUILD_DIR)
@@ -13,6 +13,8 @@ configure:
 
 check: all
 	$(CMAKE) --build $(BUILD_DIR) --target check
+
+test: check
 
 clean:
 	rm -rf $(BUILD_DIR)

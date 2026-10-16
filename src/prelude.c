@@ -232,6 +232,27 @@ NUMBER_COMMAND(mul, '*')
 NUMBER_COMMAND(div, '/')
 #undef NUMBER_COMMAND
 
+/* Predicates: return NUMBER if the comparison holds, else CMDR_MISMATCH. */
+static int compare(int greater, size_t argc, const char *const *argv,
+                   char **result, char **error)
+{
+    const char *name = greater ? "gt" : "lt";
+    if (argc != 2) return cmdr_error(error, "usage: %s NUMBER LIMIT", name);
+    double a, b;
+    if (number(argv[0], &a, error) || number(argv[1], &b, error)) return 1;
+    if (greater ? !(a > b) : !(a < b))
+        return cmdr_error(error, "%s: %s is not %s %s", name, argv[0],
+                          greater ? "greater than" : "less than", argv[1]), CMDR_MISMATCH;
+    *result = strdup(argv[0]);
+    return *result ? 0 : cmdr_error(error, "out of memory");
+}
+static int lt_command(void *user, size_t argc, const char *const *argv,
+                      char **result, char **error)
+{ (void)user; return compare(0, argc, argv, result, error); }
+static int gt_command(void *user, size_t argc, const char *const *argv,
+                      char **result, char **error)
+{ (void)user; return compare(1, argc, argv, result, error); }
+
 static int print_command(void *user, size_t argc, const char *const *argv,
                          char **result, char **error)
 {
@@ -359,6 +380,8 @@ const cmdr *cmdr_prelude(void)
         {.name = "sub", .usage = "sub A B", .docstring = "Subtract B from A", .run = sub_command},
         {.name = "mul", .usage = "mul A B [NUMBER ...]", .docstring = "Multiply numbers", .run = mul_command},
         {.name = "div", .usage = "div A B", .docstring = "Divide A by B", .run = div_command},
+        {.name = "lt", .usage = "lt NUMBER LIMIT", .docstring = "Return NUMBER if less than LIMIT", .run = lt_command},
+        {.name = "gt", .usage = "gt NUMBER LIMIT", .docstring = "Return NUMBER if greater than LIMIT", .run = gt_command},
         {.name = "read", .usage = "read PATH", .docstring = "Read a text file", .run = read_command},
         {.name = "print", .usage = "print TEXT", .docstring = "Print TEXT plus newline, returning TEXT", .run = print_command},
         {.name = "run", .usage = "run PROGRAM [ARG ...]", .docstring = "Run an executable, returning stdout", .run = run_command},

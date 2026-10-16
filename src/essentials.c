@@ -89,6 +89,13 @@ CALLBACK(list_command)
     return 0;
 }
 
+CALLBACK(lines_command)
+{
+    UNUSED();
+    if (argc != 1) return cmdr_error(error, "usage: lines LIST_OR_LINES");
+    return as_list(&argv[0], result, error);
+}
+
 CALLBACK(split_command)
 {
     UNUSED();
@@ -146,6 +153,17 @@ static int compare_values(const void *a, const void *b)
     return strcmp(((const cmdr_value *)a)->text, ((const cmdr_value *)b)->text);
 }
 
+/* Preserve text pipelines; explicit lists keep their item boundaries. */
+static int like_input(const cmdr_value *input, cmdr_value *list, char **error)
+{
+    if (input->kind != CMDR_TEXT) return 0;
+    char *text = NULL;
+    int status = cmdr_value_render(list, &text, error);
+    cmdr_value_free(list);
+    if (!status) *list = (cmdr_value){.kind = CMDR_TEXT, .text = text};
+    return status;
+}
+
 enum operation { SORT, UNIQ, HEAD, TAIL, FILTER, COUNT };
 static int collection(enum operation op, size_t argc, const cmdr_value *argv,
                        cmdr_value *result, char **error)
@@ -182,14 +200,7 @@ static int collection(enum operation op, size_t argc, const cmdr_value *argv,
         if (op == FILTER && !strstr(list.items[i].text, argv[1].text)) continue;
         if (push_copy(result, &list.items[i], error)) goto done;
     }
-    status = 0;
-    /* Preserve text pipelines; explicit lists keep their item boundaries. */
-    if (argv[0].kind == CMDR_TEXT) {
-        char *text = NULL;
-        status = cmdr_value_render(result, &text, error);
-        cmdr_value_free(result);
-        if (!status) *result = (cmdr_value){.kind = CMDR_TEXT, .text = text};
-    }
+    status = like_input(&argv[0], result, error);
 done:
     cmdr_value_free(&list);
     return status;
@@ -240,6 +251,181 @@ CALLBACK(map_command)
     free(args);
     cmdr_value_free(&list);
     return status;
+}
+
+/* Reject syntax, name, and arity errors up front, so that they cannot pass
+ * as predicate results inside keep and not. */
+static int check_body(const cmdr *repl, const char *name, const char *line,
+                      size_t argc, char **error)
+{
+    char *detail = NULL;
+    if (!cmdr_check(repl, line, argc, &detail)) return 0;
+    cmdr_error(error, "%s: %s", name, detail ? detail : "invalid pipeline");
+    free(detail);
+    return 1;
+}
+
+/* Bind subject as $1 and argv[2..] as $2.., then evaluate argv[1]. */
+static int run_body(const cmdr *repl, const cmdr_value *subject, size_t argc,
+                    const cmdr_value *argv, cmdr_value *out, char **detail)
+{
+    cmdr_value *args = calloc(argc - 1, sizeof(*args));
+    if (!args) { *out = (cmdr_value){0}; return cmdr_error(detail, "out of memory"); }
+    args[0] = *subject;
+    for (size_t i = 2; i < argc; ++i) args[i - 1] = argv[i];
+    int status = cmdr_eval_args(repl, argv[1].text, argc - 1, args, out, detail);
+    free(args);
+    return status;
+}
+
+static int per_item(int keep, const cmdr *repl, size_t argc, const cmdr_value *argv,
+                    cmdr_value *result, char **error)
+{
+    const char *name = keep ? "keep" : "each";
+    if (argc < 2) return cmdr_error(error, "usage: %s LIST_OR_LINES PIPELINE [ARG ...]", name);
+    if (require_text(&argv[1], error)) return 1;
+    if (check_body(repl, name, argv[1].text, argc - 1, error)) return 1;
+    cmdr_value list = {0};
+    if (as_list(&argv[0], &list, error)) return 1;
+    result->kind = CMDR_LIST;
+    int status = 0;
+    for (size_t i = 0; i < list.count && !status; ++i) {
+        const char *failure = cmdr_value_failure(&list.items[i]);
+        if (keep && failure) {
+            status = cmdr_error(error, "keep item %zu: %s", i + 1, failure);
+            break;
+        }
+        cmdr_value item = {0};
+        char *detail = NULL;
+        int failed = run_body(repl, &list.items[i], argc, argv, &item, &detail);
+        if (keep) {
+            if (!failed) status = push_copy(result, &list.items[i], error);
+            else if (failed != CMDR_MISMATCH)
+                status = cmdr_error(error, "keep item %zu: %s", i + 1,
+                                    detail ? detail : "command failed");
+        } else if (failed || item.kind == CMDR_NONE) {
+            status = cmdr_error(error, "each item %zu: %s", i + 1,
+                                detail ? detail : "pipeline returned no value");
+        } else {
+            status = cmdr_value_push(result, &item, error);
+        }
+        free(detail);
+        cmdr_value_free(&item);
+    }
+    cmdr_value_free(&list);
+    if (!status && keep) status = like_input(&argv[0], result, error);
+    return status;
+}
+CALLBACK(each_command)
+{ (void)user; return per_item(0, repl, argc, argv, result, error); }
+CALLBACK(keep_command)
+{ (void)user; return per_item(1, repl, argc, argv, result, error); }
+
+CALLBACK(not_command)
+{
+    (void)user;
+    if (argc < 2) return cmdr_error(error, "usage: not VALUE PIPELINE [ARG ...]");
+    if (require_text(&argv[1], error)) return 1;
+    if (check_body(repl, "not", argv[1].text, argc - 1, error)) return 1;
+    cmdr_value out = {0};
+    char *detail = NULL;
+    int failed = run_body(repl, &argv[0], argc, argv, &out, &detail);
+    cmdr_value_free(&out);
+    if (failed && failed != CMDR_MISMATCH) {
+        cmdr_error(error, "not: %s", detail ? detail : "command failed");
+        free(detail);
+        return failed;
+    }
+    free(detail);
+    if (!failed) {
+        cmdr_error(error, "not: '%s' succeeded", argv[1].text);
+        return CMDR_MISMATCH;
+    }
+    return cmdr_value_clone(&argv[0], result, error);
+}
+
+/* Each body receives only the parameters it references, so bodies that
+ * ignore shared arguments still pass strict arity. */
+CALLBACK(when_command)
+{
+    (void)user;
+    if (argc < 4)
+        return cmdr_error(error, "usage: when VALUE COND THEN ELSE [ARG ...]");
+    const char *labels[] = {"COND", "THEN", "ELSE"};
+    size_t needs[3], params = argc - 3, highest = 0;
+    cmdr_value *args = calloc(params, sizeof(*args));
+    if (!args) return cmdr_error(error, "out of memory");
+    args[0] = argv[0];
+    for (size_t i = 4; i < argc; ++i) args[i - 3] = argv[i];
+    int status = 0;
+    for (size_t i = 0; i < 3 && !status; ++i) {
+        char *detail = NULL;
+        if ((status = require_text(&argv[i + 1], error))) break;
+        if ((status = cmdr_arity(repl, argv[i + 1].text, &needs[i], &detail))) {
+            cmdr_error(error, "when %s: %s", labels[i], detail ? detail : "invalid pipeline");
+        }
+        free(detail);
+        if (!status && needs[i] > highest) highest = needs[i];
+        if (!needs[i]) needs[i] = 1;
+    }
+    size_t used = highest ? highest : 1;
+    if (!status && highest > params)
+        status = cmdr_error(error, "when: reference $%zu has no argument (%zu given)",
+                            highest, params);
+    else if (!status && params > used)
+        status = cmdr_error(error, "when: %zu argument%s unused", params - used,
+                            params - used == 1 ? "" : "s");
+    if (status) { free(args); return status; }
+    cmdr_value out = {0};
+    char *detail = NULL;
+    int failed = cmdr_eval_args(repl, argv[1].text, needs[0], args, &out, &detail);
+    cmdr_value_free(&out);
+    if (failed && failed != CMDR_MISMATCH) {
+        cmdr_error(error, "when COND: %s", detail ? detail : "command failed");
+        free(detail);
+        free(args);
+        return failed;
+    }
+    free(detail);
+    size_t branch = failed ? 2 : 1;
+    status = cmdr_eval_args(repl, argv[branch + 1].text, needs[branch], args, result, error);
+    free(args);
+    return status;
+}
+
+/* Predicates return their input on success and CMDR_MISMATCH otherwise. */
+CALLBACK(nonempty_command)
+{
+    UNUSED();
+    if (argc != 1) return cmdr_error(error, "usage: nonempty VALUE");
+    if (argv[0].kind == CMDR_NONE) return cmdr_error(error, "nonempty: no value");
+    if (argv[0].kind == CMDR_TEXT && !argv[0].text[0])
+        return cmdr_error(error, "nonempty: empty text"), CMDR_MISMATCH;
+    if (argv[0].kind == CMDR_LIST && !argv[0].count)
+        return cmdr_error(error, "nonempty: empty list"), CMDR_MISMATCH;
+    return cmdr_value_clone(&argv[0], result, error);
+}
+
+CALLBACK(equals_command)
+{
+    UNUSED();
+    if (argc != 2) return cmdr_error(error, "usage: equals TEXT EXPECTED");
+    if (require_text(&argv[0], error) || require_text(&argv[1], error)) return 1;
+    if (strcmp(argv[0].text, argv[1].text))
+        return cmdr_error(error, "equals: text differs from '%s'", argv[1].text),
+               CMDR_MISMATCH;
+    return cmdr_value_clone(&argv[0], result, error);
+}
+
+CALLBACK(contains_command)
+{
+    UNUSED();
+    if (argc != 2) return cmdr_error(error, "usage: contains TEXT SUBSTRING");
+    if (require_text(&argv[0], error) || require_text(&argv[1], error)) return 1;
+    if (!strstr(argv[0].text, argv[1].text))
+        return cmdr_error(error, "contains: '%s' not found", argv[1].text),
+               CMDR_MISMATCH;
+    return cmdr_value_clone(&argv[0], result, error);
 }
 
 enum slicing { TAKE, DROP, SLICE };
@@ -386,6 +572,7 @@ CALLBACK(recover_command)
 #define ENTRY(n, u, d, f) {.name = n, .usage = u, .docstring = d, .run_value = f}
 static const cmdr_command commands[] = {
     ENTRY("list", "list [VALUE ...]", "Construct an explicit list", list_command),
+    ENTRY("lines", "lines LIST_OR_LINES", "Split text into a list of lines", lines_command),
     ENTRY("split", "split TEXT SEPARATOR", "Split into an explicit list", split_command),
     ENTRY("join", "join LIST_OR_LINES SEPARATOR", "Join text items", join_command),
     ENTRY("sort", "sort LIST_OR_LINES", "Sort text items by byte order", sort_command),
@@ -395,6 +582,13 @@ static const cmdr_command commands[] = {
     ENTRY("filter", "filter LIST_OR_LINES TEXT", "Keep text items containing TEXT", filter_command),
     ENTRY("count", "count LIST_OR_LINES", "Count items", count_command),
     ENTRY("map", "map LIST_OR_LINES COMMAND [ARG ...]", "Apply a command to each item", map_command),
+    ENTRY("each", "each LIST_OR_LINES PIPELINE [ARG ...]", "Run a pipeline per item ($1 = item)", each_command),
+    ENTRY("keep", "keep LIST_OR_LINES PIPELINE [ARG ...]", "Keep items whose pipeline succeeds", keep_command),
+    ENTRY("not", "not VALUE PIPELINE [ARG ...]", "Return VALUE if the pipeline fails", not_command),
+    ENTRY("when", "when VALUE COND THEN ELSE [ARG ...]", "Run THEN if COND holds, else ELSE", when_command),
+    ENTRY("nonempty", "nonempty VALUE", "Return VALUE unless empty text or list", nonempty_command),
+    ENTRY("equals", "equals TEXT EXPECTED", "Return TEXT if equal to EXPECTED", equals_command),
+    ENTRY("contains", "contains TEXT SUBSTRING", "Return TEXT if it contains SUBSTRING", contains_command),
     ENTRY("files", "files [DIRECTORY]", "List regular files, sorted by path", files_command),
     ENTRY("basename", "basename PATH", "Return the final path component", basename_command),
     ENTRY("dirname", "dirname PATH", "Return the parent path", dirname_command),

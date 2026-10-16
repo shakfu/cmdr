@@ -11,6 +11,10 @@
  * always iterative and has no depth limit. */
 #define CMDR_MAX_VALUE_DEPTH 1024
 
+/* Status for a predicate that does not hold, as opposed to an error (1).
+ * keep and not treat only this status as false. Set *error as usual. */
+#define CMDR_MISMATCH 2
+
 typedef struct cmdr cmdr;
 typedef struct cmdr_value cmdr_value;
 
@@ -57,11 +61,15 @@ typedef struct {
     void *user;
     cmdr_value_fn run_value;
     int handles_failure; /* Recovery commands can consume CMDR_FAILURE. */
-    /* Set exactly one of run, run_value, or pipeline. A pipeline body is
-     * evaluated with the optional single argument as input (same rules as
-     * piping into the first stage). The string must outlive the interpreter. */
+    /* Set exactly one of run, run_value, or pipeline. A pipeline body binds
+     * its arguments to $1..$N, requiring exactly N; without references it
+     * accepts at most one. The first stage receives $1 as input unless it
+     * references $1. The string must outlive the interpreter. */
     const char *pipeline;
     const char *docstring; /* Optional help description, separate from usage. */
+    /* Optional: resolve a pipeline body's names in this registry instead of
+     * the active one. Must outlive the interpreter. */
+    const cmdr *scope;
 } cmdr_command;
 
 /* The command table and its strings must outlive the interpreter. */
@@ -74,6 +82,8 @@ struct cmdr {
      * struct and bumps `depth` for nested `.pipeline`/`map`/`try` evaluation.
      * Leave at zero when constructing a registry. */
     unsigned depth;
+    /* Internal: `as` bindings visible to nested pipeline strings. Leave NULL. */
+    const struct cmdr_frame *frame;
 };
 
 /* Search local commands before parent registries. Returns NULL if absent. */
@@ -86,9 +96,20 @@ int cmdr_error(char **error, const char *format, ...);
  * caller owns outputs, including on failure. Inputs must not alias outputs. */
 int cmdr_call(const cmdr *repl, const char *name, size_t argc,
               const cmdr_value *argv, cmdr_value *result, char **error);
-/* input, if non-NULL, feeds the first stage; normal pipeline rules then apply. */
+/* input, if non-NULL, is $1 and feeds the first stage as in a pipeline body. */
 int cmdr_eval_value(const cmdr *repl, const char *line, const cmdr_value *input,
                     cmdr_value *result, char **error);
+/* Bind argv to $1..$N; argv[0] feeds the first stage as in a pipeline body.
+ * Requires exactly N arguments, or at most one without references. */
+int cmdr_eval_args(const cmdr *repl, const char *line, size_t argc,
+                   const cmdr_value *argv, cmdr_value *result, char **error);
+/* Check syntax, command names, and arity for argc arguments without running.
+ * Pass CMDR_ANY_ARITY to skip the arity check. Caller frees error. */
+#define CMDR_ANY_ARITY ((size_t)-1)
+int cmdr_check(const cmdr *repl, const char *line, size_t argc, char **error);
+/* Check syntax and command names; set *highest to the highest $N referenced
+ * (0 if none). Caller frees error. */
+int cmdr_arity(const cmdr *repl, const char *line, size_t *highest, char **error);
 /* Executes one pipeline. Caller frees result and error, including on failure.
  * Neither pointer may be NULL; both are initialized by this function.
  * Effects from completed stages are not rolled back if a later stage fails. */

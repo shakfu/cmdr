@@ -41,6 +41,9 @@ int main(void)
         {.name = "clean", .pipeline = "trim | lower"},
         {.name = "safe-upper", .pipeline = "try upper | recover fallback",
          .handles_failure = 1},
+        {.name = "wrap", .pipeline = "text $2 $1 $2"},
+        {.name = "tagged", .pipeline = "list $2 $1"},
+        {.name = "swap", .pipeline = "replace $2 $3"},
     };
     cmdr repl = {
         .commands = commands,
@@ -115,6 +118,86 @@ int main(void)
     CHECK(error && strstr(error, "at most one value"));
     free(error);
     error = NULL;
+
+    /* Parameters: $1 is the first argument, piped or explicit. */
+    evaluate(&repl, "wrap x '*'", &value);
+    CHECK(value.kind == CMDR_TEXT && !strcmp(value.text, "* x *"));
+    cmdr_value_free(&value);
+    evaluate(&repl, "text 'a | upper' | wrap '*'", &value);
+    CHECK(value.kind == CMDR_TEXT && !strcmp(value.text, "* a | upper *"));
+    cmdr_value_free(&value);
+    evaluate(&repl, "list a b | map wrap - | join ,", &value);
+    CHECK(value.kind == CMDR_TEXT && !strcmp(value.text, "- a -,- b -"));
+    cmdr_value_free(&value);
+    /* The first stage gets $1 implicitly when it does not reference $1. */
+    evaluate(&repl, "text abc | swap b X", &value);
+    CHECK(value.kind == CMDR_TEXT && !strcmp(value.text, "aXc"));
+    cmdr_value_free(&value);
+    /* A list reference stays one typed argument. */
+    evaluate(&repl, "list a b | tagged t", &value);
+    CHECK(value.kind == CMDR_LIST && value.count == 2);
+    CHECK(!strcmp(value.items[0].text, "t"));
+    CHECK(value.items[1].kind == CMDR_LIST && value.items[1].count == 2);
+    cmdr_value_free(&value);
+    CHECK(cmdr_eval_value(&repl, "wrap x", NULL, &value, &error));
+    CHECK(error && strstr(error, "expects 2 arguments, got 1"));
+    free(error);
+    error = NULL;
+    CHECK(cmdr_eval_value(&repl, "wrap x y z", NULL, &value, &error));
+    CHECK(error && strstr(error, "expects 2 arguments, got 3"));
+    free(error);
+    error = NULL;
+
+    /* Typed arguments bind to $1..$N without parsing their contents. */
+    cmdr_value args[2] = {{0}, {0}};
+    CHECK(!cmdr_value_text(&args[0], "a | b", &error));
+    CHECK(!cmdr_value_text(&args[1], "*", &error));
+    CHECK(!cmdr_eval_args(&repl, "text $2 $1", 2, args, &value, &error));
+    CHECK(value.kind == CMDR_TEXT && !strcmp(value.text, "* a | b"));
+    cmdr_value_free(&value);
+    CHECK(cmdr_eval_args(&repl, "text $3", 2, args, &value, &error));
+    CHECK(error && strstr(error, "$3"));
+    free(error);
+    error = NULL;
+    cmdr_value_free(&args[0]);
+    cmdr_value_free(&args[1]);
+    CHECK(!cmdr_check(&repl, "equals $1 | upper", 1, &error) && !error);
+    /* Mismatch is distinct from error, through pipelines and composition. */
+    CHECK(cmdr_eval_value(&repl, "text a | equals b", NULL, &value, &error) == CMDR_MISMATCH);
+    free(error);
+    error = NULL;
+    CHECK(cmdr_eval_value(&repl, "text a | equals", NULL, &value, &error) == 1);
+    free(error);
+    error = NULL;
+    CHECK(cmdr_check(&repl, "equals $1 | bogus", 1, &error));
+    CHECK(error && strstr(error, "unknown command: bogus"));
+    free(error);
+    error = NULL;
+    size_t highest = 99;
+    CHECK(!cmdr_arity(&repl, "$2 | text $3", &highest, &error) && highest == 3);
+    CHECK(!cmdr_arity(&repl, "upper", &highest, &error) && highest == 0);
+    CHECK(cmdr_arity(&repl, "bogus", &highest, &error));
+    free(error);
+    error = NULL;
+    CHECK(cmdr_check(&repl, "text $2", 1, &error));
+    free(error);
+    error = NULL;
+
+    /* A scoped body resolves names in its scope, not the active registry. */
+    const cmdr_command scoped[] = {
+        {.name = "upper", .pipeline = "text overridden"},
+        {.name = "loud", .pipeline = "upper", .scope = NULL},
+    };
+    cmdr_command lexical = {.name = "loud2", .pipeline = "upper"};
+    lexical.scope = cmdr_prelude();
+    cmdr inner = {.commands = &lexical, .count = 1, .parent = cmdr_prelude()};
+    cmdr outer = {.commands = scoped, .count = 2, .parent = &inner};
+    evaluate(&outer, "loud a", &value);
+    CHECK(value.kind == CMDR_TEXT && !strcmp(value.text, "a overridden"));
+    cmdr_value_free(&value);
+    evaluate(&outer, "loud2 a", &value);
+    CHECK(value.kind == CMDR_TEXT && !strcmp(value.text, "A"));
+    cmdr_value_free(&value);
 
     /* Cyclic pipeline commands must be reported, not crash the process. */
     const cmdr_command cyclic[] = {

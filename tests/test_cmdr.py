@@ -88,6 +88,9 @@ class Commands(unittest.TestCase):
             ('text "" | count', '0\n'),
             ('text "a\nb" | count', '2\n'),
             ('text "a\nb" | map upper | join ,', 'A,B\n'),
+            ('text "a\n\nb\n" | lines | map length | join ,', '1,0,1\n'),
+            ('text "" | lines | count', '0\n'),
+            ('list "a\nb" c | lines | count', '2\n'),
         ]
         for source, expected in cases:
             with self.subTest(source=source):
@@ -199,6 +202,297 @@ class Commands(unittest.TestCase):
             with self.subTest(source=source):
                 self.run_line(source, error='usage:')
 
+    def test_references(self):
+        cases = [
+            ("text x | try 'text pre $1'", 'pre x\n'),
+            ("text x | try 'text $1 $1'", 'x x\n'),
+            ("list a b | map try 'text [ $1 ]' | join ,", '[ a ],[ b ]\n'),
+            ("text a$1 \\$1 '$1' \"$2\" _", 'a$1 $1 $1 $2 _\n'),
+        ]
+        for source, expected in cases:
+            with self.subTest(source=source):
+                self.run_line(source, expected)
+        errors = [
+            ('text $1', 'reference $1 has no argument'),
+            ("text x | try 'text $2' | recover ok", None),
+            ('text $name', 'unbound reference $name'),
+            ('text $_', "invalid reference '$_'"),
+            ('text $1x', "invalid reference '$1x'"),
+            ('text $0', "invalid reference '$0'"),
+            ('text $', "invalid reference '$'"),
+            ('$1 x', 'command name cannot be a reference'),
+        ]
+        for source, error in errors:
+            with self.subTest(source=source):
+                if error:
+                    self.run_line(source, error=error)
+                else:
+                    self.run_line(source, 'ok\n')
+
+    def test_combinators_and_predicates(self):
+        cases = [
+            ("list a bb '' | keep nonempty | join ,", 'a,bb\n'),
+            ("list a bb c | keep 'contains b' | join ,", 'bb\n'),
+            ("list a b | keep 'not \"equals a\"' | join ,", 'b\n'),
+            ("list a b c | keep 'not \"equals $2\" $2' b | join ,", 'a,c\n'),
+            ("text x | try 'equals y' | recover no", 'no\n'),
+            ("list a b c | keep 'equals $2' b | join ,", 'b\n'),
+            ("list | keep nonempty | count", '0\n'),
+            # keep preserves the input representation, like filter.
+            ('text "x\ny\n" | keep "equals y"', 'y\n'),
+            ("list 'a b' c | each 'text $2 $1' pre | join ,", 'pre a b,pre c\n'),
+            ("list a b | each 'upper | text [ $1 ]' | join ,", 'A [ a ],B [ b ]\n'),
+            ("list a b | each 'list $1' | count", '2\n'),
+            ("list a b | each 'try \"equals a\" | recover no' | join ,", 'a,no\n'),
+            ("text '' | not nonempty | length", '0\n'),
+            ("text abc | contains b | upper", 'ABC\n'),
+            ("text '   ' | trim | try 'nonempty | upper' | recover none", 'none\n'),
+            ("text ' hi ' | trim | try 'nonempty | upper' | recover none", 'HI\n'),
+        ]
+        for source, expected in cases:
+            with self.subTest(source=source):
+                self.run_line(source, expected)
+        errors = [
+            # Invalid bodies fail instead of acting as false (or true for not).
+            ('list a | keep nonemtpy', 'keep: unknown command: nonemtpy'),
+            ('list | keep bogus', 'keep: unknown command: bogus'),
+            ("list a | keep 'equals $2'", 'keep: reference $2 has no argument'),
+            # Nested strings do not capture the enclosing body's parameters.
+            ("list a | keep 'not \"equals $2\"' b", 'keep: pipeline without references'),
+            ('text a | not bogus', 'not: unknown command: bogus'),
+            # Errors below the top-level body are errors too, not false.
+            ("list a | keep 'not equals a'", 'keep item 1: not: pipeline without references'),
+            ("list a | keep 'read'", 'keep item 1: read a'),
+            ("text a | not 'try bogus'", 'not: unknown command: bogus'),
+            ("list a | each 'text $1 | '", "each: expected a command after '|'"),
+            ('text x | not nonempty', "not: 'nonempty' succeeded"),
+            ("list a b | each 'equals a'", 'each item 2: equals'),
+            ("list a | each 'try \"equals b\"'", 'each item 1: equals'),
+            ('list a | map try \'equals b\' | keep nonempty', 'keep item 1: equals'),
+            ('text "" | nonempty', 'nonempty: empty text'),
+            ('list | nonempty', 'nonempty: empty list'),
+            ('text a | equals b', "equals: text differs from 'b'"),
+            ('text a | contains b', "contains: 'b' not found"),
+            ('list a | equals a', 'expected text'),
+        ]
+        for source, error in errors:
+            with self.subTest(source=source):
+                self.run_line(source, error=error)
+
+    def run_input(self, source, *args):
+        return subprocess.run([str(BINARY), *args], input=source,
+                              capture_output=True, text=True, timeout=20)
+
+    def test_definitions(self):
+        result = self.run_input(
+            "def clean-or 'trim | try \"nonempty | upper\" | recover $2'\n"
+            "def wrap 'text $2 $1 $2'\n"
+            "clean-or '  hi  ' none\n"
+            "text '   ' | clean-or none\n"
+            "list a b | map wrap - | join ,\n"
+            "help | filter def: | count\n"
+            # Redefinition shadows prelude commands and earlier definitions.
+            "def wrap 'text [ $1 ]'\n"
+            "wrap x\n"
+            "def upper 'lower'\n"
+            "text ABC | upper\n")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, 'HI\nnone\n- a -,- b -\n2\n[ x ]\nabc\n')
+        errors = [
+            ('def', 'usage: def NAME PIPELINE'),
+            ("def 'a b' upper", "def: invalid name 'a b'"),
+            ("def 'a|b' upper", "def: invalid name 'a|b'"),
+            ("def '$x' upper", "def: invalid name '$x'"),
+            ('def def upper', 'def: cannot redefine def'),
+            ('def x bogus', 'def x: unknown command: bogus'),
+            ("def x ''", 'def x: empty pipeline'),
+            ("def x '# note'", 'def x: empty pipeline'),
+            ("def x 'upper |'", "def x: expected a command after '|'"),
+        ]
+        for source, error in errors:
+            with self.subTest(source=source):
+                self.run_line(source, error=error)
+        # Arity is checked at call time.
+        result = self.run_input("def w 'text $2'\nw a\n")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("command 'w' expects 2 arguments, got 1", result.stderr)
+
+    def test_lexical_definitions(self):
+        result = self.run_input(
+            # Naming itself calls the shadowed command, so a def can wrap it.
+            "def upper 'upper | text !'\n"
+            "text a | upper\n"
+            # Bodies keep the commands they were defined with.
+            "def shout 'upper'\n"
+            "def upper 'lower'\n"
+            "text a | shout\n"
+            "text A | upper\n")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, 'A !\nA !\na\n')
+        # Errors from a body name the command, giving a call chain.
+        result = self.run_input("def inner 'equals x'\ndef outer 'trim | inner'\ntext y | outer\n")
+        self.assertIn("outer: inner: equals: text differs from 'x'", result.stderr)
+        self.run_line('def as upper', error='def: cannot redefine as')
+
+    def test_script_files(self):
+        with tempfile.TemporaryDirectory() as directory:
+            script = Path(directory) / 'script.cmdr'
+            script.write_text(
+                "#!/usr/bin/env cmdr\n"
+                "# Helpers\n"
+                "def shout 'upper | text $1 !'\n"
+                "shout hi\n"
+                "bogus\n"
+                "text unreachable\n")
+            result = subprocess.run([str(BINARY), str(script)], capture_output=True,
+                                    text=True, timeout=20)
+            self.assertEqual(result.returncode, 1)
+            self.assertEqual(result.stdout, 'HI hi !\n')
+            self.assertIn(f'{script}:5: unknown command: bogus', result.stderr)
+            missing = subprocess.run([str(BINARY), str(Path(directory) / 'missing')],
+                                     capture_output=True, text=True, timeout=20)
+            self.assertEqual(missing.returncode, 1)
+            self.assertIn('missing', missing.stderr)
+        usage = subprocess.run([str(BINARY), '-x'], capture_output=True, text=True, timeout=20)
+        self.assertEqual(usage.returncode, 2)
+        self.assertIn('usage: cmdr [-c PIPELINE | FILE]', usage.stderr)
+
+    def test_escapes(self):
+        cases = [
+            ('list a b | join "\\n"', 'a\nb\n'),
+            ('text "x\\ty" | length', '3\n'),
+            ("text 'a\\nb'", 'a\\nb\n'),   # single quotes stay literal
+            ('text a\\nb', 'anb\n'),       # unquoted backslash escapes the next byte
+            ('text "a\\"b\\\\c"', 'a"b\\c\n'),
+        ]
+        for source, expected in cases:
+            with self.subTest(source=source):
+                self.run_line(source, expected)
+
+    def test_value_stage_and_when(self):
+        result = self.run_input(
+            "def stats2 '$2 | sort | uniq | count | text of $1'\n"
+            "def stats 'count | stats2 $1'\n"
+            "list b a b | stats\n"
+            "def clean-or 'trim | when nonempty upper \"$2\" $2'\n"
+            "clean-or '  hi  ' none\n"
+            "text '   ' | clean-or none\n"
+            "def clean-or2 '$2 | as fallback | $1 | trim"
+            " | when nonempty upper \"$fallback\"'\n"
+            "clean-or2 '  hi  ' none\n"
+            "text '   ' | clean-or2 none\n")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, '2 of 3\nHI\nnone\nHI\nnone\n')
+        cases = [
+            ("text a | when 'equals $2' 'text yes $1' 'text no $1' a", 'yes a\n'),
+            ("text b | when 'equals $2' 'text yes $1' 'text no $1' a", 'no b\n'),
+            # A mismatch from the chosen branch propagates, so when nests in keep.
+            ("list a b c | keep 'when \"equals a\" nonempty \"equals c\"' | join ,", 'a,c\n'),
+            ("list x | each 'when nonempty \"$1\" \"$1\"' | count", '1\n'),
+        ]
+        for source, expected in cases:
+            with self.subTest(source=source):
+                self.run_line(source, expected)
+        errors = [
+            ("text a | when 'head nope' upper lower", 'when COND: invalid nonnegative integer'),
+            ('text a | when nonempty bogus lower', 'when THEN: unknown command: bogus'),
+            ("text a | when nonempty upper 'lower |'", "when ELSE: expected a command after '|'"),
+            ('text a | when nonempty upper lower extra', 'when: 1 argument unused'),
+            ("text a | when nonempty upper '$2' x y", 'when: 1 argument unused'),
+            ("text a | when nonempty upper '$3' x", 'when: reference $3 has no argument'),
+            ('text a | when nonempty upper', 'usage: when VALUE COND THEN ELSE'),
+            ('text a | upper | $1', 'reference $1 has no argument'),
+            ('$1 x', 'command name cannot be a reference'),
+            ('$1', 'reference $1 has no argument'),
+        ]
+        for source, error in errors:
+            with self.subTest(source=source):
+                self.run_line(source, error=error)
+
+    def test_bindings(self):
+        cases = [
+            ('list b a b | as lines | count | as total | $lines | sort | uniq | count'
+             ' | text of $total', '2 of 3\n'),
+            # A stage that names the current value gets it only where named.
+            ('text v | as x | text a $x b', 'a v b\n'),
+            ('text v | as x | text a b', 'v a b\n'),
+            ('text a | as x | upper | $x', 'a\n'),
+            ('text a | as x | upper | text $x', 'A a\n'),
+            # A list binding stays one typed value.
+            ("list a b | as l | count | text $l", None),
+            ("list 'a b' c | each 'as item | text [ $item ]' | join ,", '[ a b ],[ c ]\n'),
+            # Nested strings see enclosing bindings, innermost first.
+            ("text a | as x | try 'text $x' | recover none", 'a a\n'),
+            ("text a | as x | each 'list $x' | count", '1\n'),
+            ("text a | as x | upper | try 'as x | text $x'", 'A\n'),
+            ("text a | as x | try 'try \"$x\"'", 'a\n'),
+            # Positional references stay local to each string.
+            ("text a | as x | try 'text $x $1'", 'a a\n'),
+            # A captured failure is not replaced by a value stage.
+            ("text a | as x | try bogus | $x | recover ok", 'ok\n'),
+        ]
+        for source, expected in cases:
+            with self.subTest(source=source):
+                if expected is None:
+                    self.run_line(source, error='expects text')
+                else:
+                    self.run_line(source, expected)
+        errors = [
+            ('text $y', 'unbound reference $y'),
+            ('text $y | as y', 'unbound reference $y'),
+            ('text x | as 1a', 'usage: as NAME'),
+            ('text x | as', 'usage: as NAME'),
+            ('text x | as a b', 'usage: as NAME'),
+            ('text x | as x | as x', 'as: $x is already bound'),
+            ('as x', 'as x: no pipeline value to bind'),
+            ('text $_', "invalid reference '$_'"),
+        ]
+        for source, error in errors:
+            with self.subTest(source=source):
+                self.run_line(source, error=error)
+        # A pipeline command's body does not see its caller's bindings.
+        result = self.run_input("def peek 'try \"text $x\"'\ntext v | as x | peek\n")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('unbound reference $x', result.stderr)
+
+    def test_numeric_predicates(self):
+        cases = [
+            ('text 3 | lt 5', '3\n'),
+            ('text 7 | gt 5.5', '7\n'),
+            ("list 1 5 9 | keep 'gt $2' 4 | join ,", '5,9\n'),
+            ("text 5 | when 'lt 5' 'text low' 'text high'", '5 high\n'),
+        ]
+        for source, expected in cases:
+            with self.subTest(source=source):
+                self.run_line(source, expected)
+        self.run_line('text 7 | lt 5', error='lt: 7 is not less than 5')
+        self.run_line('text 3 | gt x', error='invalid finite number: x')
+        self.run_line("list 1 x | keep 'gt 0'", error='keep item 2: invalid finite number: x')
+
+    def test_continuation(self):
+        result = self.run_input(
+            "text a |\n  # note\n\n  upper |\n  text b\n"
+            "text c\\|\n"
+            "# trailing pipe in a comment does not continue |\n"
+            "text d\n")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, 'A b\nc|\nd\n')
+        result = self.run_input("def report 'upper |\n  # note\n  lower'\n"
+                                "report X\nhelp | filter report\n")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.split('\n')[0], 'x')
+        self.assertRegex(result.stdout, r'\nreport +def: upper \| lower\n$')
+        result = self.run_input('text a |\n')
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("expected a command after '|'", result.stderr)
+        with tempfile.TemporaryDirectory() as directory:
+            script = Path(directory) / 'script.cmdr'
+            script.write_text('text a\ntext b |\n  bogus\ntext unreachable\n')
+            result = subprocess.run([str(BINARY), str(script)], capture_output=True,
+                                    text=True, timeout=20)
+            self.assertEqual(result.stdout, 'a\n')
+            self.assertIn(f'{script}:2: unknown command: bogus', result.stderr)
+
     def test_os_composition(self):
         self.run_line("run printf '%s' 'hello world' | upper", 'HELLO WORLD\n')
         self.run_line('text abc | run-in tr a-z A-Z', 'ABC\n')
@@ -218,6 +512,8 @@ class Commands(unittest.TestCase):
         names = [line.split()[0] for line in lines]
         self.assertEqual(len(names), len(set(names)))
         self.assertTrue({'map', 'files', 'list', 'take', 'append', 'tee', 'try', 'recover'} <= set(names))
+        self.run_line('help | filter "map LIST" | count', '1\n')
+        self.run_line('help | head 1 | take 4', 'help\n')
         result = subprocess.run([str(BINARY)], input='run cat\ntext next\n',
                                 capture_output=True, text=True, timeout=20)
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -227,6 +523,71 @@ class Commands(unittest.TestCase):
                                 capture_output=True, text=True, timeout=20)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout, '\nnext\n')
+        # Lines starting with '#' are comments; '#' elsewhere is literal.
+        result = subprocess.run([str(BINARY)], input='# note\n  # indented\ntext a#b "#"\n',
+                                capture_output=True, text=True, timeout=20)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, 'a#b #\n')
+        self.run_line("try '# skipped'", '')
+
+
+@unittest.skipUnless(os.environ.get("CMDR_LINENOISE") == "1", "built without linenoise")
+class Editor(unittest.TestCase):
+    """Drive the interactive REPL through a pseudo-terminal."""
+
+    def session(self, home, keys):
+        import pty
+        import select
+        import time
+        pid, fd = pty.fork()
+        if pid == 0:
+            os.environ.update(TERM="xterm", HOME=home)
+            os.execv(str(BINARY), [str(BINARY)])
+        out = b""
+
+        def drain(seconds):
+            nonlocal out
+            end = time.time() + seconds
+            while time.time() < end:
+                if select.select([fd], [], [], 0.05)[0]:
+                    try:
+                        chunk = os.read(fd, 65536)
+                    except OSError:
+                        return
+                    out += chunk
+                    if b"\x1b[6n" in chunk:  # Answer cursor position queries.
+                        os.write(fd, b"\x1b[1;200R")
+
+        drain(0.3)
+        for key in keys + [b"\x04"]:
+            os.write(fd, key)
+            drain(0.3)
+        deadline = time.time() + 5
+        while not os.waitpid(pid, os.WNOHANG)[0]:
+            if time.time() > deadline:
+                os.kill(pid, 9)
+                os.waitpid(pid, 0)
+                self.fail("REPL did not exit on Ctrl-D")
+            drain(0.1)
+        os.close(fd)
+        return out
+
+    def test_completion_history_and_highlighting(self):
+        with tempfile.TemporaryDirectory() as home:
+            out = self.session(home, [b"tex\t hi | upp\t\r", b"list b a |\r",
+                                      b"sort | join ,\r", b"text 'q' $x\r"])
+            self.assertIn(b"HI\r\n", out)
+            self.assertIn(b"a,b\r\n", out)
+            self.assertIn(b"\x1b[34mupper\x1b[0m", out)   # Known command.
+            self.assertIn(b"\x1b[32m'q'\x1b[0m", out)     # Quoted text.
+            self.assertIn(b"\x1b[35m$x\x1b[0m", out)      # Reference.
+            history = Path(home, ".cmdr_history")
+            self.assertEqual(history.read_text(), "text hi | upper\n"
+                             "list b a | sort | join ,\ntext 'q' $x\n")
+            self.assertEqual(history.stat().st_mode & 0o777, 0o600)
+            # A new session recalls the previous one.
+            out = self.session(home, [b"\x1b[A\x1b[A\x1b[A\r"])
+            self.assertIn(b"HI\r\n", out)
 
 
 if __name__ == '__main__':
