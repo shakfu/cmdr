@@ -1,3 +1,6 @@
+# CMake
+/build/
+
 # Prerequisites
 *.d
 
@@ -30,6 +33,7 @@
 
 # Executables
 /cmdr
+/tests/test_api
 *.exe
 *.out
 *.app

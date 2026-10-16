@@ -1,14 +1,19 @@
-CC ?= cc
-CFLAGS ?= -O2 -g
-CFLAGS += -std=c11 -Wall -Wextra -Wpedantic
+# Thin frontend for CMake. Prefer: cmake -S . -B build && cmake --build build
+BUILD_DIR ?= build
+CMAKE ?= cmake
+BUILD_TYPE ?= RelWithDebInfo
 
-.PHONY: all clean
-all: cmdr
+.PHONY: all configure check clean
 
-cmdr: main.o cmdr.o commands.o
+all: configure
+	$(CMAKE) --build $(BUILD_DIR)
 
-main.o cmdr.o commands.o: cmdr.h
-main.o commands.o: commands.h
+configure:
+	$(CMAKE) -S . -B $(BUILD_DIR) -DCMAKE_BUILD_TYPE=$(BUILD_TYPE)
+
+check: all
+	$(CMAKE) --build $(BUILD_DIR) --target check
 
 clean:
-	rm -f cmdr main.o cmdr.o commands.o
+	rm -rf $(BUILD_DIR)
+	rm -f cmdr

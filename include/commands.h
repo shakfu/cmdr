@@ -3,7 +3,7 @@
 
 #include "cmdr.h"
 
-/* Initialize an interpreter with the commands defined in commands.c.
+/* Initialize an interpreter with commands.c and the automatic prelude fallback.
  * The command table has static storage duration. */
 void cmdr_commands_init(cmdr *repl);
 

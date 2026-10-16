@@ -106,54 +106,104 @@ fail:
     return 1;
 }
 
-static const cmdr_command *lookup(const cmdr *repl, const char *name)
+const cmdr_command *cmdr_find(const cmdr *repl, const char *name)
 {
-    for (size_t i = 0; i < repl->count; ++i)
-        if (!strcmp(repl->commands[i].name, name)) return &repl->commands[i];
+    for (; repl; repl = repl->parent)
+        for (size_t i = 0; i < repl->count; ++i)
+            if (!strcmp(repl->commands[i].name, name)) return &repl->commands[i];
     return NULL;
 }
 
-int cmdr_eval(cmdr *repl, const char *line, char **result, char **error)
+int cmdr_call(const cmdr *repl, const char *name, size_t argc,
+              const cmdr_value *argv, cmdr_value *result, char **error)
 {
-    *result = NULL;
+    *result = (cmdr_value){0};
+    *error = NULL;
+    const cmdr_command *command = cmdr_find(repl, name);
+    if (!command) return cmdr_error(error, "unknown command: %s", name);
+    if (argc && argv[0].kind == CMDR_FAILURE && !command->handles_failure)
+        return cmdr_value_clone(&argv[0], result, error);
+    if (command->run_value)
+        return command->run_value(repl, command->user, argc, argv, result, error);
+    if (!command->run) return cmdr_error(error, "command '%s' has no implementation", name);
+    const char **words = calloc(argc + 1, sizeof(*words));
+    if (!words) return cmdr_error(error, "out of memory");
+    for (size_t i = 0; i < argc; ++i) {
+        if (argv[i].kind != CMDR_TEXT) {
+            free(words);
+            return cmdr_error(error, "command '%s' expects text; use map or join for lists", name);
+        }
+        words[i] = argv[i].text;
+    }
+    char *text = NULL;
+    int status = command->run(command->user, argc, words, &text, error);
+    free(words);
+    if (status) free(text);
+    else if (text) *result = (cmdr_value){.kind = CMDR_TEXT, .text = text};
+    return status;
+}
+
+static const char *unhandled_failure(const cmdr_value *value)
+{
+    if (value->kind == CMDR_FAILURE) return value->text;
+    for (size_t i = 0; i < value->count; ++i) {
+        const char *failure = unhandled_failure(&value->items[i]);
+        if (failure) return failure;
+    }
+    return NULL;
+}
+
+int cmdr_eval_value(const cmdr *repl, const char *line, const cmdr_value *input,
+                    cmdr_value *result, char **error)
+{
+    *result = (cmdr_value){0};
     *error = NULL;
     stage *stages = NULL;
     size_t count = 0;
     if (parse(line, &stages, &count, error)) return 1;
     int status = 0;
-    /* Resolve all names before executing any stage. */
     for (size_t i = 0; i < count; ++i) {
-        if (stages[i].count && !lookup(repl, stages[i].words[0])) {
+        if (stages[i].count && !cmdr_find(repl, stages[i].words[0])) {
             status = cmdr_error(error, "unknown command: %s", stages[i].words[0]);
             goto done;
         }
     }
+    if (input && cmdr_value_clone(input, result, error)) { status = 1; goto done; }
     for (size_t i = 0; i < count && stages[i].count; ++i) {
         stage *s = &stages[i];
-        const cmdr_command *command = lookup(repl, s->words[0]);
-        if (i && !*result) {
-            status = cmdr_error(error, "command '%s' received no pipeline value",
-                                command->name);
+        int piped = i != 0 || input != NULL;
+        if (piped && result->kind == CMDR_NONE) {
+            status = cmdr_error(error, "command '%s' received no pipeline value", s->words[0]);
             goto done;
         }
-        size_t argc = s->count - 1 + (i != 0);
-        const char **argv = calloc(argc + 1, sizeof(*argv));
-        if (!argv) {
-            status = cmdr_error(error, "out of memory");
-            goto done;
-        }
+        size_t argc = s->count - 1 + piped;
+        cmdr_value *argv = calloc(argc + 1, sizeof(*argv));
+        if (!argv) { status = cmdr_error(error, "out of memory"); goto done; }
         size_t at = 0;
-        if (i) argv[at++] = *result;
-        for (size_t j = 1; j < s->count; ++j) argv[at++] = s->words[j];
-        char *next = NULL;
-        status = command->run(command->user, argc, argv, &next, error);
+        if (piped) argv[at++] = *result;
+        for (size_t j = 1; j < s->count; ++j)
+            argv[at++] = (cmdr_value){.kind = CMDR_TEXT, .text = s->words[j]};
+        cmdr_value next = {0};
+        status = cmdr_call(repl, s->words[0], argc, argv, &next, error);
         free(argv);
-        free(*result);
+        cmdr_value_free(result);
         *result = next;
         if (status) goto done;
     }
+    const char *failure = unhandled_failure(result);
+    if (failure) status = cmdr_error(error, "%s", failure);
 done:
     dispose(stages, count);
-    if (status) { free(*result); *result = NULL; }
+    if (status) cmdr_value_free(result);
+    return status;
+}
+
+int cmdr_eval(cmdr *repl, const char *line, char **result, char **error)
+{
+    *result = NULL;
+    cmdr_value value = {0};
+    int status = cmdr_eval_value(repl, line, NULL, &value, error);
+    if (!status) status = cmdr_value_render(&value, result, error);
+    cmdr_value_free(&value);
     return status;
 }
