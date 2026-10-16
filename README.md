@@ -54,13 +54,30 @@ background execution. Text values are NUL-terminated strings, not binary buffers
 
 ## Adding C commands
 
-Define commands in [src/commands.c](src/commands.c): implement a `cmdr_fn` from
-[include/cmdr.h](include/cmdr.h), then add it to the `commands` table in
-`cmdr_commands_init`. [include/commands.h](include/commands.h) exposes that
-initializer, which `main.c` calls to load the command registry and prelude
-automatically. Application commands override prelude commands with the same
-name; `help` lists each active name once. Arguments exclude the command name.
-Example:
+Define commands in [src/commands.c](src/commands.c): add an entry to the
+`commands` table in `cmdr_commands_init`. Each entry sets exactly one of
+`.run`, `.run_value`, or `.pipeline`. [include/commands.h](include/commands.h)
+exposes that initializer, which `main.c` calls to load the command registry and
+prelude automatically. Application commands override prelude commands with the
+same name; `help` lists each active name once. Arguments exclude the command
+name.
+
+To define a command as a pipeline of other commands, set `.pipeline`:
+
+```c
+/* In the commands table: */
+/* {.name = "clean", .usage = "clean [TEXT]", .pipeline = "trim | lower"}, */
+/* {.name = "shout", .usage = "shout [TEXT]", .pipeline = "upper"}, */
+```
+
+`text "  Hi  " | clean` and `clean "  Hi  "` both evaluate the body with that
+value as pipeline input. A pipeline command accepts at most one value. Bodies
+resolve names through the active registry, so they see application overrides
+and can call other pipeline commands. Set `.handles_failure` when the body
+should consume a captured failure (for example a body that starts with
+`recover`).
+
+For custom C logic, implement a `cmdr_fn` from [include/cmdr.h](include/cmdr.h):
 
 ```c
 static int first(void *user, size_t argc, const char *const *argv,

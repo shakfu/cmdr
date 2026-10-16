@@ -36,8 +36,16 @@ int main(void)
     int calls = 0;
     const cmdr_command commands[] = {
         {.name = "upper", .run = custom, .user = &calls},
+        {.name = "shout", .pipeline = "upper"},
+        {.name = "clean", .pipeline = "trim | lower"},
+        {.name = "safe-upper", .pipeline = "try upper | recover fallback",
+         .handles_failure = 1},
     };
-    cmdr repl = {.commands = commands, .count = 1, .parent = cmdr_prelude()};
+    cmdr repl = {
+        .commands = commands,
+        .count = sizeof(commands) / sizeof(commands[0]),
+        .parent = cmdr_prelude(),
+    };
     cmdr_value value = {0};
     evaluate(&repl, "list 'a\nb' '' 'a|b' | map upper", &value);
     CHECK(value.kind == CMDR_LIST && value.count == 3 && calls == 3);
@@ -83,6 +91,27 @@ int main(void)
     cmdr isolated = {0};
     CHECK(cmdr_eval_value(&isolated, "list a", NULL, &value, &error));
     CHECK(value.kind == CMDR_NONE);
+    free(error);
+    error = NULL;
+
+    evaluate(&repl, "shout hello", &value);
+    CHECK(value.kind == CMDR_TEXT && !strcmp(value.text, "!hello"));
+    cmdr_value_free(&value);
+
+    evaluate(&repl, "text '  Hello World  ' | clean", &value);
+    CHECK(value.kind == CMDR_TEXT && !strcmp(value.text, "hello world"));
+    cmdr_value_free(&value);
+
+    evaluate(&repl, "list a b | map shout | join ,", &value);
+    CHECK(value.kind == CMDR_TEXT && !strcmp(value.text, "!a,!b") && calls == 7);
+    cmdr_value_free(&value);
+
+    evaluate(&repl, "text hello | safe-upper", &value);
+    CHECK(value.kind == CMDR_TEXT && !strcmp(value.text, "!hello"));
+    cmdr_value_free(&value);
+
+    CHECK(cmdr_eval_value(&repl, "shout a b", NULL, &value, &error));
+    CHECK(error && strstr(error, "at most one value"));
     free(error);
     return 0;
 }

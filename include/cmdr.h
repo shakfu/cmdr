@@ -43,8 +43,12 @@ typedef struct {
     const char *usage;
     cmdr_fn run;
     void *user;
-    cmdr_value_fn run_value; /* Set either run or run_value. */
-    int handles_failure;    /* Recovery commands can consume CMDR_FAILURE. */
+    cmdr_value_fn run_value;
+    int handles_failure; /* Recovery commands can consume CMDR_FAILURE. */
+    /* Set exactly one of run, run_value, or pipeline. A pipeline body is
+     * evaluated with the optional single argument as input (same rules as
+     * piping into the first stage). The string must outlive the interpreter. */
+    const char *pipeline;
 } cmdr_command;
 
 /* The command table and its strings must outlive the interpreter. */

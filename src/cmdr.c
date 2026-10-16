@@ -123,6 +123,19 @@ int cmdr_call(const cmdr *repl, const char *name, size_t argc,
     if (!command) return cmdr_error(error, "unknown command: %s", name);
     if (argc && argv[0].kind == CMDR_FAILURE && !command->handles_failure)
         return cmdr_value_clone(&argv[0], result, error);
+    int implementations = (command->run != NULL) + (command->run_value != NULL)
+                        + (command->pipeline != NULL);
+    if (implementations > 1)
+        return cmdr_error(error, "command '%s' has multiple implementations", name);
+    if (command->pipeline) {
+        if (!command->pipeline[0])
+            return cmdr_error(error, "command '%s' has an empty pipeline", name);
+        if (argc > 1)
+            return cmdr_error(error, "pipeline command '%s' accepts at most one value",
+                              name);
+        return cmdr_eval_value(repl, command->pipeline, argc ? &argv[0] : NULL,
+                               result, error);
+    }
     if (command->run_value)
         return command->run_value(repl, command->user, argc, argv, result, error);
     if (!command->run) return cmdr_error(error, "command '%s' has no implementation", name);

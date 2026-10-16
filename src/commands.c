@@ -25,9 +25,11 @@ static int help_command(void *user, size_t argc, const char *const *argv,
 
 void cmdr_commands_init(cmdr *repl)
 {
-    /* Add application commands here. These take precedence over the prelude. */
+    /* Add application commands here. These take precedence over the prelude.
+     * Use .pipeline to compose existing commands, e.g.:
+     * {.name = "clean", .usage = "clean [TEXT]", .pipeline = "trim | lower"}, */
     static const cmdr_command commands[] = {
-        {"help", "help                      Show commands", help_command, NULL, NULL, 0},
+        {.name = "help", .usage = "help                      Show commands", .run = help_command},
     };
     *repl = (cmdr){
         .commands = commands,
