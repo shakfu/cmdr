@@ -36,11 +36,10 @@ typedef struct {
     const char *name;
     const char *usage;     /* Syntax shown by help; NULL shows the name. */
     const char *docstring; /* Description shown by help. */
-    cmdr_fn run;           /* Set run, pipeline, or block. */
+    cmdr_fn run;           /* Set run or block. */
     int text;              /* run accepts only text arguments. */
-    const char *pipeline;  /* Block source, as written inside { }; compiled per call. */
-    const cmdr_value *block; /* A compiled block, as def makes; set instead of pipeline. */
-    const cmdr *scope;     /* Resolve the body here; NULL uses the caller's. */
+    const cmdr_value *block; /* A compiled block, as def makes. */
+    const cmdr *scope;     /* Resolve the block's commands here. */
 } cmdr_command;
 
 /* A command table searched before its parent. */
@@ -50,7 +49,8 @@ struct cmdr {
     const cmdr *parent;
 };
 
-extern const cmdr cmdr_prelude;
+/* Commands written in C; composed ones are defs in prelude.cmdr. */
+extern const cmdr cmdr_primitives;
 
 /* Allocation failure exits the process. */
 void *cmdr_realloc(void *p, size_t count, size_t size);

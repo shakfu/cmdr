@@ -24,6 +24,7 @@ works. Exit with `quit`, `exit`, or Ctrl-D.
 - `./cmdr FILE` runs a script and stops at its first failing line, reporting
   `FILE:LINE:`.
 - Piped stdin runs one pipeline per line and continues after errors.
+- `load PATH` runs a script in the current session, so its definitions remain.
 
 Errors go to stderr; the exit status is nonzero if any line failed. Lines
 starting with `#`, including a `#!/usr/bin/env cmdr` shebang, are comments.
@@ -50,10 +51,10 @@ There is no variable expansion, globbing, redirection, or implicit shell.
 cmdr> def wrap { (x d) text $d $x $d }
 cmdr> list a b | map wrap - | join ,
 - a -,- b -
-cmdr> def clean-or { (s fallback) trim | try { nonempty | upper } $fallback }
+cmdr> def clean-or { (s fallback) trim $s | try { nonempty | upper } $fallback }
 cmdr> text '   ' | clean-or none
 none
-cmdr> def without { (xs v) keep { not { equals $v } } }
+cmdr> def without { (xs v) keep $xs { not { equals $v } } }
 cmdr> list a b c | without b | join ,
 a,c
 ```
@@ -64,22 +65,25 @@ and references are checked with the enclosing line, before any stage runs.
 - `{ (a b) ... }` declares parameters, referenced as `$a` and `$b`. A block
   takes exactly the arguments it declares. `{ ... }` takes one input, received
   by pipe; `{ () ... }` takes none.
-- The first stage receives the input unless it names it. A stage that is a
-  lone `$name` replaces the current value.
+- Declared parameters appear only where named, and each must be used. Only
+  `{ ... }` pipes its input into its first stage, so a block can start from
+  something else: `{ (w) read app.log | contains $w }`.
+- Each later stage receives the previous result first. A stage that is a lone
+  `$name` makes that value the result.
 - Names are lexical. A nested block sees the names of enclosing blocks, and an
   inner name shadows an outer one. A block keeps the values it captured.
 - References substitute values, not text: a list stays one argument. Quote or
   escape `$` and braces for literal text; `a$x` is literal. Unquoted braces
   inside a block must balance.
 
-`def NAME BLOCK` defines a command for the rest of the session.
-Definitions are lexical: a body uses the commands that existed when it was
+`def NAME BLOCK [DOC]` defines a command for the rest of the session. `help`
+shows DOC, or the body if DOC is absent. Definitions are lexical: a body uses the commands that existed when it was
 defined, and a body that names its own command calls the one it shadows. A
 definition may shadow any command except `def`. Errors from a body are
 prefixed with its name (`outer: inner: equals: ...`).
 
 `each`, `keep`, `not`, and `try` take blocks. Extra arguments follow the item:
-`list a b c | keep { (s v) not { equals $v } } b`.
+`list a b c | keep { (s v) not $s { equals $v } } b`.
 
 ## Commands
 
@@ -101,9 +105,11 @@ prefixed with its name (`outer: inner: equals: ...`).
 | `not VALUE BLOCK [ARG ...]` | Return VALUE if the block mismatches |
 | `try [INPUT] BLOCK FALLBACK` | Return FALLBACK if the block fails |
 | `nonempty VALUE`, `equals TEXT X`, `contains TEXT X`, `lt`/`gt NUMBER X` | Predicates |
+| `last`, `ext`, `has-ext` VALUE | Last item; text after the last dot; names with one. Defined in the prelude |
 | `read PATH`, `write VALUE PATH`, `append VALUE PATH` | Files; write and append return VALUE |
 | `files [DIR]`, `basename PATH`, `dirname PATH` | Regular files in DIR, sorted; lexical path parts |
 | `run PROGRAM [ARG ...]`, `run-in TEXT PROGRAM [ARG ...]` | Run a program, returning stdout |
+| `load PATH` | Run a script in this session |
 
 ```text
 cmdr> text "pear,apple,pear" | split , | sort | uniq | join ", "
@@ -141,11 +147,50 @@ the stage.
 Text is bytes in the C locale. Files and program output containing NUL bytes
 are rejected.
 
+## Growing a prelude
+
+Start with a pipeline. This one lists the distinct file extensions in the
+current directory:
+
+```text
+cmdr> files | map basename | keep { drop 1 | contains . } | each { split . | tail 1 | join "" } | sort | uniq
+md
+txt
+```
+
+`keep { drop 1 | contains . }` keeps names with a dot after the first byte, so
+it skips `Makefile` and `.gitignore`. `tail 1 | join ""` takes the last item.
+
+[src/prelude.cmdr](src/prelude.cmdr) names the parts, each built on the ones
+before:
+
+```
+def last { tail 1 | join "" } "Return the last item"
+def ext { split . | last } "Return the text after the last dot"
+def has-ext { keep { drop 1 | contains . } } "Keep names with a dot after the first byte"
+```
+
+A session builds on them:
+
+```text
+cmdr> def exts { (dir) files $dir | map basename | has-ext | map ext | sort | uniq } "List extensions in DIR"
+cmdr> exts .
+md
+txt
+```
+
+Put definitions in a file, such as `ext.cmdr`, and run `load ext.cmdr` in a
+session or at the top of a script. Move a definition into
+`src/prelude.cmdr` when every session should have it. The build embeds the
+file, and cmdr runs it at startup; an error there stops cmdr with
+`prelude.cmdr:LINE:`. Because definitions are lexical, a later `def tail` does
+not change the prelude's `last`.
+
 ## Adding commands
 
-Add entries to the `commands` table in [src/main.c](src/main.c); they shadow
-the prelude in [src/prelude.c](src/prelude.c). Set `.pipeline` to block
-source, as written inside `{ }`, or `.run` to a `cmdr_fn` from
+Write a command in C only when it cannot be composed. Add it to the
+`commands` table in [src/main.c](src/main.c), where it shadows the primitives
+in [src/primitives.c](src/primitives.c). Set `.run` to a `cmdr_fn` from
 [src/cmdr.h](src/cmdr.h):
 
 ```c
@@ -160,8 +205,6 @@ static int first(const cmdr *repl, size_t argc, const cmdr_value *argv,
 /* In the commands table: */
 {.name = "first", .usage = "first TEXT", .docstring = "Return the first byte",
  .run = first, .text = 1},
-{.name = "shout", .usage = "shout TEXT", .docstring = "Trim and uppercase",
- .pipeline = "trim | upper"},
 ```
 
 `.text = 1` guarantees text arguments. Arguments are borrowed, including the

@@ -8,7 +8,19 @@ set(CMAKE_C_EXTENSIONS OFF)
 # Commands share one callback signature, so most ignore some parameters.
 add_compile_options(-Wall -Wextra -Wpedantic -Wno-unused-parameter)
 
-add_executable(cmdr src/main.c src/cmdr.c src/prelude.c)
+# Embed src/prelude.cmdr as a NUL-terminated array; C11 has no #embed.
+set(CMDR_PRELUDE "${CMAKE_CURRENT_SOURCE_DIR}/src/prelude.cmdr")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMDR_PRELUDE}")
+file(READ "${CMDR_PRELUDE}" CMDR_PRELUDE_HEX HEX)
+string(REGEX REPLACE "(..)" "0x\\1," CMDR_PRELUDE_BYTES "${CMDR_PRELUDE_HEX}")
+file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/prelude.c.tmp"
+     "const char cmdr_prelude_source[] = {${CMDR_PRELUDE_BYTES}0};\n")
+# Copy only on change, so reconfiguring does not force a rebuild.
+configure_file("${CMAKE_CURRENT_BINARY_DIR}/prelude.c.tmp"
+               "${CMAKE_CURRENT_BINARY_DIR}/prelude.c" COPYONLY)
+
+add_executable(cmdr src/main.c src/cmdr.c src/primitives.c
+               "${CMAKE_CURRENT_BINARY_DIR}/prelude.c")
 
 # isfinite() and related helpers may live in libm.
 find_library(CMDR_LIBM m)

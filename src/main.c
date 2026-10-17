@@ -17,19 +17,32 @@ static int help_command(const cmdr *repl, size_t argc, const cmdr_value *argv,
                         cmdr_value *result, char **error)
 {
     if (argc) return cmdr_error(error, "usage: help");
-    /* Active commands, in lookup order, skipping shadowed ones. */
+    /* Tables in lookup order, then definitions oldest first, which reverses
+     * their lookup order. Each def is a layer of one command with a block. */
+    const cmdr **groups = NULL;
+    size_t ngroups = 0;
+    for (const cmdr *group = repl; group; group = group->parent) {
+        groups = cmdr_realloc(groups, ngroups + 1, sizeof(*groups));
+        groups[ngroups++] = group;
+    }
     const cmdr_command **active = NULL;
     size_t count = 0;
     int width = 0;
-    for (const cmdr *group = repl; group; group = group->parent)
-        for (size_t i = 0; i < group->count; ++i) {
-            const cmdr_command *command = &group->commands[i];
-            if (cmdr_find(repl, command->name) != command) continue;
-            active = cmdr_realloc(active, count + 1, sizeof(*active));
-            active[count++] = command;
-            const char *usage = command->usage ? command->usage : command->name;
-            if ((int)strlen(usage) > width) width = (int)strlen(usage);
+    for (size_t pass = 0; pass < 2; ++pass)
+        for (size_t k = 0; k < ngroups; ++k) {
+            const cmdr *group = groups[pass ? ngroups - 1 - k : k];
+            int def = group->count && group->commands[0].block;
+            if (def != (int)pass) continue;
+            for (size_t i = 0; i < group->count; ++i) {
+                const cmdr_command *command = &group->commands[i];
+                if (cmdr_find(repl, command->name) != command) continue; /* Shadowed. */
+                active = cmdr_realloc(active, count + 1, sizeof(*active));
+                active[count++] = command;
+                const char *usage = command->usage ? command->usage : command->name;
+                if ((int)strlen(usage) > width) width = (int)strlen(usage);
+            }
         }
+    free(groups);
     char *text = NULL;
     size_t size = 0;
     FILE *out = open_memstream(&text, &size);
@@ -54,11 +67,32 @@ static int valid_name(const char *name)
     return 1;
 }
 
+/* Help syntax from the block: "NAME A B" for { (a b) ... }, "NAME VALUE" for
+ * { ... }, which takes one piped input. */
+static char *usage_of(const char *name, const char *block)
+{
+    const char *p = block;
+    while (isspace((unsigned char)*p)) ++p;
+    size_t n = strlen(name);
+    char *usage = cmdr_realloc(NULL, n + strlen(p) + sizeof(" VALUE"), 1), *u = usage + n;
+    memcpy(usage, name, n);
+    if (*p != '(') u += sprintf(u, " VALUE");
+    else
+        for (++p; *p && *p != ')'; ++p)
+            if (!isspace((unsigned char)*p)) {
+                if (p[-1] == '(' || isspace((unsigned char)p[-1])) *u++ = ' ';
+                *u++ = (char)toupper((unsigned char)*p);
+            }
+    *u = '\0';
+    return usage;
+}
+
 static int def_command(const cmdr *repl, size_t argc, const cmdr_value *argv,
                        cmdr_value *result, char **error)
 {
-    if (argc != 2 || argv[0].kind != CMDR_TEXT || argv[1].kind != CMDR_BLOCK)
-        return cmdr_error(error, "usage: def NAME BLOCK");
+    if (argc < 2 || argc > 3 || argv[0].kind != CMDR_TEXT || argv[1].kind != CMDR_BLOCK
+        || (argc == 3 && argv[2].kind != CMDR_TEXT))
+        return cmdr_error(error, "usage: def NAME BLOCK [DOC]");
     const char *name = argv[0].text, *body = argv[1].text;
     if (!valid_name(name)) return cmdr_error(error, "def: invalid name '%s'", name);
     if (!strcmp(name, "def")) return cmdr_error(error, "def: cannot redefine def");
@@ -67,19 +101,24 @@ static int def_command(const cmdr *repl, size_t argc, const cmdr_value *argv,
     const char *p = body;
     while (isspace((unsigned char)*p)) ++p;
     if (!*p) return cmdr_error(error, "def %s: empty block", name);
-    /* One help row per command: collapse whitespace runs in the body. */
+    /* One help row per command: DOC, or the body with whitespace runs collapsed. */
     char *docstring = cmdr_realloc(NULL, strlen(p) + sizeof("def: "), 1), *d = docstring;
     d += sprintf(d, "def: ");
     for (; *p; ++p)
         if (!isspace((unsigned char)*p)) *d++ = *p;
         else if (p[1] && !isspace((unsigned char)p[1])) *d++ = ' ';
     *d = '\0';
+    if (argc == 3) {
+        free(docstring);
+        docstring = cmdr_strndup(argv[2].text, strlen(argv[2].text));
+    }
     struct { cmdr layer; cmdr_command command; cmdr_value block; } *node
         = cmdr_realloc(NULL, 1, sizeof(*node));
     if (cmdr_clone(&argv[1], &node->block, error)) { free(node); free(docstring); return 1; }
     /* Lexical scope: the body sees commands as they were at definition, so
      * naming itself calls the command it shadows. */
     node->command = (cmdr_command){.name = cmdr_strndup(name, strlen(name)),
+                                   .usage = usage_of(name, body),
                                    .docstring = docstring,
                                    .block = &node->block,
                                    .scope = session.parent};
@@ -88,13 +127,30 @@ static int def_command(const cmdr *repl, size_t argc, const cmdr_value *argv,
     return 0;
 }
 
+static int run(FILE *in, const char *path);
+
+/* Run a script's lines in this session, so its definitions remain. */
+static int load_command(const cmdr *repl, size_t argc, const cmdr_value *argv,
+                        cmdr_value *result, char **error)
+{
+    if (argc != 1) return cmdr_error(error, "usage: load PATH");
+    FILE *file = fopen(argv[0].text, "r");
+    if (!file) return cmdr_error(error, "load %s: %s", argv[0].text, strerror(errno));
+    int status = run(file, argv[0].text);
+    fclose(file);
+    /* run reported the failing line. */
+    return status ? cmdr_error(error, "load %s failed", argv[0].text) : 0;
+}
+
 static const cmdr_command commands[] = {
     {.name = "help", .usage = "help", .docstring = "Show commands", .run = help_command},
-    {.name = "def", .usage = "def NAME BLOCK",
+    {.name = "def", .usage = "def NAME BLOCK [DOC]",
      .docstring = "Define a command; it may shadow others", .run = def_command},
-    /* Add application commands here; they take precedence over the prelude. */
+    {.name = "load", .usage = "load PATH", .docstring = "Run a script in this session",
+     .run = load_command, .text = 1},
+    /* Add application commands here; they take precedence over the primitives. */
 };
-static const cmdr application = {commands, sizeof(commands) / sizeof(commands[0]), &cmdr_prelude};
+static const cmdr application = {commands, sizeof(commands) / sizeof(commands[0]), &cmdr_primitives};
 static cmdr session = {.parent = &application};
 
 /* where, if non-NULL, prefixes errors with a source location. */
@@ -183,8 +239,17 @@ static int run(FILE *in, const char *path)
     return status;
 }
 
+/* src/prelude.cmdr, embedded by the build. */
+extern const char cmdr_prelude_source[];
+
 int main(int argc, char **argv)
 {
+    size_t n = strlen(cmdr_prelude_source);
+    FILE *prelude = n ? fmemopen((void *)cmdr_prelude_source, n, "r") : NULL;
+    if (n && !prelude) { fprintf(stderr, "cmdr: prelude: %s\n", strerror(errno)); return 1; }
+    int failed = prelude && run(prelude, "prelude.cmdr");
+    if (prelude) fclose(prelude);
+    if (failed) return 1;
     if (argc == 3 && !strcmp(argv[1], "-c")) return evaluate(argv[2], NULL) ? 1 : 0;
     if (argc == 1) return run(stdin, NULL);
     if (argc != 2 || argv[1][0] == '-') {

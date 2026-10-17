@@ -683,4 +683,4 @@ static const cmdr_command commands[] = {
     TEXT("run-in", "run-in TEXT PROGRAM [ARG ...]", "Run with TEXT on stdin, returning stdout", run_in_command),
 };
 
-const cmdr cmdr_prelude = {commands, sizeof(commands) / sizeof(commands[0]), NULL};
+const cmdr cmdr_primitives = {commands, sizeof(commands) / sizeof(commands[0]), NULL};

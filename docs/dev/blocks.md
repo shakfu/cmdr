@@ -12,6 +12,8 @@ under ASan and UBSan.
   names its input must declare it.
 - Block arity is exact. `{ ... }` takes one input, received only by pipe.
   `{ () ... }` takes none. `{ (a b) ... }` takes two. See [Piping](#piping).
+- Declared parameters appear only where named, and each must be used. Only
+  `{ ... }` pipes its input into its first stage.
 - `$name` resolves lexically, through nested blocks, innermost first. A block
   captures the names visible where it is written.
 - `def NAME BLOCK` defines a command.
@@ -87,9 +89,9 @@ needs input, without input; E3 contains a typo in a reference.
 
 ## Piping
 
-A stage receives the current value as its first argument unless the stage
-names that value. Naming it anywhere in the stage, including as a fallback,
-suppresses the pipe:
+The first rule: a stage received the current value as its first argument
+unless the stage named that value. Naming it anywhere in the stage, including
+as a fallback, suppressed the pipe:
 
 ```text
 cmdr> list 1 x 3 | each { (n) try { add 1 } $n } | join ,
@@ -106,9 +108,32 @@ Exact block arity turns this into an error before `try` runs:
 `try: block takes 1 argument, got 0`. A body that takes no input says so:
 `try { () div 1 0 } x`.
 
-Rejected: a declared parameter is piped only where named. This removes the
-exception in the piping rule, but `try` still receives two arguments here, so
-the result stays silent.
+The rule had a second silent case. A block could not start from anything but
+its input, because its first stage always received it:
+
+```text
+cmdr> text ERROR | try { (w) read app.log | contains $w } no
+no
+```
+
+`read` received `ERROR` and `app.log`, failed with a usage error, and `try`
+returned the fallback.
+
+Adopted: a declared parameter appears only where named. Only `{ ... }` pipes
+its input into its first stage. This removes the exception from the piping
+rule: each stage receives the previous result first. The example above
+returns the log text.
+
+A declared parameter that is never used is an error, because it would never
+receive its argument. Otherwise `text a | try { (s) upper } no` would return
+`no`: `upper` runs without input, fails, and `try` hides the failure. Now it
+fails with `parameter $s is never used`, before any stage runs.
+
+Costs:
+- A declared block whose first stage uses its input must name it:
+  `{ (xs v) keep $xs { ... } }`. Nine test sources changed.
+- A block cannot ignore an argument it receives.
+- A value stage is always piped onward: `$s | text $s` gives `a a`, not `a`.
 
 ## Compilation
 
@@ -133,6 +158,9 @@ items through `each`, measured:
 | `{ (s) text $s ! }` | 0.023 s | 0.010 s |
 | 8 nested blocks | 0.705 s | 0.074 s |
 
-A `.pipeline` entry in a static command table still compiles once per call.
-Its `cmdr_command` is `const`, so it cannot hold the compiled code. No table
-uses `.pipeline`.
+Composed commands are `def`s in `src/prelude.cmdr`, which the build embeds
+and cmdr runs at startup. This replaced `.pipeline` entries in C tables over
+keeping both. A `const` table entry could not hold its compiled code, so it
+compiled once per call. With `.scope` unset, it also resolved names in the
+caller's scope, so a user's `def tail` could change a prelude command. A
+`def` has neither problem.
