@@ -8,20 +8,27 @@
  * keep, not, and try treat only this status as false. */
 #define CMDR_MISMATCH 2
 
-typedef enum { CMDR_NONE, CMDR_TEXT, CMDR_LIST } cmdr_kind;
+typedef enum { CMDR_NONE, CMDR_TEXT, CMDR_LIST, CMDR_BLOCK } cmdr_kind;
 
-/* An owned value: text without NUL bytes, or a list of values. {0} is none. */
+typedef struct cmdr_code cmdr_code;
+
+/* An owned value: text without NUL bytes, a list of values, or a block. A
+ * block's text is its source, "(a b) pipeline" or "pipeline"; its items are
+ * the values it captured; code is its compiled form, shared by copies. {0} is
+ * none. */
 typedef struct cmdr_value {
     cmdr_kind kind;
     char *text;
     struct cmdr_value *items;
     size_t count;
+    cmdr_code *code;
 } cmdr_value;
 
 typedef struct cmdr cmdr;
 
-/* argv is borrowed; a piped value comes first. Set *result and return 0, or
- * return nonzero through cmdr_error. repl resolves names the command runs. */
+/* argv is borrowed, including blocks' captured values; clone what you keep. A
+ * piped value comes first. Set *result and return 0, or return nonzero
+ * through cmdr_error. repl resolves names the command runs. */
 typedef int (*cmdr_fn)(const cmdr *repl, size_t argc, const cmdr_value *argv,
                        cmdr_value *result, char **error);
 
@@ -29,9 +36,10 @@ typedef struct {
     const char *name;
     const char *usage;     /* Syntax shown by help; NULL shows the name. */
     const char *docstring; /* Description shown by help. */
-    cmdr_fn run;           /* Set run or pipeline. */
+    cmdr_fn run;           /* Set run, pipeline, or block. */
     int text;              /* run accepts only text arguments. */
-    const char *pipeline;  /* Body taking $1..$N. */
+    const char *pipeline;  /* Block source, as written inside { }; compiled per call. */
+    const cmdr_value *block; /* A compiled block, as def makes; set instead of pipeline. */
     const cmdr *scope;     /* Resolve the body here; NULL uses the caller's. */
 } cmdr_command;
 
@@ -63,12 +71,12 @@ int cmdr_error(char **error, const char *format, ...);
 const cmdr_command *cmdr_find(const cmdr *repl, const char *name);
 int cmdr_call(const cmdr *repl, const char *name, size_t argc,
               const cmdr_value *argv, cmdr_value *result, char **error);
-/* Evaluate line with argv bound to $1..$N; argv[0] feeds the first stage.
- * Requires exactly N arguments, or at most one without references. */
-int cmdr_eval(const cmdr *repl, const char *line, size_t argc,
-              const cmdr_value *argv, cmdr_value *result, char **error);
-/* Check syntax, command names, and arity without running. */
-#define CMDR_ANY_ARITY ((size_t)-1)
-int cmdr_check(const cmdr *repl, const char *line, size_t argc, char **error);
+/* Evaluate a line, which has no input. */
+int cmdr_eval(const cmdr *repl, const char *line, cmdr_value *result, char **error);
+/* Call a block with argv bound to its parameters. */
+int cmdr_run(const cmdr *repl, const cmdr_value *block, size_t argc,
+             const cmdr_value *argv, cmdr_value *result, char **error);
+/* Fail unless the block takes exactly argc arguments. */
+int cmdr_block_arity(const cmdr_value *block, size_t argc, char **error);
 
 #endif

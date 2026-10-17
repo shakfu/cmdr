@@ -6,9 +6,10 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* Recursion limits: composed commands nest at most MAX_CALL_DEPTH deep, and
- * cmdr_clone rejects values nested more than MAX_VALUE_DEPTH deep. Every
- * stage clones its input or builds flat lists, so value depth stays bounded. */
+/* Recursion limits: composed commands and block literals nest at most
+ * MAX_CALL_DEPTH deep, and cmdr_clone rejects values nested more than
+ * MAX_VALUE_DEPTH deep. Every stage clones its input or builds flat lists, so
+ * value depth stays bounded. */
 enum { MAX_CALL_DEPTH = 128, MAX_VALUE_DEPTH = 1024 };
 
 void *cmdr_realloc(void *p, size_t count, size_t size)
@@ -38,8 +39,12 @@ void cmdr_push(cmdr_value *list, cmdr_value item)
     list->items[list->count++] = item;
 }
 
+static cmdr_code *retain(cmdr_code *code);
+static void release_code(cmdr_code *code);
+
 void cmdr_free(cmdr_value *value)
 {
+    if (value->code) release_code(value->code);
     for (size_t i = 0; i < value->count; ++i) cmdr_free(&value->items[i]);
     free(value->items);
     free(value->text);
@@ -48,9 +53,9 @@ void cmdr_free(cmdr_value *value)
 
 static int clone(const cmdr_value *value, cmdr_value *out, unsigned depth, char **error)
 {
-    *out = (cmdr_value){.kind = value->kind};
+    *out = (cmdr_value){.kind = value->kind, .code = value->code ? retain(value->code) : NULL};
     if (depth > MAX_VALUE_DEPTH) return cmdr_error(error, "value is nested too deeply");
-    if (value->kind == CMDR_TEXT) out->text = cmdr_strndup(value->text, strlen(value->text));
+    if (value->text) out->text = cmdr_strndup(value->text, strlen(value->text));
     for (size_t i = 0; i < value->count; ++i) {
         cmdr_value item;
         if (clone(&value->items[i], &item, depth + 1, error)) {
@@ -70,7 +75,8 @@ int cmdr_clone(const cmdr_value *value, cmdr_value *out, char **error)
 void cmdr_render(const cmdr_value *value, FILE *out)
 {
     if (value->kind == CMDR_TEXT) fputs(value->text, out);
-    for (size_t i = 0; i < value->count; ++i) {
+    if (value->kind == CMDR_BLOCK) fprintf(out, "{%s}", value->text);
+    for (size_t i = 0; value->kind == CMDR_LIST && i < value->count; ++i) {
         cmdr_render(&value->items[i], out);
         fputc('\n', out);
     }
@@ -91,8 +97,11 @@ int cmdr_error(char **error, const char *format, ...)
 }
 
 typedef struct {
-    char *text;
-    size_t ref; /* N for an unquoted $N, else 0. */
+    char *text;      /* Literal text, a $name, or block source. */
+    int ref;         /* An unquoted $name; compile sets slot. */
+    size_t slot;     /* Index of the name in the environment. */
+    int block;       /* text is the source of a { ... } block. */
+    cmdr_code *code; /* The block, compiled. */
 } word;
 
 typedef struct {
@@ -103,42 +112,86 @@ typedef struct {
 typedef struct {
     stage *stages;
     size_t count;
-    size_t highest; /* Highest $N referenced. */
 } program;
+
+/* A compiled block, shared by every value made from it. */
+struct cmdr_code {
+    size_t refs;
+    size_t params;  /* Declared parameters. */
+    int declared;   /* The source starts with "(...)", possibly empty. */
+    program body;
+};
+
+static void dispose(program *pg);
+
+static cmdr_code *retain(cmdr_code *code)
+{
+    ++code->refs;
+    return code;
+}
+
+static void release_code(cmdr_code *code)
+{
+    if (--code->refs) return;
+    dispose(&code->body);
+    free(code);
+}
 
 static void dispose(program *pg)
 {
     for (size_t i = 0; i < pg->count; ++i) {
-        for (size_t j = 0; j < pg->stages[i].count; ++j) free(pg->stages[i].words[j].text);
+        for (size_t j = 0; j < pg->stages[i].count; ++j) {
+            free(pg->stages[i].words[j].text);
+            if (pg->stages[i].words[j].code) release_code(pg->stages[i].words[j].code);
+        }
         free(pg->stages[i].words);
     }
     free(pg->stages);
 }
 
-/* Return N for the digits of a valid $N reference in [p, end), else 0. */
-static size_t reference(const char *p, const char *end)
+/* Length of the name at p: a letter, then letters, digits, '_' or '-'. */
+static size_t identifier(const char *p)
 {
-    if (p == end || *p == '0') return 0;
     size_t n = 0;
-    for (; p < end; ++p) {
-        if (*p < '0' || *p > '9' || n > (SIZE_MAX - (size_t)(*p - '0')) / 10) return 0;
-        n = n * 10 + (size_t)(*p - '0');
-    }
+    if (isalpha((unsigned char)*p))
+        while (isalnum((unsigned char)p[n]) || p[n] == '_' || p[n] == '-') ++n;
     return n;
 }
 
-/* Read one word at *p: quotes group, backslash escapes, unquoted $N refers. */
+/* Read a block at *p. Braces nest; quotes and escapes hide them as in lex. */
+static int lex_block(const char **p, word *out, char **error)
+{
+    const char *s = *p + 1;
+    char quote = 0;
+    size_t depth = 1;
+    for (; *s; ++s) {
+        if (*s == '\\' && quote != '\'') { if (!*++s) break; }
+        else if (quote) { if (*s == quote) quote = 0; }
+        else if (*s == '\'' || *s == '"') quote = *s;
+        else if (*s == '{' && ++depth > MAX_CALL_DEPTH) return cmdr_error(error, "blocks nested too deeply");
+        else if (*s == '}' && !--depth) break;
+    }
+    if (!*s) return cmdr_error(error, "unclosed '{'");
+    if (s[1] && !isspace((unsigned char)s[1]) && s[1] != '|')
+        return cmdr_error(error, "expected a space after '}'");
+    *out = (word){.text = cmdr_strndup(*p + 1, (size_t)(s - *p - 1)), .block = 1};
+    *p = s + 1;
+    return 0;
+}
+
+/* Read one word at *p: quotes group, backslash escapes, unquoted $name
+ * refers, and { opens a block. */
 static int lex(const char **p, word *out, char **error)
 {
     const char *s = *p;
+    if (*s == '{') return lex_block(p, out, error);
     if (*s == '$') {
         while (*s && !isspace((unsigned char)*s) && *s != '|') ++s;
-        *out = (word){cmdr_strndup(*p, (size_t)(s - *p)), reference(*p + 1, s)};
-        if (!out->ref) {
-            free(out->text);
-            return cmdr_error(error, "invalid reference '%.*s': only $1..$N are supported; "
-                              "quote '$' for literal text", (int)(s - *p), *p);
-        }
+        size_t n = (size_t)(s - *p - 1);
+        if (!n || identifier(*p + 1) != n)
+            return cmdr_error(error, "invalid reference '%.*s': use $name, declared as "
+                              "{ (name) ... }; quote '$' for literal text", (int)(s - *p), *p);
+        *out = (word){.text = cmdr_strndup(*p + 1, n), .ref = 1};
         *p = s;
         return 0;
     }
@@ -164,7 +217,7 @@ static int lex(const char **p, word *out, char **error)
     if (quote) { free(text); return cmdr_error(error, "unclosed quote"); }
     if (!text) text = cmdr_realloc(NULL, 1, 1);
     text[used] = '\0';
-    *out = (word){text, 0};
+    *out = (word){.text = text};
     *p = s;
     return 0;
 }
@@ -216,19 +269,71 @@ static int value_stage(const stage *s)
     return s->count == 1 && s->words[0].ref;
 }
 
-/* Parse line and check command names, and arity for argc arguments. name
- * labels a pipeline command's errors; NULL otherwise. */
-static int prepare(const cmdr *repl, const char *line, const char *name,
-                   size_t argc, program *pg, char **error)
+/* Names visible to a body, innermost last; a name's index is its slot. */
+typedef struct {
+    char **names;
+    size_t count;
+} scope;
+
+static int compile_body(const cmdr *repl, const char *line, scope *sc, program *pg,
+                        char **error);
+
+/* Compile block source: "(a b)" parameters, appended to sc while the body
+ * compiles, then a pipeline. */
+static int compile_block(const cmdr *repl, const char *text, scope *sc, cmdr_code **out,
+                         char **error)
+{
+    cmdr_code *code = cmdr_realloc(NULL, 1, sizeof(*code));
+    *code = (cmdr_code){.refs = 1};
+    size_t outer = sc->count;
+    const char *p = text;
+    int status = 0;
+    while (isspace((unsigned char)*p)) ++p;
+    if (*p == '(') {
+        code->declared = 1;
+        for (++p;;) {
+            while (isspace((unsigned char)*p)) ++p;
+            if (*p == ')') { ++p; break; }
+            size_t n = identifier(p);
+            if (!n || (p[n] && !isspace((unsigned char)p[n]) && p[n] != ')')) {
+                status = cmdr_error(error, "invalid parameter list in '{%s}'", text);
+                break;
+            }
+            sc->names = cmdr_realloc(sc->names, sc->count + 1, sizeof(*sc->names));
+            sc->names[sc->count++] = cmdr_strndup(p, n);
+            ++code->params;
+            p += n;
+        }
+    }
+    if (!status) status = compile_body(repl, p, sc, &code->body, error);
+    while (sc->count > outer) free(sc->names[--sc->count]);
+    if (status) free(code);
+    else *out = code;
+    return status;
+}
+
+/* Parse line, resolve references to slots, compile nested blocks, and check
+ * command names, so errors precede any effects. */
+static int compile_body(const cmdr *repl, const char *line, scope *sc, program *pg,
+                        char **error)
 {
     if (parse(line, pg, error)) return 1;
     for (size_t i = 0; i < pg->count; ++i) {
         stage *s = &pg->stages[i];
-        for (size_t j = 0; j < s->count; ++j)
-            if (s->words[j].ref > pg->highest) pg->highest = s->words[j].ref;
+        for (size_t j = 0; j < s->count; ++j) {
+            word *w = &s->words[j];
+            size_t k = sc->count;
+            while (w->ref && k && strcmp(sc->names[k - 1], w->text)) --k;
+            if (w->ref && !k) {
+                cmdr_error(error, "invalid reference '$%s': no enclosing block declares it", w->text);
+                goto fail;
+            }
+            if (w->ref) w->slot = k - 1;
+            if (w->block && compile_block(repl, w->text, sc, &w->code, error)) goto fail;
+        }
         if (!s->count || value_stage(s)) continue;
-        if (s->words[0].ref) {
-            cmdr_error(error, "command name cannot be a reference: %s", s->words[0].text);
+        if (s->words[0].ref || s->words[0].block) {
+            cmdr_error(error, "command name cannot be a %s", s->words[0].ref ? "reference" : "block");
             goto fail;
         }
         if (!cmdr_find(repl, s->words[0].text)) {
@@ -236,55 +341,37 @@ static int prepare(const cmdr *repl, const char *line, const char *name,
             goto fail;
         }
     }
-    size_t n = pg->highest;
-    if (argc == CMDR_ANY_ARITY || (n ? argc == n : argc <= 1)) return 0;
-    if (name && !n)
-        cmdr_error(error, "pipeline command '%s' accepts at most one value", name);
-    else if (name)
-        cmdr_error(error, "command '%s' expects %zu argument%s, got %zu",
-                   name, n, n == 1 ? "" : "s", argc);
-    else if (!n)
-        cmdr_error(error, "pipeline without references accepts at most one value "
-                   "(%zu given)", argc);
-    else
-        cmdr_error(error, "reference $%zu has no argument (%zu given)", n, argc);
+    return 0;
 fail:
     dispose(pg);
     return 1;
 }
 
-int cmdr_check(const cmdr *repl, const char *line, size_t argc, char **error)
-{
-    program pg;
-    if (prepare(repl, line, NULL, argc, &pg, error)) return 1;
-    dispose(&pg);
-    return 0;
-}
-
-static int evaluate(const cmdr *repl, const char *line, const char *name,
-                    size_t argc, const cmdr_value *params, cmdr_value *result,
-                    char **error)
+/* Run pg with input, which may be NULL, and env, the values of its scope's
+ * names. Blocks it makes capture env. name labels a defined command's errors;
+ * NULL otherwise. */
+static int evaluate(const cmdr *repl, const program *pg, const char *name,
+                    const cmdr_value *input, const cmdr_value *env, size_t envc,
+                    cmdr_value *result, char **error)
 {
     *result = (cmdr_value){0};
-    program pg;
-    if (prepare(repl, line, name, argc, &pg, error)) return 1;
-    /* The current value starts as $1. A stage that references the current
-     * value's $N receives it there only; other stages receive it first. */
-    int have = argc && !value_stage(&pg.stages[0]);
-    size_t current = (size_t)have;
-    int status = have ? cmdr_clone(&params[0], result, error) : 0;
-    for (size_t i = 0; !status && i < pg.count && pg.stages[i].count; ++i) {
-        stage *s = &pg.stages[i];
+    /* The current value starts as the input. A stage that names the current
+     * value receives it there only; other stages receive it first. */
+    int have = input && !value_stage(&pg->stages[0]);
+    const cmdr_value *current = have ? input : NULL;
+    int status = have ? cmdr_clone(input, result, error) : 0;
+    for (size_t i = 0; !status && i < pg->count && pg->stages[i].count; ++i) {
+        const stage *s = &pg->stages[i];
         if (value_stage(s)) {
-            current = s->words[0].ref;
+            current = &env[s->words[0].slot];
             cmdr_free(result);
-            status = cmdr_clone(&params[current - 1], result, error);
+            status = cmdr_clone(current, result, error);
             have = 1;
             continue;
         }
         int piped = have;
         for (size_t j = 1; j < s->count; ++j)
-            if (current && s->words[j].ref == current) piped = 0;
+            if (current && s->words[j].ref && &env[s->words[j].slot] == current) piped = 0;
         if (piped && result->kind == CMDR_NONE) {
             status = cmdr_error(error, "command '%s' received no pipeline value", s->words[0].text);
             break;
@@ -294,31 +381,101 @@ static int evaluate(const cmdr *repl, const char *line, const char *name,
         cmdr_value next;
         if (piped) argv[at++] = *result;
         for (size_t j = 1; j < s->count; ++j) {
-            word *w = &s->words[j];
-            argv[at++] = w->ref ? params[w->ref - 1] : (cmdr_value){.kind = CMDR_TEXT, .text = w->text};
+            const word *w = &s->words[j];
+            /* A block borrows env as its captured values; cmdr_clone copies them. */
+            argv[at++] = w->ref ? env[w->slot] : w->block
+                ? (cmdr_value){.kind = CMDR_BLOCK, .text = w->text, .code = w->code,
+                               .items = (cmdr_value *)env, .count = envc}
+                : (cmdr_value){.kind = CMDR_TEXT, .text = w->text};
         }
         status = cmdr_call(repl, s->words[0].text, n, argv, &next, error);
         free(argv);
         cmdr_free(result);
         *result = next;
         have = 1;
-        current = 0;
-        if (status && name) { /* Name the pipeline command, giving a call chain. */
+        current = NULL;
+        if (status && name) { /* Name the defined command, giving a call chain. */
             char *inner = *error;
             cmdr_error(error, "%s: %s", name, inner ? inner : "command failed");
             free(inner);
         }
     }
-    dispose(&pg);
     if (status) cmdr_free(result);
     return status;
 }
 
-int cmdr_eval(const cmdr *repl, const char *line, size_t argc,
-              const cmdr_value *argv, cmdr_value *result, char **error)
+int cmdr_eval(const cmdr *repl, const char *line, cmdr_value *result, char **error)
 {
     *error = NULL;
-    return evaluate(repl, line, NULL, argc, argv, result, error);
+    *result = (cmdr_value){0};
+    scope sc = {0};
+    program pg;
+    int failed = compile_body(repl, line, &sc, &pg, error);
+    free(sc.names); /* compile_block grew it. */
+    if (failed) return 1;
+    int status = evaluate(repl, &pg, NULL, NULL, NULL, 0, result, error);
+    dispose(&pg);
+    return status;
+}
+
+/* A block without a parameter list takes exactly its piped input. */
+static size_t arity(const cmdr_code *code)
+{
+    return code->declared ? code->params : 1;
+}
+
+static int arity_error(const char *name, size_t want, size_t argc, char **error)
+{
+    const char *s = want == 1 ? "" : "s";
+    if (name) return cmdr_error(error, "command '%s' expects %zu argument%s, got %zu", name, want, s, argc);
+    return cmdr_error(error, "block takes %zu argument%s, got %zu", want, s, argc);
+}
+
+int cmdr_block_arity(const cmdr_value *block, size_t argc, char **error)
+{
+    size_t want = arity(block->code);
+    return want == argc ? 0 : arity_error(NULL, want, argc, error);
+}
+
+/* Bind argv to the block's parameters, after its captured values. */
+static int call_block(const cmdr *repl, const cmdr_value *block, const char *name,
+                      size_t argc, const cmdr_value *argv, cmdr_value *result, char **error)
+{
+    *result = (cmdr_value){0};
+    const cmdr_code *code = block->code;
+    if (arity(code) != argc) return arity_error(name, arity(code), argc, error);
+    const cmdr_value *env = block->items, *input = argc ? argv : NULL;
+    cmdr_value *bound = NULL;
+    if (code->params) {
+        /* memcpy needs a non-NULL pointer even for zero bytes. */
+        bound = cmdr_realloc(NULL, block->count + argc, sizeof(*bound));
+        if (block->count) memcpy(bound, block->items, block->count * sizeof(*bound));
+        memcpy(bound + block->count, argv, argc * sizeof(*bound));
+        env = bound;
+        input = &bound[block->count]; /* The first parameter, so naming it matches. */
+    }
+    int status = evaluate(repl, &code->body, name, input, env, block->count + code->params,
+                          result, error);
+    free(bound);
+    return status;
+}
+
+int cmdr_run(const cmdr *repl, const cmdr_value *block, size_t argc,
+             const cmdr_value *argv, cmdr_value *result, char **error)
+{
+    *error = NULL;
+    return call_block(repl, block, NULL, argc, argv, result, error);
+}
+
+/* Compile a table command's .pipeline, which has no enclosing names. */
+static int pipeline_block(const cmdr *repl, const char *text, cmdr_value *block, char **error)
+{
+    scope sc = {0};
+    *block = (cmdr_value){.kind = CMDR_BLOCK, .text = cmdr_strndup(text, strlen(text))};
+    int status = compile_block(repl, text, &sc, &block->code, error);
+    free(sc.names);
+    if (status) cmdr_free(block);
+    return status;
 }
 
 int cmdr_call(const cmdr *repl, const char *name, size_t argc,
@@ -335,12 +492,15 @@ int cmdr_call(const cmdr *repl, const char *name, size_t argc,
     if (depth >= MAX_CALL_DEPTH)
         return cmdr_error(error, "command '%s' is nested too deeply "
                           "(possible cycle in composed commands)", name);
+    const cmdr *in = command->scope ? command->scope : repl;
+    cmdr_value compiled = {0};
+    if (command->pipeline && pipeline_block(in, command->pipeline, &compiled, error)) return 1;
     ++depth;
-    int status = command->pipeline
-        ? evaluate(command->scope ? command->scope : repl, command->pipeline, name,
-                   argc, argv, result, error)
-        : command->run(repl, argc, argv, result, error);
+    int status = command->run ? command->run(repl, argc, argv, result, error)
+        : call_block(in, command->block ? command->block : &compiled, name, argc, argv,
+                     result, error);
     --depth;
+    cmdr_free(&compiled);
     if (status) cmdr_free(result);
     return status;
 }

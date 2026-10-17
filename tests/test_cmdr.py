@@ -150,36 +150,48 @@ class Commands(unittest.TestCase):
 
     def test_recovery(self):
         cases = [
-            ("try 'div 1 0' fallback | upper", 'FALLBACK\n'),
-            ("try 'text success' fallback", 'success\n'),
-            ("text hello | try upper fallback", 'HELLO\n'),
-            ("text x | try 'equals y' no", 'no\n'),
-            ("list a b | try 'map upper' fallback | join ,", 'A,B\n'),
-            ("list hello world | map try upper fallback | join ,", 'HELLO,WORLD\n'),
-            ("try 'list a' '' | count", '1\n'),
+            ("try { () div 1 0 } fallback | upper", 'FALLBACK\n'),
+            ("try { () text success } fallback", 'success\n'),
+            ("text hello | try { upper } fallback", 'HELLO\n'),
+            ("text x | try { equals y } no", 'no\n'),
+            ("list a b | try { map upper } fallback | join ,", 'A,B\n'),
+            ("list hello world | each { try { upper } fallback } | join ,", 'HELLO,WORLD\n'),
+            ("try { () list a } '' | count", '1\n'),
+            # A fallback block is returned as a value, not called.
+            ("text x | try { equals y } { upper }", '{ upper }\n'),
         ]
         for source, expected in cases:
             with self.subTest(source=source):
                 self.run_line(source, expected)
         # Syntax, names, and arity are checked, not recovered.
         errors = [
-            ("try unknown x", 'try: unknown command: unknown'),
-            ("try 'text x |' y", "try: expected a command after '|'"),
-            ("text x | try 'text $2' ok", 'try: reference $2 has no argument'),
-            ("list a | map try unknown x", 'unknown command: unknown'),
+            ("try { () unknown } x", 'unknown command: unknown'),
+            ("try { () text x | } y", "expected a command after '|'"),
+            ("text x | try { () text x } ok", 'try: block takes 0 arguments, got 1'),
+            ("try { text x } ok", 'try: block takes 1 argument, got 0'),
+            # Naming the item as the fallback stops it being piped; arity
+            # reports the missing input instead of returning the fallback.
+            ("list 1 x | each { (n) try { add 1 } $n }", 'each item 1: try: block takes 1 argument, got 0'),
+            ("list a | each { try { unknown } x }", 'unknown command: unknown'),
+            ("text x | try upper y", 'try: expected a block'),
         ]
         for source, error in errors:
             with self.subTest(source=source):
                 self.run_line(source, error=error)
+        self.run_line("list 1 x 3 | each { (n) try $n { add 1 } $n } | join ,", '2,x,4\n')
         with tempfile.TemporaryDirectory() as tmp:
             # A failed stage stops the pipeline before later effects.
             path = Path(tmp) / 'must-not-exist'
             self.run_line(f"run false | write {quote(path)}", error='status 1')
             self.assertFalse(path.exists())
+            # Block errors are found before the first stage runs.
+            self.run_line(f"text x | write {quote(path)} | each {{ (s) text $t }}", error="'$t'")
+            self.assertFalse(path.exists())
             existing = Path(tmp) / 'exists'
             existing.write_text('a\nb')
             missing = Path(tmp) / 'missing'
-            self.run_line(f'list {quote(existing)} {quote(missing)} | map try read "" | map length | join ,', '3,0\n')
+            self.run_line(f'list {quote(existing)} {quote(missing)} | each {{ try {{ read }} "" }} '
+                          '| map length | join ,', '3,0\n')
 
     def test_failures(self):
         cases = [
@@ -209,22 +221,27 @@ class Commands(unittest.TestCase):
 
     def test_references(self):
         cases = [
-            ("text x | try 'text pre $1' no", 'pre x\n'),
-            ("text x | try 'text $1 $1' no", 'x x\n'),
-            ("list a b | map try 'text [ $1 ]' no | join ,", '[ a ],[ b ]\n'),
+            ("text x | try { (s) text pre $s } no", 'pre x\n'),
+            ("text x | try { (s) text $s $s } no", 'x x\n'),
+            ("list a b | each { (s) text [ $s ] } | join ,", '[ a ],[ b ]\n'),
+            ("list a | each { (item-2 x_y) text $item-2 $x_y } b", 'a b\n'),
             ("text a$1 \\$1 '$1' \"$2\" _", 'a$1 $1 $1 $2 _\n'),
         ]
         for source, expected in cases:
             with self.subTest(source=source):
                 self.run_line(source, expected)
         errors = [
-            ('text $1', 'reference $1 has no argument'),
-            ('text $name', "invalid reference '$name'"),
+            ('text $x', "invalid reference '$x': no enclosing block declares it"),
+            ('text $1', "invalid reference '$1'"),
             ('text $_', "invalid reference '$_'"),
             ('text $1x', "invalid reference '$1x'"),
-            ('text $0', "invalid reference '$0'"),
             ('text $', "invalid reference '$'"),
-            ('$1 x', 'command name cannot be a reference'),
+            # A name is visible only inside the block that declares it.
+            ('list a | each { (s) text $s } | text $s', "invalid reference '$s'"),
+            ('list a | each { (s) $s x }', 'command name cannot be a reference'),
+            ('{ upper } x', 'command name cannot be a block'),
+            ('list a | each { (1x) upper }', 'invalid parameter list'),
+            ('list a | each { (s }', 'invalid parameter list'),
         ]
         for source, error in errors:
             with self.subTest(source=source):
@@ -232,42 +249,54 @@ class Commands(unittest.TestCase):
 
     def test_combinators_and_predicates(self):
         cases = [
-            ("list a bb '' | keep nonempty | join ,", 'a,bb\n'),
-            ("list a bb c | keep 'contains b' | join ,", 'bb\n'),
-            ("list a b | keep 'not \"equals a\"' | join ,", 'b\n'),
-            ("list a b c | keep 'not \"equals $2\" $2' b | join ,", 'a,c\n'),
-            ("list a b c | keep 'equals $2' b | join ,", 'b\n'),
-            ("list | keep nonempty | count", '0\n'),
+            ("list a bb '' | keep { nonempty } | join ,", 'a,bb\n'),
+            ("list a bb c | keep { contains b } | join ,", 'bb\n'),
+            ("list a b | keep { not { equals a } } | join ,", 'b\n'),
+            ("list a b c | keep { (s v) not { equals $v } } b | join ,", 'a,c\n'),
+            ("list a b c | keep { (s v) equals $v } b | join ,", 'b\n'),
+            ("list | keep { nonempty } | count", '0\n'),
             # keep preserves the input representation, like filter.
-            ('text "x\ny\n" | keep "equals y"', 'y\n'),
-            ('text "x\ny\n" | keep "equals y" | length', '2\n'),
-            ("list 'a b' c | each 'text $2 $1' pre | join ,", 'pre a b,pre c\n'),
-            ("list a b | each 'upper | text [ $1 ]' | join ,", 'A [ a ],B [ b ]\n'),
-            ("list a b | each 'list $1' | count", '2\n'),
-            ("list a b | each 'try \"equals a\" no' | join ,", 'a,no\n'),
-            ("text '' | not nonempty | length", '0\n'),
+            ('text "x\ny\n" | keep { equals y }', 'y\n'),
+            ('text "x\ny\n" | keep { equals y } | length', '2\n'),
+            ("list 'a b' c | each { (s p) text $p $s } pre | join ,", 'pre a b,pre c\n'),
+            ("list a b | each { (s) upper | text [ $s ] } | join ,", 'A [ a ],B [ b ]\n'),
+            ("list a b | each { (s) list $s } | count", '2\n'),
+            ("list a b | each { try { equals a } no } | join ,", 'a,no\n'),
+            ("text '' | not { nonempty } | length", '0\n'),
             ("text abc | contains b | upper", 'ABC\n'),
-            ("text '   ' | trim | try 'nonempty | upper' none", 'none\n'),
-            ("text ' hi ' | trim | try 'nonempty | upper' none", 'HI\n'),
+            ("text '   ' | trim | try { nonempty | upper } none", 'none\n'),
+            ("text ' hi ' | trim | try { nonempty | upper } none", 'HI\n'),
+            # Inner blocks see enclosing names; an inner name shadows.
+            ("list a,b c | each { (r) split , | each { (f) text $f in $r } | join ';' } | join ' '",
+             'a in a,b;b in a,b c in c\n'),
+            ("list a | each { (x y) $y | split , | each { (x) text $x $y } | join + } b,c | join ,",
+             'b b,c+c b,c\n'),
+            ("list { upper } { (a) lower } | count", '2\n'),
+            ("text '{' \"}\" \\{", '{ } {\n'),
+            ("list a | each { text \"a }\" '{' }", 'a a } {\n'),
         ]
         for source, expected in cases:
             with self.subTest(source=source):
                 self.run_line(source, expected)
         errors = [
             # Invalid bodies fail instead of acting as false (or true for not).
-            ('list a | keep nonemtpy', 'keep: unknown command: nonemtpy'),
-            ('list | keep bogus', 'keep: unknown command: bogus'),
-            ("list a | keep 'equals $2'", 'keep: reference $2 has no argument'),
-            # Nested strings do not capture the enclosing body's parameters.
-            ("list a | keep 'not \"equals $2\"' b", 'keep: pipeline without references'),
-            ('text a | not bogus', 'not: unknown command: bogus'),
+            ('list a | keep { nonemtpy }', 'unknown command: nonemtpy'),
+            ('list | keep { bogus }', 'unknown command: bogus'),
+            ("list a | keep { (s v) equals $v }", 'keep: block takes 2 arguments, got 1'),
+            ("list a | keep { equals b } b", 'keep: block takes 1 argument, got 2'),
+            ('list a | keep nonempty', 'keep: expected a block'),
+            ('text a | not { bogus }', 'unknown command: bogus'),
             # Errors below the top-level body are errors too, not false.
-            ("list a | keep 'not equals a'", 'keep item 1: not: pipeline without references'),
-            ("list a | keep 'read'", 'keep item 1: read a'),
-            ("text a | not 'try bogus x'", 'not: try: unknown command: bogus'),
-            ("list a | each 'text $1 | '", "each: expected a command after '|'"),
-            ('text x | not nonempty', "not: 'nonempty' succeeded"),
-            ("list a b | each 'equals a'", 'each item 2: equals'),
+            ("list a | keep { not equals a }", 'keep item 1: not: expected a block'),
+            ("list a | keep { read }", 'keep item 1: read a'),
+            ("text a | not { try { bogus } x }", 'unknown command: bogus'),
+            ("list a | each { text a | }", "expected a command after '|'"),
+            ('text x | not { nonempty }', "not: { nonempty } succeeded"),
+            ("list a b | each { equals a }", 'each item 2: equals'),
+            ("list a | each { text a", "unclosed '{'"),
+            ("text {a}b", "expected a space after '}'"),
+            ("text { upper }", "expects text"),
+            ("list a | each " + "{ " * 200 + "}" * 200, 'blocks nested too deeply'),
             ('text "" | nonempty', 'nonempty: empty text'),
             ('list | nonempty', 'nonempty: empty list'),
             ('text a | equals b', "equals: text differs from 'b'"),
@@ -284,53 +313,67 @@ class Commands(unittest.TestCase):
 
     def test_definitions(self):
         result = self.run_input(
-            "def clean-or 'trim | try \"nonempty | upper\" $2'\n"
-            "def wrap 'text $2 $1 $2'\n"
+            "def clean-or { (s fallback) trim | try { nonempty | upper } $fallback }\n"
+            "def wrap { (x d) text $d $x $d }\n"
             "clean-or '  hi  ' none\n"
             "text '   ' | clean-or none\n"
             "list a b | map wrap - | join ,\n"
             "help | filter def: | count\n"
             # Redefinition shadows prelude commands and earlier definitions.
-            "def wrap 'text [ $1 ]'\n"
+            "def wrap { (x) text [ $x ] }\n"
             "wrap x\n"
-            "def upper 'lower'\n"
+            "def upper { lower }\n"
             "text ABC | upper\n")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout, 'HI\nnone\n- a -,- b -\n2\n[ x ]\nabc\n')
         errors = [
-            ('def', 'usage: def NAME PIPELINE'),
-            ("def 'a b' upper", "def: invalid name 'a b'"),
-            ("def 'a|b' upper", "def: invalid name 'a|b'"),
-            ("def '$x' upper", "def: invalid name '$x'"),
-            ('def def upper', 'def: cannot redefine def'),
-            ('def x bogus', 'def x: unknown command: bogus'),
-            ("def x ''", 'def x: empty pipeline'),
-            ("def x '# note'", 'def x: empty pipeline'),
-            ("def x 'upper |'", "def x: expected a command after '|'"),
+            ('def', 'usage: def NAME BLOCK'),
+            ('def x upper', 'usage: def NAME BLOCK'),
+            ("def 'a b' { upper }", "def: invalid name 'a b'"),
+            ("def 'a|b' { upper }", "def: invalid name 'a|b'"),
+            ("def '$x' { upper }", "def: invalid name '$x'"),
+            ('def def { upper }', 'def: cannot redefine def'),
+            ('def x { bogus }', 'unknown command: bogus'),
+            ("def x {}", 'def x: empty block'),
+            ("def x { upper | }", "expected a command after '|'"),
+            ("list a | each { (s) def $s { upper } }", 'def a: block uses enclosing parameters'),
         ]
         for source, error in errors:
             with self.subTest(source=source):
                 self.run_line(source, error=error)
         # Arity is checked at call time.
-        result = self.run_input("def w 'text $2'\nw a\n")
-        self.assertEqual(result.returncode, 1)
-        self.assertIn("command 'w' expects 2 arguments, got 1", result.stderr)
+        for source, error in [
+            ("def w { (a b) text $b }\nw a\n", "command 'w' expects 2 arguments, got 1"),
+            ("def shout { upper }\nshout\n", "command 'shout' expects 1 argument, got 0"),
+        ]:
+            result = self.run_input(source)
+            self.assertEqual(result.returncode, 1)
+            self.assertIn(error, result.stderr)
 
     def test_lexical_definitions(self):
         result = self.run_input(
             # Naming itself calls the shadowed command, so a def can wrap it.
-            "def upper 'upper | text !'\n"
+            "def upper { upper | text ! }\n"
             "text a | upper\n"
             # Bodies keep the commands they were defined with.
-            "def shout 'upper'\n"
-            "def upper 'lower'\n"
+            "def shout { upper }\n"
+            "def upper { lower }\n"
             "text a | shout\n"
             "text A | upper\n")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout, 'A !\nA !\na\n')
         # Errors from a body name the command, giving a call chain.
-        result = self.run_input("def inner 'equals x'\ndef outer 'trim | inner'\ntext y | outer\n")
+        result = self.run_input("def inner { equals x }\ndef outer { trim | inner }\ntext y | outer\n")
         self.assertIn("outer: inner: equals: text differs from 'x'", result.stderr)
+        # A block keeps the names it captured after its def returns.
+        result = self.run_input(
+            "def adder { (n) try $n { equals never } { (x) add $x $n } }\n"
+            "def call { (b x) try $x $b none }\n"
+            "adder 10 | call 5\n"
+            "def without { (xs v) keep { not { equals $v } } }\n"
+            "list a b c | without b | join ,\n")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, '15\na,c\n')
 
     def test_script_files(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -338,7 +381,7 @@ class Commands(unittest.TestCase):
             script.write_text(
                 "#!/usr/bin/env cmdr\n"
                 "# Helpers\n"
-                "def shout 'upper | text $1 !'\n"
+                "def shout { (s) upper | text $s ! }\n"
                 "shout hi\n"
                 "bogus\n"
                 "text unreachable\n")
@@ -369,32 +412,31 @@ class Commands(unittest.TestCase):
 
     def test_value_stage(self):
         result = self.run_input(
-            "def stats2 '$2 | sort | uniq | count | text of $1'\n"
-            "def stats 'count | stats2 $1'\n"
-            "list b a b | stats\n")
+            "def stats2 { (n xs) $xs | sort | uniq | count | text of $n }\n"
+            "def stats { (xs) count | stats2 $xs }\n"
+            "list b a b | stats\n"
+            "list a | each { (s) upper | $s }\n")
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(result.stdout, '2 of 3\n')
+        self.assertEqual(result.stdout, '2 of 3\na\n')
         errors = [
-            ('text a | upper | $1', 'reference $1 has no argument'),
-            ('$1 x', 'command name cannot be a reference'),
-            ('$1', 'reference $1 has no argument'),
+            ('$x', "invalid reference '$x'"),
+            ('list a | each { (s) $s y }', 'command name cannot be a reference'),
         ]
         for source, error in errors:
             with self.subTest(source=source):
                 self.run_line(source, error=error)
 
     def test_no_bindings(self):
-        # `as` is an ordinary name, and $name is not a reference.
+        # `as` is an ordinary name.
         self.run_line('text a | as x', error='unknown command: as')
-        self.run_line('text $x', error="invalid reference '$x'")
-        result = self.run_input("def as upper\ntext a | as\n")
+        result = self.run_input("def as { upper }\ntext a | as\n")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout, 'A\n')
 
     def test_limits(self):
         # Values and composed commands nest boundedly instead of overflowing.
         self.run_line('list a' + ' | list' * 1100, error='value is nested too deeply')
-        defs = "def d0 upper\n" + "".join(f"def d{i} d{i - 1}\n" for i in range(1, 130))
+        defs = "def d0 { upper }\n" + "".join(f"def d{i} {{ d{i - 1} }}\n" for i in range(1, 130))
         result = self.run_input(defs + "d129 x\n")
         self.assertEqual(result.returncode, 1)
         self.assertIn('nested too deeply', result.stderr)
@@ -403,14 +445,14 @@ class Commands(unittest.TestCase):
         cases = [
             ('text 3 | lt 5', '3\n'),
             ('text 7 | gt 5.5', '7\n'),
-            ("list 1 5 9 | keep 'gt $2' 4 | join ,", '5,9\n'),
+            ("list 1 5 9 | keep { (n lo) gt $lo } 4 | join ,", '5,9\n'),
         ]
         for source, expected in cases:
             with self.subTest(source=source):
                 self.run_line(source, expected)
         self.run_line('text 7 | lt 5', error='lt: 7 is not less than 5')
         self.run_line('text 3 | gt x', error='invalid finite number: x')
-        self.run_line("list 1 x | keep 'gt 0'", error='keep item 2: invalid finite number: x')
+        self.run_line("list 1 x | keep { gt 0 }", error='keep item 2: invalid finite number: x')
 
     def test_continuation(self):
         result = self.run_input(
@@ -420,7 +462,7 @@ class Commands(unittest.TestCase):
             "text d\n")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout, 'A b\nc|\nd\n')
-        result = self.run_input("def report 'upper |\n  # note\n  lower'\n"
+        result = self.run_input("def report { upper |\n  # note\n  lower }\n"
                                 "report X\nhelp | filter report\n")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout.split('\n')[0], 'x')
@@ -440,7 +482,7 @@ class Commands(unittest.TestCase):
         self.run_line("run printf '%s' 'hello world' | upper", 'HELLO WORLD\n')
         self.run_line('text abc | run-in tr a-z A-Z', 'ABC\n')
         self.run_line('list abc def | map run-in tr a-z A-Z | join ,', 'ABC,DEF\n')
-        self.run_line("try 'run false' fallback", 'fallback\n')
+        self.run_line("try { () run false } fallback", 'fallback\n')
         self.run_line("run printf '%s' '$HOME;*.c'", '$HOME;*.c\n')
 
     def test_help_and_repl(self):
@@ -471,7 +513,7 @@ class Commands(unittest.TestCase):
                                 capture_output=True, text=True, timeout=20)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout, 'a#b #\n')
-        self.run_line("try '# skipped' x", '')
+        self.run_line("try { () # skipped } x", '')
         # quit and exit end only the interactive REPL.
         result = self.run_input('exit\ntext after\n')
         self.assertEqual(result.returncode, 1)

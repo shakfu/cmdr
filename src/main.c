@@ -38,7 +38,7 @@ static int help_command(const cmdr *repl, size_t argc, const cmdr_value *argv,
         fprintf(out, "%-*s  %s\n", width,
                 active[i]->usage ? active[i]->usage : active[i]->name, active[i]->docstring);
     fputs("Compose with |; the returned value becomes the next command's first argument.\n"
-          "Quote spaces and pipes; $1..$N are arguments.\n", out);
+          "Quote spaces and pipes; { (a b) ... } is a block taking $a and $b.\n", out);
     fclose(out);
     free(active);
     *result = (cmdr_value){.kind = CMDR_TEXT, .text = text};
@@ -57,20 +57,16 @@ static int valid_name(const char *name)
 static int def_command(const cmdr *repl, size_t argc, const cmdr_value *argv,
                        cmdr_value *result, char **error)
 {
-    if (argc != 2 || argv[0].kind != CMDR_TEXT || argv[1].kind != CMDR_TEXT)
-        return cmdr_error(error, "usage: def NAME PIPELINE");
+    if (argc != 2 || argv[0].kind != CMDR_TEXT || argv[1].kind != CMDR_BLOCK)
+        return cmdr_error(error, "usage: def NAME BLOCK");
     const char *name = argv[0].text, *body = argv[1].text;
     if (!valid_name(name)) return cmdr_error(error, "def: invalid name '%s'", name);
     if (!strcmp(name, "def")) return cmdr_error(error, "def: cannot redefine def");
-    char *detail = NULL;
-    if (cmdr_check(repl, body, CMDR_ANY_ARITY, &detail)) {
-        cmdr_error(error, "def %s: %s", name, detail);
-        free(detail);
-        return 1;
-    }
+    /* Its line checked the block; a block inside another captures names. */
+    if (argv[1].count) return cmdr_error(error, "def %s: block uses enclosing parameters", name);
     const char *p = body;
     while (isspace((unsigned char)*p)) ++p;
-    if (!*p || *p == '#') return cmdr_error(error, "def %s: empty pipeline", name);
+    if (!*p) return cmdr_error(error, "def %s: empty block", name);
     /* One help row per command: collapse whitespace runs in the body. */
     char *docstring = cmdr_realloc(NULL, strlen(p) + sizeof("def: "), 1), *d = docstring;
     d += sprintf(d, "def: ");
@@ -78,12 +74,14 @@ static int def_command(const cmdr *repl, size_t argc, const cmdr_value *argv,
         if (!isspace((unsigned char)*p)) *d++ = *p;
         else if (p[1] && !isspace((unsigned char)p[1])) *d++ = ' ';
     *d = '\0';
-    struct { cmdr layer; cmdr_command command; } *node = cmdr_realloc(NULL, 1, sizeof(*node));
+    struct { cmdr layer; cmdr_command command; cmdr_value block; } *node
+        = cmdr_realloc(NULL, 1, sizeof(*node));
+    if (cmdr_clone(&argv[1], &node->block, error)) { free(node); free(docstring); return 1; }
     /* Lexical scope: the body sees commands as they were at definition, so
      * naming itself calls the command it shadows. */
     node->command = (cmdr_command){.name = cmdr_strndup(name, strlen(name)),
                                    .docstring = docstring,
-                                   .pipeline = cmdr_strndup(body, strlen(body)),
+                                   .block = &node->block,
                                    .scope = session.parent};
     node->layer = (cmdr){&node->command, 1, session.parent};
     session.parent = &node->layer;
@@ -92,8 +90,8 @@ static int def_command(const cmdr *repl, size_t argc, const cmdr_value *argv,
 
 static const cmdr_command commands[] = {
     {.name = "help", .usage = "help", .docstring = "Show commands", .run = help_command},
-    {.name = "def", .usage = "def NAME PIPELINE",
-     .docstring = "Define a pipeline command; it may shadow others", .run = def_command},
+    {.name = "def", .usage = "def NAME BLOCK",
+     .docstring = "Define a command; it may shadow others", .run = def_command},
     /* Add application commands here; they take precedence over the prelude. */
 };
 static const cmdr application = {commands, sizeof(commands) / sizeof(commands[0]), &cmdr_prelude};
@@ -104,7 +102,7 @@ static int evaluate(const char *line, const char *where)
 {
     cmdr_value value;
     char *error;
-    int status = cmdr_eval(&session, line, 0, NULL, &value, &error);
+    int status = cmdr_eval(&session, line, &value, &error);
     fflush(stdout); /* Keep errors in order with earlier output. */
     if (status) {
         fprintf(stderr, "cmdr: %s%s\n", where ? where : "", error ? error : "command failed");

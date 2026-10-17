@@ -44,39 +44,42 @@ a tab. Syntax and command names are checked for the whole pipeline before any
 command runs. Effects from earlier stages remain if a later stage fails.
 There is no variable expansion, globbing, redirection, or implicit shell.
 
-## Parameters and definitions
+## Blocks and definitions
 
 ```text
-cmdr> def wrap 'text $2 $1 $2'
+cmdr> def wrap { (x d) text $d $x $d }
 cmdr> list a b | map wrap - | join ,
 - a -,- b -
-cmdr> def clean-or 'trim | try "nonempty | upper" $2'
+cmdr> def clean-or { (s fallback) trim | try { nonempty | upper } $fallback }
 cmdr> text '   ' | clean-or none
 none
-cmdr> def stats2 '$2 | sort | uniq | count | text of $1'
-cmdr> def stats 'count | stats2 $1'
-cmdr> list b a b | stats
-2 of 3
+cmdr> def without { (xs v) keep { not { equals $v } } }
+cmdr> list a b c | without b | join ,
+a,c
 ```
 
-`def NAME PIPELINE` defines a command for the rest of the session.
+`{ ... }` is a block: a pipeline passed as a value. Its syntax, command names,
+and references are checked with the enclosing line, before any stage runs.
 
-- `$1..$N` are its arguments; `$1` is the piped value or the first explicit
-  argument. A body whose highest reference is `$N` requires exactly N
-  arguments; a body without references accepts at most one.
-- The first stage receives `$1` as input unless it references `$1`.
-- A stage that is a lone `$N` replaces the current value, so a body can start
-  from any argument.
+- `{ (a b) ... }` declares parameters, referenced as `$a` and `$b`. A block
+  takes exactly the arguments it declares. `{ ... }` takes one input, received
+  by pipe; `{ () ... }` takes none.
+- The first stage receives the input unless it names it. A stage that is a
+  lone `$name` replaces the current value.
+- Names are lexical. A nested block sees the names of enclosing blocks, and an
+  inner name shadows an outer one. A block keeps the values it captured.
 - References substitute values, not text: a list stays one argument. Quote or
-  escape `$` for literal text; `a$1` is literal.
-- Definitions are lexical: a body uses the commands that existed when it was
-  defined, and a body that names its own command calls the one it shadows.
-  A definition may shadow any command except `def`.
-- Errors from a body are prefixed with its name (`outer: inner: equals: ...`).
+  escape `$` and braces for literal text; `a$x` is literal. Unquoted braces
+  inside a block must balance.
 
-Strings passed to `each`, `keep`, `not`, and `try` are pipelines with their
-own `$1..$N`. Pass outer arguments explicitly:
-`list a b c | keep 'not "equals $2" $2' b`.
+`def NAME BLOCK` defines a command for the rest of the session.
+Definitions are lexical: a body uses the commands that existed when it was
+defined, and a body that names its own command calls the one it shadows. A
+definition may shadow any command except `def`. Errors from a body are
+prefixed with its name (`outer: inner: equals: ...`).
+
+`each`, `keep`, `not`, and `try` take blocks. Extra arguments follow the item:
+`list a b c | keep { (s v) not { equals $v } } b`.
 
 ## Commands
 
@@ -93,10 +96,10 @@ own `$1..$N`. Pass outer arguments explicitly:
 | `sort`, `uniq`, `count` VALUE | Byte-order sort, adjacent dedup, item count |
 | `head`, `tail` VALUE N; `filter VALUE TEXT` | Select items |
 | `map VALUE COMMAND [ARG ...]` | Call a command per item |
-| `each VALUE PIPELINE [ARG ...]` | Run a pipeline per item, item as `$1` |
-| `keep VALUE PIPELINE [ARG ...]` | Keep items whose pipeline holds |
-| `not VALUE PIPELINE [ARG ...]` | Return VALUE if the pipeline mismatches |
-| `try [INPUT] PIPELINE FALLBACK` | Return FALLBACK if the pipeline fails |
+| `each VALUE BLOCK [ARG ...]` | Call a block per item |
+| `keep VALUE BLOCK [ARG ...]` | Keep items whose block holds |
+| `not VALUE BLOCK [ARG ...]` | Return VALUE if the block mismatches |
+| `try [INPUT] BLOCK FALLBACK` | Return FALLBACK if the block fails |
 | `nonempty VALUE`, `equals TEXT X`, `contains TEXT X`, `lt`/`gt NUMBER X` | Predicates |
 | `read PATH`, `write VALUE PATH`, `append VALUE PATH` | Files; write and append return VALUE |
 | `files [DIR]`, `basename PATH`, `dirname PATH` | Regular files in DIR, sorted; lexical path parts |
@@ -107,7 +110,7 @@ cmdr> text "pear,apple,pear" | split , | sort | uniq | join ", "
 apple, pear
 cmdr> add 2 3 | mul 4 | sub 1
 19
-cmdr> list a bb '' | keep nonempty | map upper | join ,
+cmdr> list a bb '' | keep { nonempty } | map upper | join ,
 A,BB
 cmdr> text "hello world" | run-in tr a-z A-Z
 HELLO WORLD
@@ -123,11 +126,11 @@ item or `join` first. `write` and `append` store lists one item per line.
 **Predicates** return their input when they hold, so they compose
 mid-pipeline. When they do not hold they fail with a mismatch, which `keep`,
 `not`, and `try` treat as false. Any other failure is an error, including one
-inside the pipeline. Empty text and `"0"` are not false.
+inside the block. Empty text and `"0"` are not false.
 
-**`try`** returns the pipeline's result, or FALLBACK if it fails at run time.
-Its syntax, command names, and arity are checked first, so a typo is an
-error, not a fallback. `map try read ""` reads each file or substitutes empty
+**`try`** returns the block's result, or FALLBACK if it fails at run time.
+Its arity is checked first, so a typo or a missing input is an error, not a
+fallback. `each { try { read } "" }` reads each file or substitutes empty
 text.
 
 **`run`** resolves PROGRAM through PATH and passes arguments unchanged. `run`
@@ -141,8 +144,9 @@ are rejected.
 ## Adding commands
 
 Add entries to the `commands` table in [src/main.c](src/main.c); they shadow
-the prelude in [src/prelude.c](src/prelude.c). Set `.pipeline` to compose
-existing commands, or `.run` to a `cmdr_fn` from [src/cmdr.h](src/cmdr.h):
+the prelude in [src/prelude.c](src/prelude.c). Set `.pipeline` to block
+source, as written inside `{ }`, or `.run` to a `cmdr_fn` from
+[src/cmdr.h](src/cmdr.h):
 
 ```c
 static int first(const cmdr *repl, size_t argc, const cmdr_value *argv,
@@ -160,8 +164,9 @@ static int first(const cmdr *repl, size_t argc, const cmdr_value *argv,
  .pipeline = "trim | upper"},
 ```
 
-`.text = 1` guarantees text arguments. Arguments are borrowed; the result is
-owned by the caller. A predicate returns `CMDR_MISMATCH` when it does not
+`.text = 1` guarantees text arguments. Arguments are borrowed, including the
+values a block captured; clone what you keep. The result is owned by the
+caller. A predicate returns `CMDR_MISMATCH` when it does not
 hold. Allocation failure exits the process.
 
 ## Checks
@@ -170,4 +175,5 @@ hold. Allocation failure exits the process.
 with Python 3. Configure with `-DCMDR_BUILD_TESTS=OFF` to build without
 Python.
 
-Design history: [docs/dev/minimal.md](docs/dev/minimal.md).
+Design history: [docs/dev/minimal.md](docs/dev/minimal.md),
+[docs/dev/blocks.md](docs/dev/blocks.md).

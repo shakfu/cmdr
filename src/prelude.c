@@ -405,7 +405,7 @@ COMMAND(files_command)
         cmdr_push(result, (cmdr_value){.kind = CMDR_TEXT, .text = b.data});
     }
     closedir(directory);
-    if (!status) qsort(result->items, result->count, sizeof(*result->items), by_text);
+    if (!status && result->count) qsort(result->items, result->count, sizeof(*result->items), by_text);
     return status;
 }
 
@@ -531,27 +531,26 @@ COMMAND(map_command)
     return status;
 }
 
-/* Check bodies before running them, so syntax, name, and arity errors are
- * reported rather than counted as false. */
-static int check_body(const cmdr *repl, const char *name, const cmdr_value *body,
-                      size_t argc, char **error)
+/* Check a block's arity before running it, so a wrong argument count is
+ * reported rather than counted as false. Its line checked names already. */
+static int check_body(const char *name, const cmdr_value *body, size_t argc, char **error)
 {
-    if (require_text(body, error)) return 1;
+    if (body->kind != CMDR_BLOCK) return cmdr_error(error, "%s: expected a block { ... }", name);
     char *detail = NULL;
-    if (!cmdr_check(repl, body->text, argc, &detail)) return 0;
+    if (!cmdr_block_arity(body, argc, &detail)) return 0;
     cmdr_error(error, "%s: %s", name, detail);
     free(detail);
     return 1;
 }
 
-/* Evaluate argv[1] with subject as $1 and argv[2..] as $2... */
+/* Call block argv[1] with subject, then argv[2..]. */
 static int run_body(const cmdr *repl, const cmdr_value *subject, size_t argc,
                     const cmdr_value *argv, cmdr_value *out, char **detail)
 {
     cmdr_value *args = cmdr_realloc(NULL, argc - 1, sizeof(*args));
     args[0] = *subject;
     for (size_t i = 2; i < argc; ++i) args[i - 1] = argv[i];
-    int status = cmdr_eval(repl, argv[1].text, argc - 1, args, out, detail);
+    int status = cmdr_run(repl, &argv[1], argc - 1, args, out, detail);
     free(args);
     return status;
 }
@@ -560,9 +559,9 @@ static int per_item(int keep, const cmdr *repl, size_t argc, const cmdr_value *a
                     cmdr_value *result, char **error)
 {
     const char *name = keep ? "keep" : "each";
-    if (argc < 2) return cmdr_error(error, "usage: %s LIST_OR_LINES PIPELINE [ARG ...]", name);
+    if (argc < 2) return cmdr_error(error, "usage: %s LIST_OR_LINES BLOCK [ARG ...]", name);
     cmdr_value list;
-    if (check_body(repl, name, &argv[1], argc - 1, error) || as_list(&argv[0], &list, error))
+    if (check_body(name, &argv[1], argc - 1, error) || as_list(&argv[0], &list, error))
         return 1;
     *result = (cmdr_value){.kind = CMDR_LIST};
     int status = 0;
@@ -578,7 +577,7 @@ static int per_item(int keep, const cmdr *repl, size_t argc, const cmdr_value *a
             cmdr_push(result, list.items[i]);
             list.items[i] = (cmdr_value){0};
         } else if (item.kind == CMDR_NONE) {
-            status = cmdr_error(error, "each item %zu: pipeline returned no value", i + 1);
+            status = cmdr_error(error, "each item %zu: block returned no value", i + 1);
         } else {
             cmdr_push(result, item);
             item = (cmdr_value){0};
@@ -594,8 +593,8 @@ COMMAND(keep_command) { return per_item(1, repl, argc, argv, result, error); }
 
 COMMAND(not_command)
 {
-    if (argc < 2) return cmdr_error(error, "usage: not VALUE PIPELINE [ARG ...]");
-    if (check_body(repl, "not", &argv[1], argc - 1, error)) return 1;
+    if (argc < 2) return cmdr_error(error, "usage: not VALUE BLOCK [ARG ...]");
+    if (check_body("not", &argv[1], argc - 1, error)) return 1;
     cmdr_value out;
     char *detail;
     int failed = run_body(repl, &argv[0], argc, argv, &out, &detail);
@@ -606,7 +605,7 @@ COMMAND(not_command)
     } else if (failed) {
         cmdr_error(error, "not: %s", detail);
     } else {
-        cmdr_error(error, "not: '%s' succeeded", argv[1].text);
+        cmdr_error(error, "not: {%s} succeeded", argv[1].text);
         status = CMDR_MISMATCH;
     }
     free(detail);
@@ -615,11 +614,11 @@ COMMAND(not_command)
 
 COMMAND(try_command)
 {
-    if (argc != 2 && argc != 3) return cmdr_error(error, "usage: try [INPUT] PIPELINE FALLBACK");
+    if (argc != 2 && argc != 3) return cmdr_error(error, "usage: try [INPUT] BLOCK FALLBACK");
     const cmdr_value *body = &argv[argc - 2];
-    if (check_body(repl, "try", body, argc - 2, error)) return 1;
+    if (check_body("try", body, argc - 2, error)) return 1;
     char *detail;
-    int failed = cmdr_eval(repl, body->text, argc - 2, argv, result, &detail);
+    int failed = cmdr_run(repl, body, argc - 2, argv, result, &detail);
     free(detail);
     return failed ? cmdr_clone(&argv[argc - 1], result, error) : 0;
 }
@@ -670,10 +669,10 @@ static const cmdr_command commands[] = {
     VALUE("filter", "filter LIST_OR_LINES TEXT", "Keep text items containing TEXT", filter_command),
     VALUE("count", "count LIST_OR_LINES", "Count items", count_command),
     VALUE("map", "map LIST_OR_LINES COMMAND [ARG ...]", "Apply a command to each item", map_command),
-    VALUE("each", "each LIST_OR_LINES PIPELINE [ARG ...]", "Run a pipeline per item ($1 = item)", each_command),
-    VALUE("keep", "keep LIST_OR_LINES PIPELINE [ARG ...]", "Keep items whose pipeline succeeds", keep_command),
-    VALUE("not", "not VALUE PIPELINE [ARG ...]", "Return VALUE if the pipeline mismatches", not_command),
-    VALUE("try", "try [INPUT] PIPELINE FALLBACK", "Return FALLBACK if the pipeline fails", try_command),
+    VALUE("each", "each LIST_OR_LINES BLOCK [ARG ...]", "Call a block per item", each_command),
+    VALUE("keep", "keep LIST_OR_LINES BLOCK [ARG ...]", "Keep items whose block succeeds", keep_command),
+    VALUE("not", "not VALUE BLOCK [ARG ...]", "Return VALUE if the block mismatches", not_command),
+    VALUE("try", "try [INPUT] BLOCK FALLBACK", "Return FALLBACK if the block fails", try_command),
     TEXT("read", "read PATH", "Read a text file", read_command),
     VALUE("write", "write VALUE PATH", "Replace a file, returning VALUE", write_command),
     VALUE("append", "append VALUE PATH", "Append to a file, returning VALUE", append_command),
