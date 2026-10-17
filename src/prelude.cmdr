@@ -1,0 +1,6 @@
+# Commands composed from the primitives. The build embeds this file, and
+# cmdr runs it at startup. Each def sees only the commands above it.
+
+def last { tail 1 | join "" } "Return the last item"
+def ext { split . | last } "Return the text after the last dot"
+def has-ext { keep { drop 1 | contains . } } "Keep names with a dot after the first byte"
