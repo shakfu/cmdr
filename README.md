@@ -20,11 +20,27 @@ hello world
 Run `help` for the command list; it returns text, so `help | filter map`
 works. Exit with `quit`, `exit`, or Ctrl-D.
 
+The REPL edits lines with a vendored copy of linenoise, in
+[thirdparty/linenoise](thirdparty/linenoise). The prompt is light green,
+except on terminals without escape sequences (`dumb`, `cons25`, `emacs`). It
+colors commands, references, blocks, and strings, and shows unknown commands
+in red. Tab completes command
+names. Up and Down recall history, saved in `~/.cmdr_history`, with a continued
+pipeline stored as one entry. Ctrl-C drops the current pipeline. Pasted lines
+run one at a time, each echoed after its prompt. Configure with
+`-DCMDR_EDITOR=OFF` to read plain lines instead.
+
 - `./cmdr -c 'PIPELINE'` evaluates one pipeline.
 - `./cmdr FILE` runs a script and stops at its first failing line, reporting
   `FILE:LINE:`.
 - Piped stdin runs one pipeline per line and continues after errors.
 - `load PATH` runs a script in the current session, so its definitions remain.
+- `./cmdr --user ...` runs `~/.cmdr/prelude.cmdr` instead of the standard
+  prelude; it is an error if the file is missing.
+- `./cmdr --version` prints the version.
+
+The REPL starts with a line such as `cmdr 0.1.0 (prelude: standard)`, or the
+prelude's path with `--user`, in bold cyan where the prompt has color.
 
 Errors go to stderr; the exit status is nonzero if any line failed. Lines
 starting with `#`, including a `#!/usr/bin/env cmdr` shebang, are comments.
@@ -215,8 +231,10 @@ hold. Allocation failure exits the process.
 ## Checks
 
 `make test` builds cmdr and runs [tests/test_cmdr.py](tests/test_cmdr.py)
-with Python 3. Configure with `-DCMDR_BUILD_TESTS=OFF` to build without
-Python.
+with Python 3, in parallel. Each test method is a CTest test, so
+`ctest --test-dir build -R test_editor` runs only the editor tests. Tests that
+need the editor show as skipped in a build without it. Configure with
+`-DCMDR_BUILD_TESTS=OFF` to build without Python.
 
 Design history: [docs/dev/minimal.md](docs/dev/minimal.md),
 [docs/dev/blocks.md](docs/dev/blocks.md).

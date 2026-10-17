@@ -7,6 +7,10 @@
 #include <string.h>
 #include <unistd.h>
 
+#ifdef CMDR_EDITOR
+#include "editor.h"
+#endif
+
 /* Names resolve here first: each def pushes a one-command layer in front of
  * the application commands. Layers are never freed, since a running body may
  * still use an earlier one. */
@@ -201,6 +205,9 @@ static int continues(const char *line, size_t n)
  * inside a continuation are skipped. A script (path non-NULL) stops at the
  * first failure, since later lines may depend on earlier ones; stdin
  * continues. Errors report the pipeline's first line. */
+/* Printed before the first interactive prompt; set by main. */
+static char *banner;
+
 static int run(FILE *in, const char *path)
 {
     int interactive = !path && isatty(STDIN_FILENO);
@@ -208,9 +215,25 @@ static int run(FILE *in, const char *path)
     size_t capacity = 0, used = 0;
     unsigned long number = 0, first = 0;
     int status = 0;
+    int color = 0;
+#ifdef CMDR_EDITOR
+    editor *ed = interactive ? editor_open(&session) : NULL;
+    color = ed && editor_color(ed);
+#endif
+    if (interactive && banner) printf(color ? "\x1b[1;36m%s\x1b[0m\n" : "%s\n", banner); /* Bold cyan. */
     for (;;) {
-        if (interactive) { fputs(used ? "...> " : "cmdr> ", stdout); fflush(stdout); }
-        ssize_t n = getline(&line, &capacity, in);
+        const char *prompt = used ? "...> " : "cmdr> ";
+        ssize_t n;
+#ifdef CMDR_EDITOR
+        if (ed) {
+            n = editor_read(ed, editor_prompt(ed, used != 0), &line, &capacity);
+            if (n == -2) { used = 0; continue; } /* Ctrl-C drops the pipeline. */
+        } else
+#endif
+        {
+            if (interactive) { fputs(prompt, stdout); fflush(stdout); }
+            n = getline(&line, &capacity, in);
+        }
         if (n >= 0) {
             ++number;
             if (used && blank_or_comment(line)) continue;
@@ -223,6 +246,9 @@ static int run(FILE *in, const char *path)
         if (!used) break;
         used = 0;
         if (interactive && quits(pipeline)) break;
+#ifdef CMDR_EDITOR
+        if (ed) editor_remember(ed, pipeline);
+#endif
         if (path) snprintf(where, sizeof(where), "%s:%lu: ", path, first);
         if (evaluate(pipeline, path ? where : NULL)) {
             status = 1;
@@ -234,6 +260,9 @@ static int run(FILE *in, const char *path)
         fprintf(stderr, "cmdr: %s: %s\n", path ? path : "stdin", strerror(errno));
         status = 1;
     }
+#ifdef CMDR_EDITOR
+    editor_close(ed);
+#endif
     free(line);
     free(pipeline);
     return status;
@@ -242,23 +271,62 @@ static int run(FILE *in, const char *path)
 /* src/prelude.cmdr, embedded by the build. */
 extern const char cmdr_prelude_source[];
 
+/* Run the user's prelude, or the standard one when path is NULL. */
+static int run_prelude(const char *path)
+{
+    if (path) {
+        FILE *file = fopen(path, "r");
+        if (!file) { fprintf(stderr, "cmdr: %s: %s\n", path, strerror(errno)); return 1; }
+        int status = run(file, path);
+        fclose(file);
+        return status;
+    }
+    size_t n = strlen(cmdr_prelude_source);
+    if (!n) return 0;
+    FILE *prelude = fmemopen((void *)cmdr_prelude_source, n, "r");
+    if (!prelude) { fprintf(stderr, "cmdr: prelude: %s\n", strerror(errno)); return 1; }
+    int status = run(prelude, "prelude.cmdr");
+    fclose(prelude);
+    return status;
+}
+
 int main(int argc, char **argv)
 {
-    size_t n = strlen(cmdr_prelude_source);
-    FILE *prelude = n ? fmemopen((void *)cmdr_prelude_source, n, "r") : NULL;
-    if (n && !prelude) { fprintf(stderr, "cmdr: prelude: %s\n", strerror(errno)); return 1; }
-    int failed = prelude && run(prelude, "prelude.cmdr");
-    if (prelude) fclose(prelude);
-    if (failed) return 1;
-    if (argc == 3 && !strcmp(argv[1], "-c")) return evaluate(argv[2], NULL) ? 1 : 0;
-    if (argc == 1) return run(stdin, NULL);
-    if (argc != 2 || argv[1][0] == '-') {
-        fprintf(stderr, "usage: cmdr [-c PIPELINE | FILE]\n");
+    if (argc == 2 && !strcmp(argv[1], "--version")) {
+        printf("cmdr %s\n", CMDR_VERSION);
+        return 0;
+    }
+    /* --user replaces the standard prelude with ~/.cmdr/prelude.cmdr. */
+    int user = argc > 1 && !strcmp(argv[1], "--user");
+    argc -= user;
+    argv += user;
+    if (argc > 3 || (argc == 3 && strcmp(argv[1], "-c")) || (argc == 2 && argv[1][0] == '-')) {
+        fprintf(stderr, "usage: cmdr [--user] [-c PIPELINE | FILE]\n       cmdr --version\n");
         return 2;
     }
-    FILE *file = fopen(argv[1], "r");
-    if (!file) { fprintf(stderr, "cmdr: %s: %s\n", argv[1], strerror(errno)); return 1; }
-    int status = run(file, argv[1]);
-    fclose(file);
-    return status;
+    char *path = NULL;
+    if (user) {
+        const char *home = getenv("HOME");
+        if (!home || !*home) { fprintf(stderr, "cmdr: --user: HOME is not set\n"); return 1; }
+        path = cmdr_realloc(NULL, strlen(home) + sizeof("/.cmdr/prelude.cmdr"), 1);
+        sprintf(path, "%s/.cmdr/prelude.cmdr", home);
+    }
+    int status = run_prelude(path);
+    if (!status) {
+        if (argc == 3) {
+            status = evaluate(argv[2], NULL);
+        } else if (argc == 1) {
+            const char *prelude = path ? path : "standard";
+            banner = cmdr_realloc(NULL, strlen(prelude) + sizeof("cmdr  (prelude: )") + strlen(CMDR_VERSION), 1);
+            sprintf(banner, "cmdr %s (prelude: %s)", CMDR_VERSION, prelude);
+            status = run(stdin, NULL);
+            free(banner);
+        } else {
+            FILE *file = fopen(argv[1], "r");
+            if (!file) { fprintf(stderr, "cmdr: %s: %s\n", argv[1], strerror(errno)); status = 1; }
+            else { status = run(file, argv[1]); fclose(file); }
+        }
+    }
+    free(path);
+    return status ? 1 : 0;
 }

@@ -38,7 +38,30 @@
 - `help` lists built-in commands, then primitives, then definitions oldest
   first. It listed definitions first, newest first.
 
+- Each test method is a CTest test, read from `tests/test_cmdr.py` at
+  configure time, and `make test` runs them in parallel.
+
 ### Added
+
+- Version 0.1.0, set in `CMakeLists.txt`. `cmdr --version` prints it, and the
+  REPL starts with `cmdr 0.1.0 (prelude: standard)`, in bold cyan where the
+  prompt has color.
+- `--user` runs `~/.cmdr/prelude.cmdr` in place of the standard prelude, and
+  the banner shows its path. A missing file is an error, not a fallback to
+  the standard prelude.
+
+- Line editing in the interactive REPL, with a vendored copy of linenoise:
+  a light green prompt, highlighting, completion of command names, history in `~/.cmdr_history`,
+  and Ctrl-C to drop the current pipeline. `-DCMDR_EDITOR=OFF` builds without
+  it. linenoise compiles with C extensions: under strict C11, `strdup` and
+  `fdopen` are undeclared, their `int` returns truncate pointers, and the
+  REPL crashed on Enter.
+
+  linenoise keeps a paste's newlines in one buffer, so pasted lines ran as one
+  pipeline: `text a` and `text b` printed `a text b`. They now run one at a
+  time. The vendored copy switches terminal modes with `TCSADRAIN`, not
+  `TCSAFLUSH`, which discarded a second line typed or pasted before the
+  first returned.
 
 - `src/prelude.cmdr` defines `last`, the last item; `ext`, the text after the
   last dot; and `has-ext`, which keeps names with a dot after the first byte.

@@ -404,7 +404,7 @@ class Commands(unittest.TestCase):
             self.assertIn('missing', missing.stderr)
         usage = subprocess.run([str(BINARY), '-x'], capture_output=True, text=True, timeout=20)
         self.assertEqual(usage.returncode, 2)
-        self.assertIn('usage: cmdr [-c PIPELINE | FILE]', usage.stderr)
+        self.assertIn('usage: cmdr [--user] [-c PIPELINE | FILE]', usage.stderr)
 
     def test_prelude(self):
         cases = [
@@ -463,6 +463,61 @@ class Commands(unittest.TestCase):
             loop = Path(directory) / 'loop.cmdr'
             loop.write_text(f"load {quote(loop)}\n")
             self.run_line(f'load {quote(loop)}', error='nested too deeply')
+
+    def version(self):
+        result = subprocess.run([str(BINARY), '--version'], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertRegex(result.stdout, r'^cmdr \d+\.\d+\.\d+\n$')
+        return result.stdout.strip()
+
+    def test_user_prelude(self):
+        self.version()
+        with tempfile.TemporaryDirectory() as home:
+            env = dict(os.environ, HOME=home)
+            def run(*args):
+                return subprocess.run([str(BINARY), *args], capture_output=True,
+                                      text=True, timeout=20, env=env)
+            missing = run('--user', '-c', 'text x')
+            self.assertEqual(missing.returncode, 1)
+            self.assertIn(f'{home}/.cmdr/prelude.cmdr: No such file', missing.stderr)
+            prelude = Path(home) / '.cmdr' / 'prelude.cmdr'
+            prelude.parent.mkdir()
+            prelude.write_text("def greet { () text hi }\n")
+            self.assertEqual(run('--user', '-c', 'greet').stdout, 'hi\n')
+            # The user prelude replaces the standard one.
+            self.assertIn('unknown command: last', run('--user', '-c', 'list a | last').stderr)
+            self.assertIn('unknown command: greet', run('-c', 'greet').stderr)
+            script = Path(home) / 'script.cmdr'
+            script.write_text("greet\n")
+            self.assertEqual(run('--user', str(script)).stdout, 'hi\n')
+            prelude.write_text("text ok\nbogus\n")
+            broken = run('--user', '-c', 'text x')
+            self.assertEqual((broken.returncode, broken.stdout), (1, 'ok\n'))
+            self.assertIn(f'{prelude}:2: unknown command: bogus', broken.stderr)
+        for args in [['--user', '--user'], ['--version', 'x'], ['--user', '-c'], ['-c', 'a', 'b']]:
+            with self.subTest(args=args):
+                result = subprocess.run([str(BINARY), *args], capture_output=True, text=True)
+                self.assertEqual(result.returncode, 2, result.stderr)
+                self.assertIn('usage:', result.stderr)
+
+    def test_banner(self):
+        version = self.version().encode()
+        with tempfile.TemporaryDirectory() as home:
+            code, out = self.pty_session([b"quit\r"], home)
+            self.assertEqual(code, 0, out)
+            # Bold cyan where the prompt has color, which needs the editor.
+            cyan = os.environ.get('CMDR_EDITOR') == '1'
+            line = version + b" (prelude: standard)"
+            self.assertIn(b"\x1b[1;36m" + line + b"\x1b[0m\r\n" if cyan else line + b"\r\n", out)
+            prelude = Path(home) / '.cmdr' / 'prelude.cmdr'
+            prelude.parent.mkdir()
+            prelude.write_text("def greet { () text hi }\n")
+            code, out = self.pty_session([b"quit\r"], home, args=['--user'])
+            self.assertEqual(code, 0, out)
+            self.assertIn(version + f" (prelude: {prelude})".encode(), out)
+        # Output that is not interactive carries no banner.
+        self.run_line('text x', 'x\n')
+        self.assertEqual(self.run_input('text y\n').stdout, 'y\n')
 
     def test_escapes(self):
         cases = [
@@ -586,29 +641,106 @@ class Commands(unittest.TestCase):
         self.assertIn('unknown command: exit', result.stderr)
         self.assertEqual(result.stdout, 'after\n')
 
-    def test_quit_and_exit(self):
+    def pty_session(self, chunks, home, term='xterm', args=()):
+        """Type each chunk into an interactive cmdr once it waits for input, as
+        a person would; return its exit status and output."""
+        import fcntl
         import pty
         import select
+        import struct
+        import termios
         import time
+        editor = os.environ.get('CMDR_EDITOR') == '1'
+        pid, fd = pty.fork()
+        if pid == 0:
+            os.environ.update(HOME=str(home), TERM=term)
+            os.execv(str(BINARY), [str(BINARY), *args])
+        # A real size, so linenoise need not query the cursor position.
+        fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack('HHHH', 24, 80, 0, 0))
+        # linenoise enables bracketed paste once raw mode is on, which drops
+        # earlier input; plain reads accept typing ahead.
+        ready = b"\x1b[?2004h" if editor and term != 'dumb' else b"> "
+        out, sent, deadline = b"", 0, time.time() + 10
+        while True:
+            done, status = os.waitpid(pid, os.WNOHANG)
+            if done:
+                break
+            if time.time() > deadline:
+                os.kill(pid, 9)
+                os.waitpid(pid, 0)
+                self.fail(f"REPL did not exit; output: {out!r}")
+            if sent < len(chunks) and out.count(ready) > sent:
+                os.write(fd, chunks[sent])
+                sent += 1
+            if select.select([fd], [], [], 0.02)[0]:
+                try:
+                    out += os.read(fd, 65536)
+                except OSError:
+                    pass
+        os.close(fd)
+        return os.waitstatus_to_exitcode(status), out
+
+    def test_quit_and_exit(self):
+        # Terminals send \r for Enter; this also checks that Enter does not
+        # crash the editor (see the C_EXTENSIONS note in CMakeLists.txt).
         for word in [b"quit", b"  exit "]:
-            with self.subTest(word=word):
-                pid, fd = pty.fork()
-                if pid == 0:
-                    os.execv(str(BINARY), [str(BINARY)])
-                os.write(fd, b"text hi\n" + word + b"\n")
-                out, deadline = b"", time.time() + 5
-                while not os.waitpid(pid, os.WNOHANG)[0]:
-                    if time.time() > deadline:
-                        os.kill(pid, 9)
-                        os.waitpid(pid, 0)
-                        self.fail("REPL did not exit")
-                    if select.select([fd], [], [], 0.05)[0]:
-                        try:
-                            out += os.read(fd, 65536)
-                        except OSError:
-                            pass
-                os.close(fd)
+            with self.subTest(word=word), tempfile.TemporaryDirectory() as home:
+                code, out = self.pty_session([b"text hi\r", word + b"\r"], home)
+                self.assertEqual(code, 0, out)
                 self.assertIn(b"hi\r\n", out)
+
+    @unittest.skipUnless(os.environ.get('CMDR_EDITOR') == '1', 'built without the editor')
+    def test_editor_plain_terminal(self):
+        # linenoise prints the prompt as is here, so it must carry no color.
+        with tempfile.TemporaryDirectory() as home:
+            code, out = self.pty_session([b"text hi\r", b"quit\r"], home, term='dumb')
+            self.assertEqual(code, 0, out)
+            self.assertIn(b"cmdr> ", out)
+            self.assertNotIn(b"\x1b[", out)
+
+    @unittest.skipUnless(os.environ.get('CMDR_EDITOR') == '1', 'built without the editor')
+    def test_editor_paste(self):
+        with tempfile.TemporaryDirectory() as home:
+            keys = [b"\x1b[200~text a\rtext b\x1b[201~\r",   # Bracketed paste, two lines.
+                    b"\x1b[200~text c |\rupper\r\x1b[201~\r",  # Ends in a newline.
+                    # Typed ahead, unbracketed. quit is in the same chunk: the
+                    # harness sends a chunk per read, and these lines are three.
+                    b"text d\rtext e\rquit\r"]
+            code, out = self.pty_session(keys, home)
+            self.assertEqual(code, 0, out)
+            self.assertIn(b"\x1b[92mcmdr>\x1b[0m ", out)  # The light green prompt.
+            out = re.sub(rb'\x1b\[[0-9;]*m', b'', out)
+            # Each pasted line is echoed after its prompt and runs on its own.
+            self.assertIn(b"cmdr> text a\r\na\r\ncmdr> text b\r\nb\r\n", out)
+            self.assertIn(b"cmdr> text c |\r\n...> upper\r\nC\r\n", out)
+            self.assertIn(b"\nd\r\n", out)
+            self.assertIn(b"\ne\r\n", out)
+            self.assertNotIn(b"\x1b[31m[...", out)  # The paste placeholder is not an error.
+            history = (Path(home) / '.cmdr_history').read_text().splitlines()
+            self.assertEqual(history, ['text a', 'text b', 'text c | upper', 'text d', 'text e'])
+
+    @unittest.skipUnless(os.environ.get('CMDR_EDITOR') == '1', 'built without the editor')
+    def test_editor(self):
+        with tempfile.TemporaryDirectory() as home:
+            keys = [b"tex\t a\r",               # Tab completes a command name.
+                    b"text b |\r", b"  upper\r",   # A continued pipeline.
+                    b"text c |\r", b"\x03",        # Ctrl-C drops the unfinished pipeline.
+                    b"text d\r",
+                    b"\x1b[A\r",                  # Up recalls the previous line.
+                    b"bogus x\x03",               # Unknown command, drawn in red.
+                    b"quit\r"]
+            code, out = self.pty_session(keys, home)
+            self.assertEqual(code, 0, out)
+            self.assertIn(b"\na\r\n", out)
+            self.assertIn(b"\nB\r\n", out)
+            self.assertEqual(out.count(b"\nd\r\n"), 2, out)
+            self.assertNotIn(b"c d", out)
+            self.assertIn(b"\x1b[34mtext", out)
+            self.assertIn(b"\x1b[31mbogus", out)
+            history = (Path(home) / '.cmdr_history').read_text().splitlines()
+            # A continued pipeline is one entry. A repeat of the previous entry
+            # and quit are not stored.
+            self.assertEqual(history, ['text a', 'text b |   upper', 'text d'])
 
 
 if __name__ == '__main__':

@@ -1,0 +1,8 @@
+Source: https://github.com/shakfu/linenoise
+Commit: 9014e2df4fe6cca899edd7b9bf39f927ac1caca7
+Files: LICENSE include/linenoise.h include/internal/utf8.h src/linenoise.c
+       src/internal/utf8.c. linenoise.c uses no other module of the fork,
+       and cmdr needs no tree-sitter or syntax themes.
+Patch: src/linenoise.c switches terminal modes with TCSADRAIN, not
+       TCSAFLUSH. TCSAFLUSH discarded input not yet read, so a second line
+       typed or pasted before the first returned was lost.
