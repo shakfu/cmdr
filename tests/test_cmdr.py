@@ -741,6 +741,26 @@ class Commands(unittest.TestCase):
             # A continued pipeline is one entry. A repeat of the previous entry
             # and quit are not stored.
             self.assertEqual(history, ['text a', 'text b |   upper', 'text d'])
+            self.assertFalse((Path(home) / '.cmdr_history.tmp').exists())
+
+    @unittest.skipUnless(os.environ.get('CMDR_EDITOR') == '1', 'built without the editor')
+    def test_editor_history_save_failure(self):
+        with tempfile.TemporaryDirectory() as home:
+            history = Path(home) / '.cmdr_history'
+            history.write_text('text old\n')
+            saving = Path(home) / '.cmdr_history.tmp'
+            # The save cannot open the copy; then it opens it, but writes fail.
+            setups = [saving.mkdir]
+            if os.path.exists('/dev/full'):
+                setups.append(lambda: saving.symlink_to('/dev/full'))
+            for setup in setups:
+                if saving.is_dir():
+                    saving.rmdir()
+                setup()
+                code, out = self.pty_session([b"text new\r", b"quit\r"], home)
+                self.assertEqual(code, 0, out)
+                self.assertIn(b"cannot save history", out)
+                self.assertEqual(history.read_text(), 'text old\n')
 
 
 if __name__ == '__main__':

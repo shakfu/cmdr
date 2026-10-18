@@ -17,6 +17,7 @@ struct editor {
     linenoise_context_t *ctx;
     const cmdr *repl;
     char *history; /* NULL when $HOME is unset. */
+    char *saving;  /* history with ".tmp" appended. */
     int color;     /* The terminal handles escape sequences. */
     char *pasted;  /* A submitted buffer with several lines, from linenoise. */
     char *next;    /* Its next line to return. */
@@ -222,11 +223,17 @@ editor *editor_open(const cmdr *repl)
     linenoise_history_set_max_len(ed->ctx, 1000);
     const char *home = getenv("HOME");
     if (home && *home) {
-        size_t size = strlen(home) + sizeof("/.cmdr_history");
+        size_t size = strlen(home) + sizeof("/.cmdr_history.tmp");
         ed->history = malloc(size);
-        if (ed->history) {
+        ed->saving = malloc(size);
+        if (ed->history && ed->saving) {
             snprintf(ed->history, size, "%s/.cmdr_history", home);
+            snprintf(ed->saving, size, "%s.tmp", ed->history);
             linenoise_history_load(ed->ctx, ed->history); /* Absent on first run. */
+        } else {
+            free(ed->history);
+            free(ed->saving);
+            ed->history = ed->saving = NULL;
         }
     }
     return ed;
@@ -274,7 +281,10 @@ void editor_remember(editor *ed, const char *pipeline)
     while (n && flat[n - 1] == ' ') flat[--n] = '\0';
     if (n) {
         linenoise_history_add(ed->ctx, flat);
-        if (ed->history && linenoise_history_save(ed->ctx, ed->history))
+        /* linenoise truncates before writing, so write a copy and rename it:
+         * a failed save keeps the previous history. */
+        if (ed->history && (linenoise_history_save(ed->ctx, ed->saving)
+                            || rename(ed->saving, ed->history)))
             fprintf(stderr, "cmdr: %s: cannot save history\n", ed->history);
     }
     free(flat);
@@ -286,5 +296,6 @@ void editor_close(editor *ed)
     linenoise_context_destroy(ed->ctx);
     linenoise_free(ed->pasted);
     free(ed->history);
+    free(ed->saving);
     free(ed);
 }

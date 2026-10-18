@@ -6,3 +6,5 @@ Files: LICENSE include/linenoise.h include/internal/utf8.h src/linenoise.c
 Patch: src/linenoise.c switches terminal modes with TCSADRAIN, not
        TCSAFLUSH. TCSAFLUSH discarded input not yet read, so a second line
        typed or pasted before the first returned was lost.
+       linenoise_history_save returns -1 when a write or fclose fails;
+       it returned 0, so cmdr could not tell a truncated save from a good one.

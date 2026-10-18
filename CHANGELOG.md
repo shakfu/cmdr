@@ -40,4 +40,6 @@
 
 ### Fixed
 
+- A failed history save no longer truncates `~/.cmdr_history`. linenoise truncated the file before rewriting it and ignored write errors, so a crash or full disk mid-save emptied the history. cmdr now saves to `~/.cmdr_history.tmp` and renames it over the old file only after a complete write; the vendored linenoise patch is noted in `thirdparty/linenoise/VENDOR`.
+
 - `files` on an empty directory passed NULL to `qsort`, which is undefined behaviour.

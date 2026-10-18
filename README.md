@@ -36,6 +36,8 @@ The REPL starts with a line such as `cmdr 0.1.0 (prelude: standard)`, or the pre
 Errors go to stderr; the exit status is nonzero if any line failed. Lines starting with `#`, including a `#!/usr/bin/env cmdr` shebang, are comments.
 A line ending in an unescaped `|` continues on the next line; blank and
 comment lines inside a continuation are skipped.
+Quotes and blocks cannot span lines otherwise: write a newline as `\n`, and
+end a line inside a block with `|` to continue it.
 
 ## Composition
 
@@ -121,7 +123,7 @@ List commands accept lists or newline-separated text; in text, a final newline e
 
 **`try`** returns the block's result, or FALLBACK if it fails at run time. Its arity is checked first, so a typo or a missing input is an error, not a fallback. `each { try { read } "" }` reads each file or substitutes empty text.
 
-**`run`** resolves PROGRAM through PATH and passes arguments unchanged. `run` supplies empty stdin; `run-in` supplies TEXT. Output is returned after the program exits. A nonzero exit status, such as `grep` without matches, fails the stage.
+**`run`** resolves PROGRAM through PATH and passes arguments unchanged. `run` supplies empty stdin; `run-in` supplies TEXT. Output is returned after the program exits. A nonzero exit status, such as `grep` without matches, fails the stage. The program's stderr is not captured; it goes to cmdr's stderr.
 
 Text is bytes in the C locale. Files and program output containing NUL bytes are rejected.
 

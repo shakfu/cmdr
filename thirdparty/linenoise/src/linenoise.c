@@ -3164,7 +3164,8 @@ int linenoise_history_save(linenoise_context_t *ctx, const char *filename) {
         }
         fputc('\n', fp);
     }
-    fclose(fp);
+    int failed = ferror(fp);
+    if (fclose(fp) || failed) return -1;
     return 0;
 }
 
