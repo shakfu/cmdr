@@ -5,6 +5,7 @@ import re
 import shutil
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import tomllib
 import unittest
@@ -617,6 +618,32 @@ class Commands(unittest.TestCase):
             prelude.write_text('')
             result = run('--user', '-c', 'probe-twice', env={**os.environ, 'HOME': home})
             self.assertEqual((result.returncode, result.stdout), (0, 'probed probed\n'), result.stderr)
+
+    def test_mk_ext(self):
+        # CMake also builds a fresh skeleton and runs its tests: ext_mk-ext-skeleton_test.
+        script = ROOT / 'scripts' / 'mk_ext.py'
+        def run(*args):
+            return subprocess.run([sys.executable, str(script), *args],
+                                  capture_output=True, text=True, timeout=20)
+        with tempfile.TemporaryDirectory() as root:
+            result = run('my-ext', '--root', root)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            target = Path(root) / 'my-ext'
+            self.assertEqual(sorted(str(p.relative_to(target)) for p in target.rglob('*')),
+                             ['README.md', 'my-ext.c', 'my-ext.cmdr', 'tests', 'tests/test.cmdr'])
+            self.assertIn('const cmdr cmdr_ext_my_ext =', (target / 'my-ext.c').read_text())
+            # An existing directory is left as it is.
+            (target / 'README.md').write_text('mine\n')
+            result = run('my-ext', '--root', root)
+            self.assertEqual(result.returncode, 1)
+            self.assertIn('already exists', result.stderr)
+            self.assertEqual((target / 'README.md').read_text(), 'mine\n')
+            for name in ['My', '1x', 'a_b', 'a--b', '-a', 'a-', 'a b']:
+                with self.subTest(name=name):
+                    result = run('--root', root, '--', name)
+                    self.assertEqual(result.returncode, 2)
+                    self.assertIn('invalid name', result.stderr)
+                    self.assertFalse((Path(root) / name).exists())
 
     @unittest.skipUnless(CLASH, 'CMDR_CLASH_BIN is not set')
     def test_extension_collisions(self):

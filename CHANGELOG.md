@@ -32,6 +32,8 @@
 
 - **Extensions in `ext/NAME/`.** Each holds C commands, `.cmdr` definitions, a `README.md`, and `tests/`, and the build compiles them into `cmdr`. `make test` runs each `tests/*.cmdr` with `cmdr` and builds each `tests/*.c` against the extension. `help` shows C commands with `ext/NAME:` before the docstring. An extension command that reuses an existing name stops startup. A shadowed name would silently change prelude definitions, which bind names when defined. Extension scripts run before the prelude, because `--user` replaces it. See [README.md](README.md#extensions) and [ext/env](ext/env/README.md).
 
+- `scripts/mk_ext.py NAME` creates a skeleton extension that builds and passes its tests.
+
 - `cmdr_session_source` runs a script held in memory, as `cmdr_session_load` runs one from a file.
 
 - `libcmdr.a` and an embedding API in `include/cmdr.h`, restoring what [docs/dev/minimal.md](docs/dev/minimal.md) removed. `help`, `def`, `load`, and the prelude moved from `src/main.c` into `cmdr_session`, since the prelude is `def`s and a host cannot use it without them. `cmdr_command.user` is passed to `cmdr_fn` as a new second parameter. A session takes the host's table, so a host can omit the primitives. See [docs/dev/scenarios-of-use.md](docs/dev/scenarios-of-use.md).

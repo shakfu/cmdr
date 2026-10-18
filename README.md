@@ -207,6 +207,8 @@ An extension adds C commands to the `cmdr` executable without editing `src/main.
 - `README.md`: what the extension does. The build fails without it.
 - `tests/`: at least one `*.cmdr` or `*.c` file; configure fails without one. `make test` runs each `.cmdr` file with `cmdr`, in `tests/`, and fails at its first failing line. Each `.c` file is a program linked with the extension's sources and `libcmdr.a`, for checks a script cannot make, such as error messages. Configuring with `-DCMDR_BUILD_TESTS=OFF` skips both.
 
+`scripts/mk_ext.py NAME` creates `ext/NAME/` with these files and a command `NAME TEXT`, which returns TEXT. The skeleton builds and passes its tests, so edit from there. It refuses an existing directory. `make test` builds a fresh skeleton, so a template change that breaks it fails there.
+
 [ext/env](ext/env/README.md) is an example:
 
 ```c
