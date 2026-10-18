@@ -620,7 +620,8 @@ class Commands(unittest.TestCase):
             self.assertEqual((result.returncode, result.stdout), (0, 'probed probed\n'), result.stderr)
 
     def test_mk_ext(self):
-        # CMake also builds a fresh skeleton and runs its tests: ext_mk-ext-skeleton_test.
+        # CMake also builds a fresh skeleton with --c-test and runs its tests:
+        # ext_mk-ext-skeleton_test and ext_mk-ext-skeleton_test_mk-ext-skeleton.
         script = ROOT / 'scripts' / 'mk_ext.py'
         def run(*args):
             return subprocess.run([sys.executable, str(script), *args],
@@ -632,6 +633,11 @@ class Commands(unittest.TestCase):
             self.assertEqual(sorted(str(p.relative_to(target)) for p in target.rglob('*')),
                              ['README.md', 'my-ext.c', 'my-ext.cmdr', 'tests', 'tests/test.cmdr'])
             self.assertIn('const cmdr cmdr_ext_my_ext =', (target / 'my-ext.c').read_text())
+            # --c-test adds a C test program.
+            result = run('c-ext', '--root', root, '--c-test')
+            self.assertEqual(result.returncode, 0, result.stderr)
+            test = Path(root) / 'c-ext' / 'tests' / 'test_c-ext.c'
+            self.assertIn('extern const cmdr cmdr_ext_c_ext;', test.read_text())
             # An existing directory is left as it is.
             (target / 'README.md').write_text('mine\n')
             result = run('my-ext', '--root', root)
@@ -843,7 +849,8 @@ class Commands(unittest.TestCase):
         source = ("# note | x\n"
                   "def shout { (s) upper $s | text \"a\\tb\" 'x y' }\n"
                   "list 1 -2.5 a1 | each { gt 0 }\n"
-                  "text a#b \\| c\n")
+                  "text a#b \\| c\n"
+                  "num-seq 1 3 | re-replace x '(a)' '\\1' | str-pad-left 3 0\n")
         expected = [
             [('# note | x', 'cmdrComment')],
             [('def', 'cmdrKeyword'), ('shout', 'cmdrDefName'), ('s', 'cmdrParam'),
@@ -853,6 +860,10 @@ class Commands(unittest.TestCase):
             [('list', 'cmdrCommand'), ('1', 'cmdrNumber'), ('-2.5', 'cmdrNumber'),
              ('a1', ''), ('each', 'cmdrCommand'), ('gt', 'cmdrCommand'), ('0', 'cmdrNumber')],
             [('text', 'cmdrCommand'), ('a#b', ''), ('\\|', 'cmdrEscape'), ('c', '')],
+            # Extension commands are hyphenated; single quotes keep backslashes.
+            [('num-seq', 'cmdrCommand'), ('1', 'cmdrNumber'), ('re-replace', 'cmdrCommand'),
+             ("'(a)'", 'cmdrString'), ("'\\1'", 'cmdrString'), ('str-pad-left', 'cmdrCommand'),
+             ('3', 'cmdrNumber')],
         ]
         with tempfile.TemporaryDirectory() as directory:
             sample, out = Path(directory) / 'sample.cmdr', Path(directory) / 'groups'

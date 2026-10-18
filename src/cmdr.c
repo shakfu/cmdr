@@ -46,7 +46,12 @@ cmdr_value cmdr_text(const char *text, size_t n)
 
 void cmdr_push(cmdr_value *list, cmdr_value item)
 {
-    list->items = cmdr_realloc(list->items, list->count + 1, sizeof(*list->items));
+    if (list->count >= list->capacity) {
+        /* SIZE_MAX makes cmdr_realloc report the overflow. */
+        size_t capacity = list->count < 4 ? 4 : list->count > SIZE_MAX / 2 ? SIZE_MAX : list->count * 2;
+        list->items = cmdr_realloc(list->items, capacity, sizeof(*list->items));
+        list->capacity = capacity;
+    }
     list->items[list->count++] = item;
 }
 

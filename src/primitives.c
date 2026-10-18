@@ -49,7 +49,7 @@ static int require_text(const cmdr_value *v, char **error)
     return v->kind == CMDR_TEXT ? 0 : cmdr_error(error, "expected text");
 }
 
-static int natural(const cmdr_value *v, size_t *value, char **error)
+int cmdr_natural(const cmdr_value *v, size_t *value, char **error)
 {
     if (require_text(v, error)) return 1;
     const char *p = v->text;
@@ -140,7 +140,14 @@ COMMAND(replace_command)
     return finish(&b, result);
 }
 
-static int number(const char *text, double *value, char **error)
+cmdr_value cmdr_number_value(double value)
+{
+    char text[64];
+    snprintf(text, sizeof(text), "%.17g", value);
+    return cmdr_text(text, strlen(text));
+}
+
+int cmdr_number(const char *text, double *value, char **error)
 {
     char *end;
     errno = 0;
@@ -158,17 +165,15 @@ static int arithmetic(char op, size_t argc, const cmdr_value *argv,
         return cmdr_error(error, "arithmetic expects %s numbers",
                           binary ? "exactly two" : "at least two");
     double value, operand;
-    if (number(argv[0].text, &value, error)) return 1;
+    if (cmdr_number(argv[0].text, &value, error)) return 1;
     for (size_t i = 1; i < argc; ++i) {
-        if (number(argv[i].text, &operand, error)) return 1;
+        if (cmdr_number(argv[i].text, &operand, error)) return 1;
         if (op == '/' && operand == 0) return cmdr_error(error, "division by zero");
         value = op == '+' ? value + operand : op == '-' ? value - operand
               : op == '*' ? value * operand : value / operand;
         if (!isfinite(value)) return cmdr_error(error, "arithmetic overflow");
     }
-    char text[64];
-    snprintf(text, sizeof(text), "%.17g", value);
-    *result = cmdr_text(text, strlen(text));
+    *result = cmdr_number_value(value);
     return 0;
 }
 COMMAND(add_command) { return arithmetic('+', argc, argv, result, error); }
@@ -184,7 +189,7 @@ static int compare(enum comparison op, size_t argc, const cmdr_value *argv,
     static const char *phrases[] = {"less than", "greater than", "at most", "at least"};
     if (argc != 2) return cmdr_error(error, "usage: %s NUMBER LIMIT", names[op]);
     double a, b;
-    if (number(argv[0].text, &a, error) || number(argv[1].text, &b, error)) return 1;
+    if (cmdr_number(argv[0].text, &a, error) || cmdr_number(argv[1].text, &b, error)) return 1;
     int holds = op == LT ? a < b : op == GT ? a > b : op == LE ? a <= b : a >= b;
     if (!holds)
         return cmdr_error(error, "%s: %s is not %s %s", names[op], argv[0].text,
@@ -378,7 +383,7 @@ static int bytes(int drop, size_t argc, const cmdr_value *argv,
 {
     if (argc != 2) return cmdr_error(error, "usage: %s TEXT N", drop ? "drop" : "take");
     size_t n = strlen(argv[0].text), count;
-    if (natural(&argv[1], &count, error)) return 1;
+    if (cmdr_natural(&argv[1], &count, error)) return 1;
     if (count > n) count = n;
     *result = drop ? cmdr_text(argv[0].text + count, n - count) : cmdr_text(argv[0].text, count);
     return 0;
@@ -511,7 +516,7 @@ static int collection(enum operation op, size_t argc, const cmdr_value *argv,
         return cmdr_error(error, "usage: %s LIST_OR_LINES%s", names[op],
                           op == FILTER ? " SUBSTRING" : extra ? " N" : "");
     size_t limit = 0;
-    if ((op == HEAD || op == TAIL) && natural(&argv[1], &limit, error)) return 1;
+    if ((op == HEAD || op == TAIL) && cmdr_natural(&argv[1], &limit, error)) return 1;
     if (op == FILTER && require_text(&argv[1], error)) return 1;
     cmdr_value list;
     if (as_list(&argv[0], &list, error)) return 1;
@@ -523,7 +528,7 @@ static int collection(enum operation op, size_t argc, const cmdr_value *argv,
     double unused;
     for (size_t i = 0; op != HEAD && op != TAIL && i < list.count; ++i)
         if (require_text(&list.items[i], error)
-            || (op == SORT_N && number(list.items[i].text, &unused, error))) {
+            || (op == SORT_N && cmdr_number(list.items[i].text, &unused, error))) {
             cmdr_free(&list);
             return 1;
         }

@@ -79,6 +79,8 @@ a,c
 
 ## Commands
 
+These are the primitives, in [src/primitives.c](src/primitives.c). Extensions add commands named after them, such as `re-find` and `num-seq`; see [Extensions](#extensions).
+
 | Commands | Behavior |
 | --- | --- |
 | `text [ARG ...]` | Join arguments with spaces |
@@ -165,7 +167,7 @@ Put definitions in a file, such as `ext.cmdr`, and run `load ext.cmdr` in a sess
 
 ## Adding commands
 
-Write a command in C only when it cannot be composed. The build produces `libcmdr.a`, with the API in [include/cmdr.h](include/cmdr.h). A host puts its commands in a table in front of the primitives in [src/primitives.c](src/primitives.c), where they shadow them, and opens a session on it:
+Write a command in C only when it cannot be composed. For the `cmdr` executable, write an [extension](#extensions). This section is for a host that embeds cmdr. The build produces `libcmdr.a`, with the API in [include/cmdr.h](include/cmdr.h). A host puts its commands in a table in front of the primitives in [src/primitives.c](src/primitives.c), where they shadow them, and opens a session on it:
 
 ```c
 static int initial(const cmdr *repl, void *user, size_t argc, const cmdr_value *argv,
@@ -207,7 +209,7 @@ An extension adds C commands to the `cmdr` executable without editing `src/main.
 - `README.md`: what the extension does. The build fails without it.
 - `tests/`: at least one `*.cmdr` or `*.c` file; configure fails without one. `make test` runs each `.cmdr` file with `cmdr`, in `tests/`, and fails at its first failing line. Each `.c` file is a program linked with the extension's sources and `libcmdr.a`, for checks a script cannot make, such as error messages. Configuring with `-DCMDR_BUILD_TESTS=OFF` skips both.
 
-`scripts/mk_ext.py NAME` creates `ext/NAME/` with these files and a command `NAME TEXT`, which returns TEXT. The skeleton builds and passes its tests, so edit from there. It refuses an existing directory. `make test` builds a fresh skeleton, so a template change that breaks it fails there.
+`scripts/mk_ext.py NAME` creates `ext/NAME/` with these files and a command `NAME TEXT`, which returns TEXT. The skeleton builds and passes its tests, so edit from there. `--c-test` also creates `tests/test_NAME.c`. It refuses an existing directory. `make test` builds a fresh skeleton, so a template change that breaks it fails there.
 
 [ext/env](ext/env/README.md) is an example:
 
@@ -218,6 +220,21 @@ static const cmdr_command commands[] = {
 };
 const cmdr cmdr_ext_env = {commands, sizeof(commands) / sizeof(commands[0]), NULL};
 ```
+
+Each command is named NAME or starts with `NAME-`, as `re-find` does. This keeps names from colliding with each other and with later primitives.
+
+The extensions in `ext/`:
+
+| Extension | Commands |
+|-|-|
+| [env](ext/env/README.md) | Environment variables |
+| [fs](ext/fs/README.md) | Path tests, sizes, times, `fs-mkdir`, `fs-remove`, `fs-move` |
+| [num](ext/num/README.md) | `num-seq`, modulo, rounding |
+| [re](ext/re/README.md) | Regex extraction, splitting, and replacement |
+| [str](ext/str/README.md) | Byte offsets, repetition, padding, reversal |
+| [time](ext/time/README.md) | The current time, and strftime formatting |
+
+Extension C code can use `cmdr_number`, `cmdr_number_value`, and `cmdr_natural` to parse and print numbers as primitives do. Test programs include `tests/ext_check.h` for `CHECK`, `expect`, and `expect_error`.
 
 `help` shows an extension's C commands with `ext/NAME:` before the docstring. Its definitions show their own docs.
 

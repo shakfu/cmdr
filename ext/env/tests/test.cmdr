@@ -3,4 +3,4 @@ env PATH | nonempty
 not CMDR_TEST_UNSET { env }
 env-or CMDR_TEST_UNSET fallback | equals fallback
 env-or PATH none | not { equals none }
-path-dirs | nonempty | keep { empty } | empty
+env-path-dirs | nonempty | keep { empty } | empty

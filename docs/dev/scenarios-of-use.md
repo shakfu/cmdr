@@ -1,6 +1,6 @@
 # Scenarios of use
 
-Where embedding cmdr in another program, or building a domain-specific language (DSL) on it, would be useful, and what blocks each case today. Written 2026-10-18 against the working tree on `2f49ed2`. Updated the same day against `14c6615` plus the restored library, which addresses the embedding gaps. Every cmdr example marked "Output" was re-run against that build; C sketches were not compiled.
+Where embedding cmdr in another program, or building a domain-specific language (DSL) on it, would be useful, and what blocks each case today. Written 2026-10-18 against the working tree on `2f49ed2`. Updated the same day against `14c6615` plus the restored library, which addresses the embedding gaps. Updated again against the extensions in `ext/`, which close the regex-capture and environment gaps. Every cmdr example marked "Output" was re-run against that build; C sketches were not compiled.
 
 ## Terms
 
@@ -103,9 +103,16 @@ Output: `3`, `cache db`, `850`.
 
   - `read` loads the whole file. Logs larger than memory do not work, and there is no streaming or follow mode.
 
-  - `matches` only tests. There is no capture group or regex replace, so a field is reached by position (`nth 4`) rather than by pattern.
+  - `matches` only tests, so the prelude alone reaches a field by position (`nth 4`). `ext/re` reaches it by pattern:
 
-- Verdict: useful today for files that fit in memory. A capture primitive, such as `match TEXT REGEX` returning its groups as a list, would remove most positional code.
+    ```text
+    read app.log | keep { matches ' ERROR ' } | each { re-groups ' ERROR ([a-z]+)' | nth 2 } | distinct | unwords
+    read app.log | re-all 'slow [0-9]+' | each { re-find '[0-9]+' } | max
+    ```
+
+    Output: `cache db`, `850`.
+
+- Verdict: useful today for files that fit in memory.
 
 ### D2. Small tabular data
 
@@ -147,7 +154,7 @@ Output (with `echo` in place of the compiler): `cc -c src/a.c -o a.o`, then `cc 
 
   - Steps run one at a time. There is no dependency tracking or out-of-date check, which `make` provides.
 
-  - There is no environment access except `run printenv NAME`.
+  - `env NAME` in `ext/env` reads the environment; before it, only `run printenv NAME` did.
 
 - Verdict: useful for release steps that are not builds (tag, package, upload). For compiling, `make` or `ninja` is the better tool; cmdr adds nothing over them.
 
@@ -183,7 +190,8 @@ Output: `3`. The second line fails:
 | All primitives always present | E2 | `cmdr_pure`; `effects` flag for `load` and `prelude-effects.cmdr` | Done |
 | No per-line memory or time limit | E2 | Allocation budget per session; needs error returns, as above | Open |
 | `double` numbers | E3 | Integer path in `arithmetic` when both operands are integers | Open |
-| No regex capture | D1 | `match TEXT REGEX` returning groups | Open |
+| No regex capture | D1 | `re-groups TEXT REGEX` in `ext/re` | Done |
+| No environment access | D3 | `env NAME` in `ext/env` | Done |
 | `run` stderr not captured | D3 | `run` variant returning stdout and stderr | Open |
 | Whole-file `read` | D1 | Line-at-a-time reading; changes the value model, so last | Open |
 

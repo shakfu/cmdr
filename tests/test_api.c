@@ -202,6 +202,29 @@ static void out_of_memory(void)
     CHECK(exhaust(NULL) == 1);
 }
 
+/* cmdr_push grows lists from {0}, from a whole allocation with capacity 0,
+ * and from a clone; ASan reports a write past any of them. */
+static void lists(void)
+{
+    enum { N = 1000 };
+    cmdr_value grown = {.kind = CMDR_LIST};
+    for (int i = 0; i < N; ++i) cmdr_push(&grown, cmdr_text("x", 1));
+    CHECK(grown.count == N && grown.capacity >= N);
+    cmdr_value whole = {.kind = CMDR_LIST, .count = 3};
+    whole.items = cmdr_realloc(NULL, 3, sizeof(*whole.items));
+    for (int i = 0; i < 3; ++i) whole.items[i] = cmdr_text("w", 1);
+    cmdr_push(&whole, cmdr_text("v", 1));
+    CHECK(whole.count == 4 && !strcmp(whole.items[3].text, "v"));
+    cmdr_value copy;
+    char *error = NULL;
+    CHECK(!cmdr_clone(&grown, &copy, &error));
+    for (int i = 0; i < N; ++i) cmdr_push(&copy, cmdr_text("y", 1));
+    CHECK(copy.count == 2 * N && !strcmp(copy.items[2 * N - 1].text, "y"));
+    cmdr_free(&grown);
+    cmdr_free(&whole);
+    cmdr_free(&copy);
+}
+
 /* Each thread nests a chain of defs and meets the other at the bottom, so
  * both are deep at once. A shared depth would exceed the limit. */
 enum { CHAIN = 100 };
@@ -271,6 +294,7 @@ int main(void)
     scripts();
     sandbox();
     out_of_memory();
+    lists();
     threads();
     puts("test_api: ok");
     return 0;

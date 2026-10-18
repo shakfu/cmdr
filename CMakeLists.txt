@@ -190,7 +190,7 @@ if(CMDR_BUILD_TESTS)
   set(CMDR_TEST_TARGETS cmdr test_ext_probe test_ext_clash)
   # Each extension's tests/: BINARY runs each .cmdr file, which fails at its
   # first failing line; each .c file is a program linked with the extension's
-  # sources. Appends programs to CMDR_TEST_TARGETS.
+  # sources, with tests/ext_check.h. Appends programs to CMDR_TEST_TARGETS.
   function(cmdr_add_extension_tests binary)
     foreach(dir IN LISTS ARGN)
       get_filename_component(name "${dir}" NAME)
@@ -206,6 +206,7 @@ if(CMDR_BUILD_TESTS)
         if(file MATCHES "[.]c$")
           add_executable(${test} "${file}" ${sources})
           target_link_libraries(${test} PRIVATE cmdr_static)
+          target_include_directories(${test} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/tests")
           add_test(NAME ${test} COMMAND ${test})
           list(APPEND CMDR_TEST_TARGETS ${test})
         else()
@@ -224,7 +225,7 @@ if(CMDR_BUILD_TESTS)
     set(CMDR_SKELETON "${CMAKE_CURRENT_BINARY_DIR}/skeleton")
     file(REMOVE_RECURSE "${CMDR_SKELETON}")
     execute_process(COMMAND "${Python3_EXECUTABLE}" "${CMDR_MK_EXT}" mk-ext-skeleton
-                            --root "${CMDR_SKELETON}"
+                            --root "${CMDR_SKELETON}" --c-test
                     OUTPUT_QUIET RESULT_VARIABLE status)
     if(status)
       message(FATAL_ERROR "scripts/mk_ext.py failed: ${status}")

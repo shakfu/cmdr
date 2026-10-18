@@ -1,0 +1,11 @@
+# Each line must succeed; cmdr stops at the first that fails. cmdr runs this
+# in ext/fs/tests, so these checks only read; test_fs.c changes files.
+fs-exists test.cmdr | equals test.cmdr
+fs-is-file test.cmdr
+fs-is-dir .
+not test.cmdr { fs-is-dir }
+not . { fs-is-file }
+not no-such-path { fs-exists }
+fs-dirs .. | filter tests | join '' | equals ../tests
+fs-size test.cmdr | gt 0
+fs-mtime test.cmdr | gt 1000000000

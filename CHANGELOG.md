@@ -28,11 +28,19 @@
 
 - Each test method is a CTest test, read from `tests/test_cmdr.py` at configure time, and `make test` runs them in parallel.
 
+- `docs/dev/scenarios-of-use.md` marks regex capture and environment access done, through `ext/re` and `ext/env`, and shows D1 log triage with `re-groups`.
+
 ### Added
 
 - **Extensions in `ext/NAME/`.** Each holds C commands, `.cmdr` definitions, a `README.md`, and `tests/`, and the build compiles them into `cmdr`. `make test` runs each `tests/*.cmdr` with `cmdr` and builds each `tests/*.c` against the extension. `help` shows C commands with `ext/NAME:` before the docstring. An extension command that reuses an existing name stops startup. A shadowed name would silently change prelude definitions, which bind names when defined. Extension scripts run before the prelude, because `--user` replaces it. See [README.md](README.md#extensions) and [ext/env](ext/env/README.md).
 
-- `scripts/mk_ext.py NAME` creates a skeleton extension that builds and passes its tests.
+- Extensions `re`, `num`, `fs`, `time`, and `str`. Each covers a gap a `def` cannot fill: `matches` returns no captures, a `def` cannot loop N times, and no primitive calls `stat`. Every command starts with its extension's name, so a later primitive cannot collide with it. `time-local` and `time-utc` take `[EPOCH] FORMAT` over `FORMAT [EPOCH]`, so a piped time is formatted: `fs-mtime f | time-local %F`. See [README.md](README.md#extensions).
+
+- `cmdr_number`, `cmdr_number_value`, and `cmdr_natural` parse and print numbers as primitives do, for extension code.
+
+- `tests/ext_check.h` gives extension test programs `CHECK`, `expect`, and `expect_error`.
+
+- `scripts/mk_ext.py NAME` creates a skeleton extension that builds and passes its tests. `--c-test` adds a C test program.
 
 - `cmdr_session_source` runs a script held in memory, as `cmdr_session_load` runs one from a file.
 
@@ -72,6 +80,8 @@
 - `def NAME BLOCK [DOC]`: `help` shows DOC, and the usage column shows the block's parameters, such as `exts DIR`.
 
 ### Fixed
+
+- `cmdr_push` doubles a list's allocation when full, tracked in the new field `cmdr_value.capacity`. It reallocated per item, so building N items copied O(N^2) items wherever `realloc` moved the block. 10^7 items timed out under AddressSanitizer. A capacity of 0 means exactly `count`, so a host that allocates a list whole leaves it 0.
 
 - `tests/test_api.c` builds on macOS, which has no `sem_timedwait`. The thread test now meets on a mutex and condition variable.
 

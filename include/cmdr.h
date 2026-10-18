@@ -15,13 +15,15 @@ typedef struct cmdr_code cmdr_code;
 /* An owned value: text without NUL bytes, a list of values, or a block. A
  * block's text is its source, "(a b) pipeline" or "pipeline"; its items are
  * the values it captured; code is its compiled form, shared by copies. {0} is
- * none. */
+ * none. capacity is the slots allocated in items, kept by cmdr_push; 0 means
+ * exactly count, as for a list allocated whole. */
 typedef struct cmdr_value {
     cmdr_kind kind;
     char *text;
     struct cmdr_value *items;
     size_t count;
     cmdr_code *code;
+    size_t capacity;
 } cmdr_value;
 
 typedef struct cmdr cmdr;
@@ -65,13 +67,20 @@ void cmdr_set_out_of_memory(void (*handler)(void *data, size_t size), void *data
 char *cmdr_strndup(const char *text, size_t n);
 
 cmdr_value cmdr_text(const char *text, size_t n);
-/* Move item into list. */
+/* Move item into list, doubling its capacity when full. */
 void cmdr_push(cmdr_value *list, cmdr_value item);
 void cmdr_free(cmdr_value *value);
 /* Fails on values nested too deeply, which bounds recursion elsewhere. */
 int cmdr_clone(const cmdr_value *value, cmdr_value *out, char **error);
 /* Write text as is and list items each followed by a newline. */
 void cmdr_render(const cmdr_value *value, FILE *out);
+
+/* Parse a finite number, or fail with "invalid finite number: TEXT". */
+int cmdr_number(const char *text, double *value, char **error);
+/* A number as arithmetic results print, with 17 significant digits. */
+cmdr_value cmdr_number_value(double value);
+/* Parse nonnegative decimal integer text, or fail. */
+int cmdr_natural(const cmdr_value *value, size_t *n, char **error);
 
 /* A short, one-line, malloc-owned description of value for a message. */
 char *cmdr_describe(const cmdr_value *value);

@@ -1,0 +1,17 @@
+# Each line must succeed; cmdr stops at the first that fails.
+str-index hello l | equals 2
+str-index hello '' | equals 0
+not hello { str-index z }
+str-repeat ab 3 | equals ababab
+str-repeat ab 0 | equals ''
+str-repeat '' 1000000000 | equals ''
+str-pad-left 7 3 0 | equals 007
+str-pad-right ab 4 . | equals ab..
+str-pad-left abcd 2 | equals abcd
+str-pad-left x 3 | equals '  x'
+str-chars abc | join , | equals a,b,c
+str-chars '' | empty
+str-reverse abc | equals cba
+str-reverse '' | equals ''
+list a b c | str-reverse | join , | equals c,b,a
+list | str-reverse | empty
