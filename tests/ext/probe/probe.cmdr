@@ -1,0 +1,1 @@
+def probe-twice { () probe | with { (p) text $p $p } } "Return probed twice"

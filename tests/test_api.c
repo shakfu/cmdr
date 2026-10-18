@@ -4,7 +4,6 @@
 
 #include <errno.h>
 #include <pthread.h>
-#include <semaphore.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -208,20 +207,27 @@ static void out_of_memory(void)
 enum { CHAIN = 100 };
 
 typedef struct {
-    sem_t *mine, *theirs;
     int status;
 } party;
+
+/* A mutex and condition, not semaphores: macOS lacks sem_timedwait. */
+static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t arrival = PTHREAD_COND_INITIALIZER;
+static int arrived;
 
 static int meet(const cmdr *repl, void *user, size_t argc, const cmdr_value *argv,
                 cmdr_value *result, char **error)
 {
-    party *p = user;
     struct timespec deadline;
     clock_gettime(CLOCK_REALTIME, &deadline);
     deadline.tv_sec += 10;
-    sem_post(p->mine);
-    while (sem_timedwait(p->theirs, &deadline))
-        if (errno != EINTR) return cmdr_error(error, "meet: the other thread did not arrive");
+    pthread_mutex_lock(&lock);
+    ++arrived;
+    pthread_cond_broadcast(&arrival);
+    while (arrived < 2 && pthread_cond_timedwait(&arrival, &lock, &deadline) != ETIMEDOUT) {}
+    int met = arrived >= 2;
+    pthread_mutex_unlock(&lock);
+    if (!met) return cmdr_error(error, "meet: the other thread did not arrive");
     *result = cmdr_text("met", 3);
     return 0;
 }
@@ -251,15 +257,11 @@ static void *deep(void *arg)
 
 static void threads(void)
 {
-    sem_t one, two;
-    CHECK(!sem_init(&one, 0, 0) && !sem_init(&two, 0, 0));
-    party a = {&one, &two, -1}, b = {&two, &one, -1};
+    party a = {-1}, b = {-1};
     pthread_t ta, tb;
     CHECK(!pthread_create(&ta, NULL, deep, &a) && !pthread_create(&tb, NULL, deep, &b));
     CHECK(!pthread_join(ta, NULL) && !pthread_join(tb, NULL));
     CHECK(a.status == 0 && b.status == 0);
-    sem_destroy(&one);
-    sem_destroy(&two);
 }
 
 int main(void)

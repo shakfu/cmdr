@@ -1,0 +1,4 @@
+# A prelude definition, a primitive, and one new name.
+def first { upper }
+def take { upper }
+def novel { upper }

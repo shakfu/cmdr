@@ -1,5 +1,6 @@
 #define _POSIX_C_SOURCE 200809L
 #include "cmdr.h"
+#include "extensions.h"
 
 #include <errno.h>
 #include <stdlib.h>
@@ -39,6 +40,90 @@ static int load(cmdr_session *session, const char *path)
     fflush(stdout);
     if (status) fprintf(stderr, "cmdr: %s\n", error);
     free(error);
+    return status;
+}
+
+/* Each extension's commands as a layer, in front of the next and then the
+ * primitives. Copies put "ext/NAME: " before docstrings, so help tells them
+ * from primitives. */
+static cmdr *chain_extensions(void)
+{
+    size_t n = 0;
+    while (cmdr_extensions[n].commands) ++n;
+    cmdr *layers = cmdr_realloc(NULL, n + 1, sizeof(*layers));
+    for (size_t i = 0; i < n; ++i) {
+        const cmdr *table = cmdr_extensions[i].commands;
+        const char *origin = cmdr_extensions[i].origin;
+        cmdr_command *commands = cmdr_realloc(NULL, table->count, sizeof(*commands));
+        for (size_t j = 0; j < table->count; ++j) {
+            const char *doc = table->commands[j].docstring ? table->commands[j].docstring : "";
+            char *tagged = cmdr_realloc(NULL, strlen(origin) + strlen(doc) + sizeof(": "), 1);
+            sprintf(tagged, "%s: %s", origin, doc);
+            commands[j] = table->commands[j];
+            commands[j].docstring = tagged;
+        }
+        layers[i] = (cmdr){commands, table->count, &layers[i + 1]};
+    }
+    layers[n] = cmdr_primitives;
+    return layers;
+}
+
+static void free_extensions(cmdr *layers)
+{
+    for (size_t i = 0; cmdr_extensions[i].commands; ++i) {
+        for (size_t j = 0; j < layers[i].count; ++j)
+            free((char *)layers[i].commands[j].docstring);
+        free((cmdr_command *)layers[i].commands);
+    }
+    free(layers);
+}
+
+/* Run the ext/ scripts before the prelude, which --user replaces, so they
+ * cannot depend on it. ends[k + 1] is the newest definition after script k. */
+static int load_extensions(cmdr_session *session, const cmdr ***ends)
+{
+    size_t n = 0;
+    while (cmdr_extension_scripts[n].path) ++n;
+    *ends = cmdr_realloc(NULL, n + 1, sizeof(**ends));
+    (*ends)[0] = cmdr_session_commands(session)->parent;
+    for (size_t k = 0; k < n; ++k) {
+        char *error;
+        int status = cmdr_session_source(session, cmdr_extension_scripts[k].source,
+                                         cmdr_extension_scripts[k].path, &error);
+        fflush(stdout);
+        if (status) fprintf(stderr, "cmdr: %s\n", error);
+        free(error);
+        if (status) return 1;
+        (*ends)[k + 1] = cmdr_session_commands(session)->parent;
+    }
+    return 0;
+}
+
+/* Fail on a command whose name is also in front of it or behind it, since
+ * prelude definitions would bind to the wrong one. */
+static int check(cmdr_session *session, const cmdr *layer, const char *origin)
+{
+    int status = 0;
+    for (size_t i = 0; i < layer->count; ++i) {
+        const cmdr_command *command = &layer->commands[i];
+        if (cmdr_find(cmdr_session_commands(session), command->name) != command
+            || cmdr_find(layer->parent, command->name)) {
+            fprintf(stderr, "cmdr: %s: '%s' is already a command\n", origin, command->name);
+            status = 1;
+        }
+    }
+    return status;
+}
+
+/* Check the ext/ C commands, then each script's definitions, after the prelude. */
+static int check_extensions(cmdr_session *session, const cmdr *layers, const cmdr **ends)
+{
+    int status = 0;
+    for (size_t i = 0; cmdr_extensions[i].commands; ++i)
+        status |= check(session, &layers[i], cmdr_extensions[i].origin);
+    for (size_t k = 0; cmdr_extension_scripts[k].path; ++k)
+        for (const cmdr *layer = ends[k + 1]; layer != ends[k]; layer = layer->parent)
+            status |= check(session, layer, cmdr_extension_scripts[k].path);
     return status;
 }
 
@@ -120,8 +205,11 @@ int main(int argc, char **argv)
         path = cmdr_realloc(NULL, strlen(home) + sizeof("/.cmdr/prelude.cmdr"), 1);
         sprintf(path, "%s/.cmdr/prelude.cmdr", home);
     }
-    cmdr_session *session = cmdr_session_open(&cmdr_primitives, 1, stdout);
-    int status = load(session, path);
+    cmdr *layers = chain_extensions();
+    cmdr_session *session = cmdr_session_open(layers, 1, stdout);
+    const cmdr **ends = NULL;
+    int status = load_extensions(session, &ends) || load(session, path)
+        || check_extensions(session, layers, ends);
     if (!status) {
         if (argc == 3) {
             status = evaluate(session, argv[2]);
@@ -136,6 +224,8 @@ int main(int argc, char **argv)
         }
     }
     cmdr_session_close(session);
+    free_extensions(layers);
+    free(ends);
     free(path);
     return status ? 1 : 0;
 }

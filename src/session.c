@@ -263,9 +263,10 @@ int cmdr_session_load(cmdr_session *session, FILE *in, const char *path, char **
     return status;
 }
 
-static int load_source(cmdr_session *session, const char *source, const char *name,
-                       char **error)
+int cmdr_session_source(cmdr_session *session, const char *source, const char *name,
+                        char **error)
 {
+    *error = NULL;
     size_t n = strlen(source);
     if (!n) return 0; /* fmemopen may reject an empty buffer. */
     FILE *in = fmemopen((void *)source, n, "r");
@@ -278,8 +279,8 @@ static int load_source(cmdr_session *session, const char *source, const char *na
 int cmdr_session_prelude(cmdr_session *session, char **error)
 {
     *error = NULL;
-    int status = load_source(session, cmdr_prelude_source, "prelude.cmdr", error);
+    int status = cmdr_session_source(session, cmdr_prelude_source, "prelude.cmdr", error);
     if (!status && session->effects)
-        status = load_source(session, cmdr_prelude_effects_source, "prelude-effects.cmdr", error);
+        status = cmdr_session_source(session, cmdr_prelude_effects_source, "prelude-effects.cmdr", error);
     return status;
 }

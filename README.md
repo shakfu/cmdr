@@ -198,6 +198,31 @@ The second argument of `cmdr_session_open` allows effects. With it, the session 
 
 Allocation failure exits the process with status 1. `cmdr_set_out_of_memory` installs a handler that runs first, to log or save host state.
 
+## Extensions
+
+An extension adds C commands to the `cmdr` executable without editing `src/main.c`. Each is a directory `ext/NAME/`:
+
+- `*.c`: the commands. One file defines `const cmdr cmdr_ext_NAME`, with `-` in NAME as `_`.
+- `*.cmdr`: definitions, embedded by the build and run in name order.
+- `README.md`: what the extension does. The build fails without it.
+- `tests/`: at least one `*.cmdr` or `*.c` file; configure fails without one. `make test` runs each `.cmdr` file with `cmdr`, in `tests/`, and fails at its first failing line. Each `.c` file is a program linked with the extension's sources and `libcmdr.a`, for checks a script cannot make, such as error messages. Configuring with `-DCMDR_BUILD_TESTS=OFF` skips both.
+
+[ext/env](ext/env/README.md) is an example:
+
+```c
+static const cmdr_command commands[] = {
+    {.name = "env", .usage = "env NAME", .docstring = "Return an environment variable",
+     .run = env_command, .text = 1},
+};
+const cmdr cmdr_ext_env = {commands, sizeof(commands) / sizeof(commands[0]), NULL};
+```
+
+`help` shows an extension's C commands with `ext/NAME:` before the docstring. Its definitions show their own docs.
+
+Extension names must be new. cmdr fails at startup if an extension command, in C or `.cmdr`, has the name of a built-in, a primitive, another extension's command, or a prelude definition. Prelude definitions bind names when defined, so a shadowed name would change them silently. A session `def` may still shadow an extension command.
+
+Extension scripts run before the prelude, so they may use only primitives and extension commands. `--user` replaces the prelude, and a script that used it would fail only there. Extensions are part of the executable, not `libcmdr`; an embedding host adds commands as in [Adding commands](#adding-commands).
+
 ## Installing
 
 ```sh
@@ -211,6 +236,6 @@ Syntax highlighting for Vim, Sublime Text, and VS Code is in [editors/](editors/
 
 ## Checks
 
-`make test` builds cmdr and runs [tests/test_cmdr.py](tests/test_cmdr.py) with Python 3, in parallel. It runs [tests/test_api.c](tests/test_api.c) against both libraries, then installs into `build/staged` and builds [tests/consumer](tests/consumer) against it. Each test method is a CTest test, so `ctest --test-dir build -R test_editor` runs only the editor tests. Tests that need the editor show as skipped in a build without it. Configure with `-DCMDR_BUILD_TESTS=OFF` to build without Python.
+`make test` builds cmdr and runs [tests/test_cmdr.py](tests/test_cmdr.py) with Python 3, in parallel. It also runs each extension's `tests/`. It runs [tests/test_api.c](tests/test_api.c) against both libraries, then installs into `build/staged` and builds [tests/consumer](tests/consumer) against it. Each test method is a CTest test, so `ctest --test-dir build -R test_editor` runs only the editor tests. Tests that need the editor show as skipped in a build without it. Configure with `-DCMDR_BUILD_TESTS=OFF` to build without Python.
 
 Design history: [docs/dev/minimal.md](docs/dev/minimal.md), [docs/dev/blocks.md](docs/dev/blocks.md).

@@ -118,6 +118,10 @@ int cmdr_session_eval(cmdr_session *session, const char *line, cmdr_value *resul
 /* Evaluate a script's pipelines, printing values to the session's out. Stops
  * at the first failure, with *error starting "PATH:LINE: ". */
 int cmdr_session_load(cmdr_session *session, FILE *in, const char *path, char **error);
+/* Evaluate a script held in memory, as cmdr_session_load does; name is its
+ * path in messages. */
+int cmdr_session_source(cmdr_session *session, const char *source, const char *name,
+                        char **error);
 /* Load the standard prelude, embedded by the build: src/prelude.cmdr, then
  * src/prelude-effects.cmdr in a session with effects. */
 int cmdr_session_prelude(cmdr_session *session, char **error);

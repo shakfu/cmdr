@@ -12,6 +12,8 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 BINARY = Path(os.environ.get("CMDR_BIN", ROOT / "cmdr")).resolve()
+CLASH = os.environ.get("CMDR_CLASH_BIN")
+PROBE = os.environ.get("CMDR_PROBE_BIN")
 
 
 def quote(text):
@@ -589,6 +591,46 @@ class Commands(unittest.TestCase):
         self.assertEqual(names[names.index('sh-in'):names.index('sh-in') + 3], ['sh-in', 'zz', 'upper'])
         self.run_line('def f { upper } { lower }', error='usage: def NAME BLOCK [DOC]')
         self.run_line('def f { upper } a b', error='usage: def NAME BLOCK [DOC]')
+
+    @unittest.skipUnless(PROBE, 'CMDR_PROBE_BIN is not set')
+    def test_extensions(self):
+        # tests/ext/probe: a C command, and a definition built on it.
+        def run(*args, env=None):
+            return subprocess.run([PROBE, *args], capture_output=True, text=True,
+                                  timeout=20, env=env)
+        result = run('-c', 'probe-twice')
+        self.assertEqual((result.returncode, result.stdout), (0, 'probed probed\n'), result.stderr)
+        # help tags C commands with their extension; definitions keep their docs.
+        result = run('-c', 'help')
+        self.assertRegex(result.stdout, r'(?m)^probe +ext/probe: Return probed$')
+        self.assertRegex(result.stdout, r'(?m)^probe-twice +Return probed twice$')
+        self.assertRegex(result.stdout, r'(?m)^split TEXT SEPARATOR +Split into a list$')
+        # Extension commands precede primitives; their definitions precede the prelude's.
+        names = [line.split()[0] for line in result.stdout.splitlines()[:-2]]
+        self.assertEqual(names[3], 'probe')
+        self.assertLess(names.index('run-in'), names.index('probe-twice'))
+        self.assertLess(names.index('probe-twice'), names.index('first'))
+        # Extension scripts do not depend on the prelude, which --user replaces.
+        with tempfile.TemporaryDirectory() as home:
+            prelude = Path(home) / '.cmdr' / 'prelude.cmdr'
+            prelude.parent.mkdir()
+            prelude.write_text('')
+            result = run('--user', '-c', 'probe-twice', env={**os.environ, 'HOME': home})
+            self.assertEqual((result.returncode, result.stdout), (0, 'probed probed\n'), result.stderr)
+
+    @unittest.skipUnless(CLASH, 'CMDR_CLASH_BIN is not set')
+    def test_extension_collisions(self):
+        result = subprocess.run([CLASH, '-c', 'text ran'], capture_output=True,
+                                text=True, timeout=20)
+        self.assertEqual((result.returncode, result.stdout), (1, ''))
+        self.assertEqual(result.stderr.splitlines(), [
+            "cmdr: ext/clash: 'split' is already a command",
+            "cmdr: ext/clash: 'help' is already a command",
+            "cmdr: ext/clash: 'last' is already a command",
+            "cmdr: ext/clash: 'fresh' is already a command",
+            "cmdr: ext/clash/clash.cmdr: 'take' is already a command",
+            "cmdr: ext/clash/clash.cmdr: 'first' is already a command",
+        ])
 
     def test_load(self):
         with tempfile.TemporaryDirectory() as directory:
