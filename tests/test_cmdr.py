@@ -315,6 +315,70 @@ class Commands(unittest.TestCase):
             with self.subTest(source=source):
                 self.run_line(source, error=error)
 
+    def test_with_fold_or(self):
+        cases = [
+            # with binds a computed value, so it can be any argument.
+            ("text foobar | with { (s) length bar | with { (n) drop $s $n } }", 'bar\n'),
+            ("list a b | with { (l k) count $l | text $k } items", '2 items\n'),
+            # A mismatch passes through with, so keep still treats it as false.
+            ("list a b | keep { with { equals a } } | join ,", 'a\n'),
+            ("list 1 2 3 | fold 0 { (a x) add $a $x }", '6\n'),
+            ("list a b c | fold '' { (a x) list $x $a | join '' }", 'cba\n'),
+            ("list 1 2 | fold 0 { (a x k) add $a $x $k } 10", '23\n'),
+            ("list | fold init { (a x) text $a $x }", 'init\n'),
+            ('text "1\n2\n" | fold 0 { (a x) add $a $x }', '3\n'),
+            # or falls back only on a mismatch.
+            ("text a | or { equals b } other", 'other\n'),
+            ("text a | or { equals a } other", 'a\n'),
+            ("or { () equals a b } other", 'other\n'),
+            ("text a | check { equals a } 'not a'", 'a\n'),
+            # check keeps the mismatch status, so keep still treats it as false.
+            ("list a b | keep { check { equals a } 'not a' } | join ,", 'a\n'),
+        ]
+        for source, expected in cases:
+            with self.subTest(source=source):
+                self.run_line(source, expected)
+        errors = [
+            ("text a | with { (x y) text $x $y }", 'with: block takes 2 arguments, got 1'),
+            ("text a | with upper", 'with: expected a block'),
+            ("list 1 2 | fold 0 { (a) add $a 1 }", 'fold: block takes 1 argument, got 2'),
+            ("list 1 x | fold 0 { (a x) add $a $x }", 'fold item 2: invalid finite number: x'),
+            ("list nonexistent | fold 0 { (a x) read $x | text $a }", 'fold item 1: read nonexistent'),
+            # An error is not a mismatch, so or does not hide it.
+            ("text a | or { add 1 } other", 'invalid finite number: a'),
+            ("text a | or { bogus } other", 'unknown command: bogus'),
+            ("or { equals a } other", 'or: block takes 1 argument, got 0'),
+            # check replaces a mismatch message, not an error.
+            ("text b | check { equals a } 'b is not a'", 'cmdr: b is not a\n'),
+            ("text a | check { add 1 } 'never shown'", 'invalid finite number: a'),
+            ("text a | check { equals a } { upper }", 'expected text'),
+        ]
+        for source, error in errors:
+            with self.subTest(source=source):
+                self.run_line(source, error=error)
+
+        # A def's name still prefixes the message.
+        result = self.run_input("def is-a { (s) text $s 'is not a' | with { (m) check $s { equals a } $m } }\n"
+                                "text b | is-a\n")
+        self.assertIn('is-a: b is not a', result.stderr)
+
+    def test_matches_and_sort_n(self):
+        cases = [
+            ("text abc123 | matches '^[a-z]+[0-9]+$'", 'abc123\n'),
+            ("list a1 b c2 | keep { matches '[0-9]' } | join ,", 'a1,c2\n'),
+            ("list 10 9 100 -1 2.5 | sort-n | join ,", '-1,2.5,9,10,100\n'),
+            ('text "10\n9\n" | sort-n', '9\n10\n'),
+            ("list | sort-n | count", '0\n'),
+            ("list | sort | count", '0\n'),
+        ]
+        for source, expected in cases:
+            with self.subTest(source=source):
+                self.run_line(source, expected)
+        self.run_line("text abc | matches '^[0-9]'", error="matches: no match for '^[0-9]'")
+        self.run_line("text abc | not { matches '^[0-9]' }", 'abc\n')
+        self.run_line("text abc | matches '('", error="matches: invalid regex '('")
+        self.run_line("list 1 x | sort-n", error='invalid finite number: x')
+
     def run_input(self, source, *args):
         return subprocess.run([str(BINARY), *args], input=source,
                               capture_output=True, text=True, timeout=20)
@@ -382,6 +446,15 @@ class Commands(unittest.TestCase):
             "list a b c | without b | join ,\n")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout, '15\na,c\n')
+        # A block passed into a def resolves names where it was written.
+        result = self.run_input(
+            "def apply { (b) list x | each $b | join , }\n"
+            "def later { upper }\n"
+            "apply { later }\n"
+            "def upper { text shadowed }\n"
+            "apply { upper }\n")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, 'X\nx shadowed\n')
 
     def test_script_files(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -412,12 +485,69 @@ class Commands(unittest.TestCase):
             ('list a.txt Makefile .gitignore | has-ext | join ,', 'a.txt\n'),
             ('list a b | last', 'b\n'),
             ('text "a\nb\n" | last', 'b\n'),
-            ('list | last', '\n'),
             ('help | filter "Return the last item" | count', '1\n'),
+            ('list a b c | first', 'a\n'),
+            ('list a b c | nth 2', 'b\n'),
+            ('list a b c | init | join ,', 'a,b\n'),
+            ('list a b c | rest | join ,', 'b,c\n'),
+            ('list a b | concat', 'ab\n'),
+            ('list a b | unwords', 'a b\n'),
+            ('list b a b | distinct | join ,', 'a,b\n'),
+            ('list ab bc | reject c | join ,', 'ab\n'),
+            ('list a b | without a | join ,', 'b\n'),
+            ("list a ' ' '' b | compact | join ,", 'a,b\n'),
+            ('list a b | prefix x- | suffix .c | join ,', 'x-a.c,x-b.c\n'),
+            ('list "" a | keep { empty } | count', '1\n'),
+            ('list 1 2 3 | any { gt 2 } | count', '3\n'),
+            ('list 1 2 3 | all { gt 0 } | count', '3\n'),
+            ('list | all { gt 0 } | count', '0\n'),
+            ('list 1 2 3.5 | sum', '6.5\n'),
+            ('list | sum', '0\n'),
+            ('list 2 3 4 | product', '24\n'),
+            ('list 3 10 2 | max', '10\n'),
+            ('list 3 10 2 | min', '2\n'),
+            ('list 1 2 | mean', '1.5\n'),
+            ('list 1 5 11 | keep { between 2 10 } | join ,', '5\n'),
+            ('text "a  b\tc\nd" | words | join ,', 'a,b,c,d\n'),
+            ('text foobar | starts-with foo', 'foobar\n'),
+            ('text foo | starts-with ""', 'foo\n'),
+            ('text foobar | ends-with bar', 'foobar\n'),
+            ('text foobar | ends-with ""', 'foobar\n'),
+            ('list a.c b.h | keep { ends-with .c } | join ,', 'a.c\n'),
+            ('text foobar | strip-prefix foo', 'bar\n'),
+            ('text foobar | strip-suffix bar', 'foo\n'),
+            ('list dir/a.tar.gz .gitignore Makefile a. | map stem | join ,',
+             'a.tar,.gitignore,Makefile,a\n'),
+            ('text hi | sh-in "tr a-z A-Z"', 'HI\n'),
+            ('sh "echo hi"', 'hi\n'),
         ]
         for source, expected in cases:
             with self.subTest(source=source):
                 self.run_line(source, expected)
+        errors = [
+            ('list a b c | nth 4', 'nth: le: 4 is not at most 3'),
+            ('list a b c | nth 0', 'nth: gt: 0 is not greater than 0'),
+            ('list | init', 'init: nonempty: empty list'),
+            ('list | first', 'first: nonempty: empty list'),
+            ('list | last', 'last: nonempty: empty list'),
+            ('text "" | last', 'last: nonempty: empty text'),
+            ('list 1 2 | any { gt 5 }', 'any: nonempty: empty list'),
+            ('list 1 2 | all { gt 1 }', 'all: empty'),
+            ('list | max', 'max: nonempty: empty list'),
+            ('list 3 x | max', 'max: fold item 2: invalid finite number: x'),
+            ('text fo | starts-with foo', "starts-with: equals: text differs from 'foo'"),
+            ('text ar | ends-with bar', 'ends-with: ge: 2 is not at least 3'),
+            ('text foo | strip-prefix bar', 'strip-prefix: starts-with'),
+        ]
+        for source, error in errors:
+            with self.subTest(source=source):
+                self.run_line(source, error=error)
+        with tempfile.TemporaryDirectory() as directory:
+            a, b = Path(directory) / 'a', Path(directory) / 'b'
+            a.write_text('one\ntwo\n')
+            b.write_text('three\n')
+            self.run_line(f'list {quote(a)} {quote(b)} | cat | count', '3\n')
+            self.run_line(f"grep {quote(a)} '^t'", 'two\n')
         # Prelude defs are lexical: a later def does not change them.
         result = self.run_input("def tail { lower }\nlist a b | last\n")
         self.assertEqual((result.returncode, result.stdout), (0, 'b\n'), result.stderr)
@@ -440,9 +570,9 @@ class Commands(unittest.TestCase):
         names = result.stdout.split()
         self.assertEqual(names[:3], ['help', 'def', 'load'])
         self.assertEqual(names.count('upper'), 1)
-        self.assertLess(names.index('run-in'), names.index('last'))
-        self.assertEqual(names[names.index('last'):names.index('last') + 5],
-                         ['last', 'ext', 'has-ext', 'zz', 'upper'])
+        self.assertLess(names.index('run-in'), names.index('first'))
+        self.assertEqual(names[names.index('first'):names.index('first') + 2], ['first', 'last'])
+        self.assertEqual(names[names.index('sh-in'):names.index('sh-in') + 3], ['sh-in', 'zz', 'upper'])
         self.run_line('def f { upper } { lower }', error='usage: def NAME BLOCK [DOC]')
         self.run_line('def f { upper } a b', error='usage: def NAME BLOCK [DOC]')
 
@@ -567,11 +697,15 @@ class Commands(unittest.TestCase):
             ('text 3 | lt 5', '3\n'),
             ('text 7 | gt 5.5', '7\n'),
             ("list 1 5 9 | keep { (n lo) gt $n $lo } 4 | join ,", '5,9\n'),
+            ('text 5 | le 5', '5\n'),
+            ('text 5 | ge 5', '5\n'),
         ]
         for source, expected in cases:
             with self.subTest(source=source):
                 self.run_line(source, expected)
         self.run_line('text 7 | lt 5', error='lt: 7 is not less than 5')
+        self.run_line('text 6 | le 5', error='le: 6 is not at most 5')
+        self.run_line('text 4 | ge 5', error='ge: 4 is not at least 5')
         self.run_line('text 3 | gt x', error='invalid finite number: x')
         self.run_line("list 1 x | keep { gt 0 }", error='keep item 2: invalid finite number: x')
 

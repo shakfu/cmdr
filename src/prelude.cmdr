@@ -1,6 +1,45 @@
 # Commands composed from the primitives. The build embeds this file, and
 # cmdr runs it at startup. Each def sees only the commands above it.
 
-def last { tail 1 | join "" } "Return the last item"
+# Lists
+def first { nonempty | head 1 | join "" } "Return the first item"
+def last { nonempty | tail 1 | join "" } "Return the last item"
+def nth { (xs n) gt $n 0 | $xs | count | with { (c) le $n $c } | $xs | head $n | last } "Return item N, counting from 1"
+def init { (xs) nonempty $xs | count | sub 1 | with { (n) head $xs $n } } "Drop the last item"
+def rest { (xs) nonempty $xs | count | sub 1 | with { (n) tail $xs $n } } "Drop the first item"
+def concat { join "" } "Join text items without a separator"
+def unlines { join "\n" } "Join text items with newlines"
+def unwords { join " " } "Join text items with spaces"
+def distinct { sort | uniq } "Sort and remove duplicates"
+def reject { (xs t) keep $xs { not { contains $t } } } "Drop items containing TEXT"
+def without { (xs t) keep $xs { not { equals $t } } } "Drop items equal to TEXT"
+def compact { keep { trim | nonempty } } "Drop blank items"
+def prefix { (xs t) each $xs { (s) list $t $s | concat } } "Prepend TEXT to each item"
+def suffix { (xs t) each $xs { (s) list $s $t | concat } } "Append TEXT to each item"
+def empty { not { nonempty } } "Return VALUE if empty text or list"
+def any { (xs b) keep $xs $b | nonempty | $xs } "Return LIST if the block holds for some item"
+def all { (xs b) keep $xs { (x) not $x $b } | empty | $xs } "Return LIST if the block holds for every item"
+
+# Numbers
+def sum { fold 0 { (a x) add $a $x } } "Add the items"
+def product { fold 1 { (a x) mul $a $x } } "Multiply the items"
+def max { (xs) nonempty $xs | first | with { (h) fold $xs $h { (a x) or $a { gt $x } $x } } } "Return the largest number"
+def min { (xs) nonempty $xs | first | with { (h) fold $xs $h { (a x) or $a { lt $x } $x } } } "Return the smallest number"
+def mean { (xs) sum $xs | with { (s) count $xs | with { (n) div $s $n } } } "Return the arithmetic mean"
+def between { (n lo hi) ge $n $lo | le $hi } "Return NUMBER if within LO and HI"
+
+# Text
+def words { replace "\t" " " | replace "\n" " " | split " " | keep { nonempty } } "Split on spaces, tabs, and newlines"
+def starts-with { (s x) $x | length | with { (n) take $s $n | equals $x } | $s } "Return TEXT if it starts with PREFIX"
+def ends-with { (s x) $x | length | with { (b) $s | length | ge $b | sub $b | with { (k) drop $s $k | equals $x } } | $s } "Return TEXT if it ends with SUFFIX"
+def strip-prefix { (s x) starts-with $s $x | $x | length | with { (n) drop $s $n } } "Remove PREFIX from TEXT"
+def strip-suffix { (s x) ends-with $s $x | length | with { (a) $x | length | with { (b) sub $a $b | with { (k) take $s $k } } } } "Remove SUFFIX from TEXT"
+
+# Paths and programs
 def ext { split . | last } "Return the text after the last dot"
 def has-ext { keep { drop 1 | contains . } } "Keep names with a dot after the first byte"
+def stem { basename | with { (b) or { () drop $b 1 | contains . | $b | split . | init | join . } $b } } "Return the basename without its extension"
+def cat { each { read } | concat } "Concatenate files"
+def grep { (f p) read $f | keep { matches $p } } "Return lines of FILE matching REGEX"
+def sh { (c) run sh -c $c } "Run a shell command, returning stdout"
+def sh-in { (t c) run-in $t sh -c $c } "Run a shell command with TEXT on stdin"

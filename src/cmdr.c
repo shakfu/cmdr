@@ -119,6 +119,7 @@ struct cmdr_code {
     size_t refs;
     size_t params;  /* Declared parameters. */
     int declared;   /* The source starts with "(...)", possibly empty. */
+    const cmdr *scope; /* Names in body resolve here, where the block was written. */
     program body;
 };
 
@@ -285,7 +286,7 @@ static int compile_block(const cmdr *repl, const char *text, scope *sc, cmdr_cod
                          char **error)
 {
     cmdr_code *code = cmdr_realloc(NULL, 1, sizeof(*code));
-    *code = (cmdr_code){.refs = 1};
+    *code = (cmdr_code){.refs = 1, .scope = repl};
     size_t outer = sc->count;
     const char *p = text;
     int status = 0;
@@ -444,7 +445,7 @@ int cmdr_block_arity(const cmdr_value *block, size_t argc, char **error)
 }
 
 /* Bind argv to the block's parameters, after its captured values. */
-static int call_block(const cmdr *repl, const cmdr_value *block, const char *name,
+static int call_block(const cmdr_value *block, const char *name,
                       size_t argc, const cmdr_value *argv, cmdr_value *result, char **error)
 {
     *result = (cmdr_value){0};
@@ -460,17 +461,17 @@ static int call_block(const cmdr *repl, const cmdr_value *block, const char *nam
         memcpy(bound + block->count, argv, argc * sizeof(*bound));
         env = bound;
     }
-    int status = evaluate(repl, &code->body, name, input, env, block->count + code->params,
+    int status = evaluate(code->scope, &code->body, name, input, env, block->count + code->params,
                           result, error);
     free(bound);
     return status;
 }
 
-int cmdr_run(const cmdr *repl, const cmdr_value *block, size_t argc,
-             const cmdr_value *argv, cmdr_value *result, char **error)
+int cmdr_run(const cmdr_value *block, size_t argc, const cmdr_value *argv,
+             cmdr_value *result, char **error)
 {
     *error = NULL;
-    return call_block(repl, block, NULL, argc, argv, result, error);
+    return call_block(block, NULL, argc, argv, result, error);
 }
 
 int cmdr_call(const cmdr *repl, const char *name, size_t argc,
@@ -489,7 +490,7 @@ int cmdr_call(const cmdr *repl, const char *name, size_t argc,
                           "(possible cycle in composed commands)", name);
     ++depth;
     int status = command->run ? command->run(repl, argc, argv, result, error)
-        : call_block(command->scope, command->block, name, argc, argv, result, error);
+        : call_block(command->block, name, argc, argv, result, error);
     --depth;
     if (status) cmdr_free(result);
     return status;

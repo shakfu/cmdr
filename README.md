@@ -90,15 +90,18 @@ a,c
 | `add`, `mul` A B [NUMBER ...]; `sub`, `div` A B | Double-precision arithmetic |
 | `list [VALUE ...]`, `lines VALUE` | Build a list; split text into lines |
 | `join VALUE SEPARATOR` | Join text items |
-| `sort`, `uniq`, `count` VALUE | Byte-order sort, adjacent dedup, item count |
+| `sort`, `sort-n`, `uniq`, `count` VALUE | Byte-order or numeric sort, adjacent dedup, item count |
 | `head`, `tail` VALUE N; `filter VALUE TEXT` | Select items |
 | `map VALUE COMMAND [ARG ...]` | Call a command per item |
 | `each VALUE BLOCK [ARG ...]` | Call a block per item |
 | `keep VALUE BLOCK [ARG ...]` | Keep items whose block holds |
 | `not VALUE BLOCK [ARG ...]` | Return VALUE if the block mismatches |
+| `with VALUE BLOCK [ARG ...]` | Call a block with VALUE |
+| `fold VALUE INIT BLOCK [ARG ...]` | Combine items left to right; the block takes the result so far and the item |
 | `try [INPUT] BLOCK FALLBACK` | Return FALLBACK if the block fails |
-| `nonempty VALUE`, `equals TEXT X`, `contains TEXT X`, `lt`/`gt NUMBER X` | Predicates |
-| `last`, `ext`, `has-ext` VALUE | Last item; text after the last dot; names with one. Defined in the prelude |
+| `or [INPUT] BLOCK FALLBACK` | Return FALLBACK if the block mismatches |
+| `check [INPUT] BLOCK MESSAGE` | Mismatch with MESSAGE if the block mismatches |
+| `nonempty VALUE`, `equals TEXT X`, `contains TEXT X`, `matches TEXT REGEX`, `lt`/`gt`/`le`/`ge NUMBER X` | Predicates; REGEX is POSIX extended |
 | `read PATH`, `write VALUE PATH`, `append VALUE PATH` | Files; write and append return VALUE |
 | `files [DIR]`, `basename PATH`, `dirname PATH` | Regular files in DIR, sorted; lexical path parts |
 | `run PROGRAM [ARG ...]`, `run-in TEXT PROGRAM [ARG ...]` | Run a program, returning stdout |
@@ -123,6 +126,8 @@ List commands accept lists or newline-separated text; in text, a final newline e
 
 **`try`** returns the block's result, or FALLBACK if it fails at run time. Its arity is checked first, so a typo or a missing input is an error, not a fallback. `each { try { read } "" }` reads each file or substitutes empty text.
 
+**`or`** is `try` for predicates: only a mismatch selects FALLBACK, and errors propagate. `with` passes a computed value to any argument position: `length $x | with { (n) drop $s $n }`. `check` replaces a mismatch's message, so a composed predicate can report `b is not a` instead of the commands it is built from.
+
 **`run`** resolves PROGRAM through PATH and passes arguments unchanged. `run` supplies empty stdin; `run-in` supplies TEXT. Output is returned after the program exits. A nonzero exit status, such as `grep` without matches, fails the stage. The program's stderr is not captured; it goes to cmdr's stderr.
 
 Text is bytes in the C locale. Files and program output containing NUL bytes are rejected.
@@ -140,10 +145,10 @@ txt
 `keep { drop 1 | contains . }` keeps names with a dot after the first byte, so
 it skips `Makefile` and `.gitignore`. `tail 1 | join ""` takes the last item.
 
-[src/prelude.cmdr](src/prelude.cmdr) names the parts, each built on the ones before:
+[src/prelude.cmdr](src/prelude.cmdr) names the parts, each built on the ones before. It also defines list, number, text, and path commands, such as `nth`, `sum`, `max`, `starts-with`, and `stem`; `help` lists them. These are three of its definitions:
 
 ```
-def last { tail 1 | join "" } "Return the last item"
+def last { nonempty | tail 1 | join "" } "Return the last item"
 def ext { split . | last } "Return the text after the last dot"
 def has-ext { keep { drop 1 | contains . } } "Keep names with a dot after the first byte"
 ```
@@ -164,17 +169,17 @@ Put definitions in a file, such as `ext.cmdr`, and run `load ext.cmdr` in a sess
 Write a command in C only when it cannot be composed. Add it to the `commands` table in [src/main.c](src/main.c), where it shadows the primitives in [src/primitives.c](src/primitives.c). Set `.run` to a `cmdr_fn` from [src/cmdr.h](src/cmdr.h):
 
 ```c
-static int first(const cmdr *repl, size_t argc, const cmdr_value *argv,
+static int initial(const cmdr *repl, size_t argc, const cmdr_value *argv,
                  cmdr_value *result, char **error)
 {
-    if (argc != 1) return cmdr_error(error, "usage: first TEXT");
+    if (argc != 1) return cmdr_error(error, "usage: initial TEXT");
     *result = cmdr_text(argv[0].text, argv[0].text[0] ? 1 : 0);
     return 0;
 }
 
 /* In the commands table: */
-{.name = "first", .usage = "first TEXT", .docstring = "Return the first byte",
- .run = first, .text = 1},
+{.name = "initial", .usage = "initial TEXT", .docstring = "Return the first byte",
+ .run = initial, .text = 1},
 ```
 
 `.text = 1` guarantees text arguments. Arguments are borrowed, including the values a block captured; clone what you keep. The result is owned by the caller. A predicate returns `CMDR_MISMATCH` when it does not hold. Allocation failure exits the process.

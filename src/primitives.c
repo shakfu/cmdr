@@ -6,6 +6,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <math.h>
+#include <regex.h>
 #include <spawn.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -175,21 +176,26 @@ COMMAND(sub_command) { return arithmetic('-', argc, argv, result, error); }
 COMMAND(mul_command) { return arithmetic('*', argc, argv, result, error); }
 COMMAND(div_command) { return arithmetic('/', argc, argv, result, error); }
 
-static int compare(int greater, size_t argc, const cmdr_value *argv,
+enum comparison { LT, GT, LE, GE };
+static int compare(enum comparison op, size_t argc, const cmdr_value *argv,
                    cmdr_value *result, char **error)
 {
-    const char *name = greater ? "gt" : "lt";
-    if (argc != 2) return cmdr_error(error, "usage: %s NUMBER LIMIT", name);
+    static const char *names[] = {"lt", "gt", "le", "ge"};
+    static const char *phrases[] = {"less than", "greater than", "at most", "at least"};
+    if (argc != 2) return cmdr_error(error, "usage: %s NUMBER LIMIT", names[op]);
     double a, b;
     if (number(argv[0].text, &a, error) || number(argv[1].text, &b, error)) return 1;
-    if (greater ? !(a > b) : !(a < b))
-        return cmdr_error(error, "%s: %s is not %s %s", name, argv[0].text,
-                          greater ? "greater than" : "less than", argv[1].text), CMDR_MISMATCH;
+    int holds = op == LT ? a < b : op == GT ? a > b : op == LE ? a <= b : a >= b;
+    if (!holds)
+        return cmdr_error(error, "%s: %s is not %s %s", names[op], argv[0].text,
+                          phrases[op], argv[1].text), CMDR_MISMATCH;
     *result = cmdr_text(argv[0].text, strlen(argv[0].text));
     return 0;
 }
-COMMAND(lt_command) { return compare(0, argc, argv, result, error); }
-COMMAND(gt_command) { return compare(1, argc, argv, result, error); }
+COMMAND(lt_command) { return compare(LT, argc, argv, result, error); }
+COMMAND(gt_command) { return compare(GT, argc, argv, result, error); }
+COMMAND(le_command) { return compare(LE, argc, argv, result, error); }
+COMMAND(ge_command) { return compare(GE, argc, argv, result, error); }
 
 /* Read to the end of file; NUL bytes do not fit the text model. */
 static int slurp(FILE *file, const char *what, cmdr_value *result, char **error)
@@ -329,6 +335,26 @@ COMMAND(contains_command)
     return 0;
 }
 
+/* POSIX extended regular expressions, matched bytewise in the C locale. */
+COMMAND(matches_command)
+{
+    if (argc != 2) return cmdr_error(error, "usage: matches TEXT REGEX");
+    regex_t re;
+    int rc = regcomp(&re, argv[1].text, REG_EXTENDED | REG_NOSUB);
+    if (rc) {
+        char message[128];
+        regerror(rc, &re, message, sizeof(message));
+        return cmdr_error(error, "matches: invalid regex '%s': %s", argv[1].text, message);
+    }
+    rc = regexec(&re, argv[0].text, 0, NULL, 0);
+    regfree(&re);
+    if (rc == REG_NOMATCH)
+        return cmdr_error(error, "matches: no match for '%s'", argv[1].text), CMDR_MISMATCH;
+    if (rc) return cmdr_error(error, "matches: regexec failed");
+    *result = cmdr_text(argv[0].text, strlen(argv[0].text));
+    return 0;
+}
+
 COMMAND(nonempty_command)
 {
     if (argc != 1) return cmdr_error(error, "usage: nonempty VALUE");
@@ -374,6 +400,14 @@ COMMAND(dirname_command) { return path_part(1, argc, argv, result, error); }
 static int by_text(const void *a, const void *b)
 {
     return strcmp(((const cmdr_value *)a)->text, ((const cmdr_value *)b)->text);
+}
+
+/* Items are checked numbers; equal values fall back to byte order. */
+static int by_number(const void *a, const void *b)
+{
+    double x = strtod(((const cmdr_value *)a)->text, NULL);
+    double y = strtod(((const cmdr_value *)b)->text, NULL);
+    return x < y ? -1 : x > y ? 1 : by_text(a, b);
 }
 
 COMMAND(files_command)
@@ -459,11 +493,11 @@ static int like_input(const cmdr_value *input, cmdr_value *result)
     return finish(&b, result);
 }
 
-enum operation { SORT, UNIQ, HEAD, TAIL, FILTER, COUNT };
+enum operation { SORT, SORT_N, UNIQ, HEAD, TAIL, FILTER, COUNT };
 static int collection(enum operation op, size_t argc, const cmdr_value *argv,
                       cmdr_value *result, char **error)
 {
-    static const char *names[] = {"sort", "uniq", "head", "tail", "filter", "count"};
+    static const char *names[] = {"sort", "sort-n", "uniq", "head", "tail", "filter", "count"};
     int extra = op == HEAD || op == TAIL || op == FILTER;
     if (argc != (size_t)(extra ? 2 : 1))
         return cmdr_error(error, "usage: %s LIST_OR_LINES%s", names[op],
@@ -478,9 +512,15 @@ static int collection(enum operation op, size_t argc, const cmdr_value *argv,
         cmdr_free(&list);
         return 0;
     }
-    for (size_t i = 0; (op == SORT || op == UNIQ || op == FILTER) && i < list.count; ++i)
-        if (require_text(&list.items[i], error)) { cmdr_free(&list); return 1; }
-    if (op == SORT) qsort(list.items, list.count, sizeof(*list.items), by_text);
+    double unused;
+    for (size_t i = 0; op != HEAD && op != TAIL && i < list.count; ++i)
+        if (require_text(&list.items[i], error)
+            || (op == SORT_N && number(list.items[i].text, &unused, error))) {
+            cmdr_free(&list);
+            return 1;
+        }
+    if (op == SORT && list.count) qsort(list.items, list.count, sizeof(*list.items), by_text);
+    if (op == SORT_N && list.count) qsort(list.items, list.count, sizeof(*list.items), by_number);
     *result = (cmdr_value){.kind = CMDR_LIST};
     for (size_t i = 0; i < list.count; ++i) {
         cmdr_value *item = &list.items[i];
@@ -496,6 +536,7 @@ static int collection(enum operation op, size_t argc, const cmdr_value *argv,
     return like_input(&argv[0], result);
 }
 COMMAND(sort_command) { return collection(SORT, argc, argv, result, error); }
+COMMAND(sort_n_command) { return collection(SORT_N, argc, argv, result, error); }
 COMMAND(uniq_command) { return collection(UNIQ, argc, argv, result, error); }
 COMMAND(head_command) { return collection(HEAD, argc, argv, result, error); }
 COMMAND(tail_command) { return collection(TAIL, argc, argv, result, error); }
@@ -544,18 +585,18 @@ static int check_body(const char *name, const cmdr_value *body, size_t argc, cha
 }
 
 /* Call block argv[1] with subject, then argv[2..]. */
-static int run_body(const cmdr *repl, const cmdr_value *subject, size_t argc,
+static int run_body(const cmdr_value *subject, size_t argc,
                     const cmdr_value *argv, cmdr_value *out, char **detail)
 {
     cmdr_value *args = cmdr_realloc(NULL, argc - 1, sizeof(*args));
     args[0] = *subject;
     for (size_t i = 2; i < argc; ++i) args[i - 1] = argv[i];
-    int status = cmdr_run(repl, &argv[1], argc - 1, args, out, detail);
+    int status = cmdr_run(&argv[1], argc - 1, args, out, detail);
     free(args);
     return status;
 }
 
-static int per_item(int keep, const cmdr *repl, size_t argc, const cmdr_value *argv,
+static int per_item(int keep, size_t argc, const cmdr_value *argv,
                     cmdr_value *result, char **error)
 {
     const char *name = keep ? "keep" : "each";
@@ -568,7 +609,7 @@ static int per_item(int keep, const cmdr *repl, size_t argc, const cmdr_value *a
     for (size_t i = 0; i < list.count && !status; ++i) {
         cmdr_value item;
         char *detail;
-        int failed = run_body(repl, &list.items[i], argc, argv, &item, &detail);
+        int failed = run_body(&list.items[i], argc, argv, &item, &detail);
         if (keep && failed == CMDR_MISMATCH) {
             /* Drop the item. */
         } else if (failed) {
@@ -588,8 +629,8 @@ static int per_item(int keep, const cmdr *repl, size_t argc, const cmdr_value *a
     cmdr_free(&list);
     return !status && keep ? like_input(&argv[0], result) : status;
 }
-COMMAND(each_command) { return per_item(0, repl, argc, argv, result, error); }
-COMMAND(keep_command) { return per_item(1, repl, argc, argv, result, error); }
+COMMAND(each_command) { return per_item(0, argc, argv, result, error); }
+COMMAND(keep_command) { return per_item(1, argc, argv, result, error); }
 
 COMMAND(not_command)
 {
@@ -597,7 +638,7 @@ COMMAND(not_command)
     if (check_body("not", &argv[1], argc - 1, error)) return 1;
     cmdr_value out;
     char *detail;
-    int failed = run_body(repl, &argv[0], argc, argv, &out, &detail);
+    int failed = run_body(&argv[0], argc, argv, &out, &detail);
     cmdr_free(&out);
     int status = failed;
     if (failed == CMDR_MISMATCH) {
@@ -612,15 +653,79 @@ COMMAND(not_command)
     return status;
 }
 
+COMMAND(with_command)
+{
+    if (argc < 2) return cmdr_error(error, "usage: with VALUE BLOCK [ARG ...]");
+    if (check_body("with", &argv[1], argc - 1, error)) return 1;
+    return run_body(&argv[0], argc, argv, result, error); /* Status passes through. */
+}
+
+COMMAND(fold_command)
+{
+    if (argc < 3) return cmdr_error(error, "usage: fold LIST_OR_LINES INIT BLOCK [ARG ...]");
+    cmdr_value list;
+    if (check_body("fold", &argv[2], argc - 1, error) || as_list(&argv[0], &list, error))
+        return 1;
+    if (cmdr_clone(&argv[1], result, error)) { cmdr_free(&list); return 1; }
+    /* The block takes the accumulator, the item, then argv[3..]. */
+    cmdr_value *args = cmdr_realloc(NULL, argc - 1, sizeof(*args));
+    for (size_t i = 3; i < argc; ++i) args[i - 1] = argv[i];
+    int status = 0;
+    for (size_t i = 0; i < list.count && !status; ++i) {
+        args[0] = *result;
+        args[1] = list.items[i];
+        cmdr_value next;
+        char *detail;
+        if (cmdr_run(&argv[2], argc - 1, args, &next, &detail))
+            status = cmdr_error(error, "fold item %zu: %s", i + 1, detail);
+        else if (next.kind == CMDR_NONE)
+            status = cmdr_error(error, "fold item %zu: block returned no value", i + 1);
+        else {
+            cmdr_free(result);
+            *result = next;
+        }
+        free(detail);
+    }
+    free(args);
+    cmdr_free(&list);
+    return status;
+}
+
 COMMAND(try_command)
 {
     if (argc != 2 && argc != 3) return cmdr_error(error, "usage: try [INPUT] BLOCK FALLBACK");
     const cmdr_value *body = &argv[argc - 2];
     if (check_body("try", body, argc - 2, error)) return 1;
     char *detail;
-    int failed = cmdr_run(repl, body, argc - 2, argv, result, &detail);
+    int failed = cmdr_run(body, argc - 2, argv, result, &detail);
     free(detail);
     return failed ? cmdr_clone(&argv[argc - 1], result, error) : 0;
+}
+
+/* As try, but only a mismatch selects FALLBACK; errors propagate. */
+COMMAND(or_command)
+{
+    if (argc != 2 && argc != 3) return cmdr_error(error, "usage: or [INPUT] BLOCK FALLBACK");
+    const cmdr_value *body = &argv[argc - 2];
+    if (check_body("or", body, argc - 2, error)) return 1;
+    int failed = cmdr_run(body, argc - 2, argv, result, error);
+    if (failed != CMDR_MISMATCH) return failed;
+    free(*error);
+    *error = NULL;
+    return cmdr_clone(&argv[argc - 1], result, error);
+}
+
+/* As or, but a mismatch fails with MESSAGE in place of the block's own. */
+COMMAND(check_command)
+{
+    if (argc != 2 && argc != 3) return cmdr_error(error, "usage: check [INPUT] BLOCK MESSAGE");
+    const cmdr_value *body = &argv[argc - 2];
+    if (check_body("check", body, argc - 2, error) || require_text(&argv[argc - 1], error))
+        return 1;
+    int failed = cmdr_run(body, argc - 2, argv, result, error);
+    if (failed != CMDR_MISMATCH) return failed;
+    free(*error);
+    return cmdr_error(error, "%s", argv[argc - 1].text), CMDR_MISMATCH;
 }
 
 static int save(const char *mode, const char *name, size_t argc, const cmdr_value *argv,
@@ -656,13 +761,17 @@ static const cmdr_command commands[] = {
     TEXT("div", "div A B", "Divide A by B", div_command),
     TEXT("lt", "lt NUMBER LIMIT", "Return NUMBER if less than LIMIT", lt_command),
     TEXT("gt", "gt NUMBER LIMIT", "Return NUMBER if greater than LIMIT", gt_command),
+    TEXT("le", "le NUMBER LIMIT", "Return NUMBER if at most LIMIT", le_command),
+    TEXT("ge", "ge NUMBER LIMIT", "Return NUMBER if at least LIMIT", ge_command),
     TEXT("equals", "equals TEXT EXPECTED", "Return TEXT if equal to EXPECTED", equals_command),
     TEXT("contains", "contains TEXT SUBSTRING", "Return TEXT if it contains SUBSTRING", contains_command),
+    TEXT("matches", "matches TEXT REGEX", "Return TEXT if it matches the extended REGEX", matches_command),
     VALUE("nonempty", "nonempty VALUE", "Return VALUE unless empty text or list", nonempty_command),
     VALUE("list", "list [VALUE ...]", "Construct a list", list_command),
     VALUE("lines", "lines LIST_OR_LINES", "Split text into a list of lines", lines_command),
     VALUE("join", "join LIST_OR_LINES SEPARATOR", "Join text items", join_command),
     VALUE("sort", "sort LIST_OR_LINES", "Sort text items by byte order", sort_command),
+    VALUE("sort-n", "sort-n LIST_OR_LINES", "Sort numbers in ascending order", sort_n_command),
     VALUE("uniq", "uniq LIST_OR_LINES", "Remove adjacent duplicate text items", uniq_command),
     VALUE("head", "head LIST_OR_LINES N", "Keep the first N items", head_command),
     VALUE("tail", "tail LIST_OR_LINES N", "Keep the last N items", tail_command),
@@ -672,7 +781,11 @@ static const cmdr_command commands[] = {
     VALUE("each", "each LIST_OR_LINES BLOCK [ARG ...]", "Call a block per item", each_command),
     VALUE("keep", "keep LIST_OR_LINES BLOCK [ARG ...]", "Keep items whose block succeeds", keep_command),
     VALUE("not", "not VALUE BLOCK [ARG ...]", "Return VALUE if the block mismatches", not_command),
+    VALUE("with", "with VALUE BLOCK [ARG ...]", "Call a block with VALUE", with_command),
+    VALUE("fold", "fold LIST_OR_LINES INIT BLOCK [ARG ...]", "Combine items, left to right", fold_command),
     VALUE("try", "try [INPUT] BLOCK FALLBACK", "Return FALLBACK if the block fails", try_command),
+    VALUE("or", "or [INPUT] BLOCK FALLBACK", "Return FALLBACK if the block mismatches", or_command),
+    VALUE("check", "check [INPUT] BLOCK MESSAGE", "Mismatch with MESSAGE if the block mismatches", check_command),
     TEXT("read", "read PATH", "Read a text file", read_command),
     VALUE("write", "write VALUE PATH", "Replace a file, returning VALUE", write_command),
     VALUE("append", "append VALUE PATH", "Append to a file, returning VALUE", append_command),

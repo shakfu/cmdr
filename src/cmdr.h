@@ -39,7 +39,6 @@ typedef struct {
     cmdr_fn run;           /* Set run or block. */
     int text;              /* run accepts only text arguments. */
     const cmdr_value *block; /* A compiled block, as def makes. */
-    const cmdr *scope;     /* Resolve the block's commands here. */
 } cmdr_command;
 
 /* A command table searched before its parent. */
@@ -73,9 +72,10 @@ int cmdr_call(const cmdr *repl, const char *name, size_t argc,
               const cmdr_value *argv, cmdr_value *result, char **error);
 /* Evaluate a line, which has no input. */
 int cmdr_eval(const cmdr *repl, const char *line, cmdr_value *result, char **error);
-/* Call a block with argv bound to its parameters. */
-int cmdr_run(const cmdr *repl, const cmdr_value *block, size_t argc,
-             const cmdr_value *argv, cmdr_value *result, char **error);
+/* Call a block with argv bound to its parameters. Its commands resolve where
+ * it was written, not in the caller. */
+int cmdr_run(const cmdr_value *block, size_t argc, const cmdr_value *argv,
+             cmdr_value *result, char **error);
 /* Fail unless the block takes exactly argc arguments. */
 int cmdr_block_arity(const cmdr_value *block, size_t argc, char **error);
 

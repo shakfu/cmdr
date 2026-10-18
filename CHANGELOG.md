@@ -20,9 +20,22 @@
 
 - `help` lists built-in commands, then primitives, then definitions oldest first. It listed definitions first, newest first.
 
+- A block resolves command names where it was written, and `cmdr_run` no longer takes a registry. `cmdr_command.scope` is removed: a block's compiled code carries its scope. See Fixed.
+
+- `last` fails with a mismatch on an empty list or text; it returned empty text, which could not be told apart from an empty last item. `first` does the same, and so does `ext` on empty text.
+
 - Each test method is a CTest test, read from `tests/test_cmdr.py` at configure time, and `make test` runs them in parallel.
 
 ### Added
+
+- Primitives `with`, `fold`, `or`, `check`, `matches`, `sort-n`, `le`, and `ge`. `with` passes a computed value to any argument position, which a pipe cannot. `or` is `try` restricted to mismatches, so a conditional does not hide errors as `try` does. `check` replaces a mismatch's message; errors pass through. `matches` uses POSIX extended regular expressions. `ge` and `le` are primitives rather than `not { lt }`, so a failure reads `ge: 4 is not at least 5`.
+
+  ```text
+  text foobar | with { (s) length foo | with { (n) drop $s $n } }
+  list 3 10 2 | fold 0 { (a x) or $a { gt $x } $x }
+  ```
+
+- The prelude defines list commands (`first`, `nth`, `init`, `rest`, `concat`, `unlines`, `unwords`, `distinct`, `reject`, `without`, `compact`, `prefix`, `suffix`, `empty`, `any`, `all`), numbers (`sum`, `product`, `max`, `min`, `mean`, `between`), text (`words`, `starts-with`, `ends-with`, `strip-prefix`, `strip-suffix`), and paths and programs (`stem`, `cat`, `grep`, `sh`, `sh-in`). Each is composed from primitives.
 
 - Version 0.1.0, set in `CMakeLists.txt`. `cmdr --version` prints it, and the REPL starts with `cmdr 0.1.0 (prelude: standard)`, in bold cyan where the prompt has color.
 
@@ -39,6 +52,10 @@
 - `def NAME BLOCK [DOC]`: `help` shows DOC, and the usage column shows the block's parameters, such as `exts DIR`.
 
 ### Fixed
+
+- A block passed into a def ran its commands in the def's scope, not where it was written. Its names were checked against the caller's commands but resolved against the def's, so `apply { later }` failed with `unknown command: later` when `later` was defined after `apply`, and a session `def upper` was silently bypassed in favor of the primitive. Each line now compiles against the definitions current at its start, and its blocks keep that scope.
+
+- `sort` on an empty list passed NULL to `qsort`, which is undefined behaviour.
 
 - A failed history save no longer truncates `~/.cmdr_history`. linenoise truncated the file before rewriting it and ignored write errors, so a crash or full disk mid-save emptied the history. cmdr now saves to `~/.cmdr_history.tmp` and renames it over the old file only after a complete write; the vendored linenoise patch is noted in `thirdparty/linenoise/VENDOR`.
 

@@ -119,13 +119,12 @@ static int def_command(const cmdr *repl, size_t argc, const cmdr_value *argv,
     struct { cmdr layer; cmdr_command command; cmdr_value block; } *node
         = cmdr_realloc(NULL, 1, sizeof(*node));
     if (cmdr_clone(&argv[1], &node->block, error)) { free(node); free(docstring); return 1; }
-    /* Lexical scope: the body sees commands as they were at definition, so
-     * naming itself calls the command it shadows. */
+    /* The block resolves names where its line compiled, before this layer,
+     * so naming itself calls the command it shadows. */
     node->command = (cmdr_command){.name = cmdr_strndup(name, strlen(name)),
                                    .usage = usage_of(name, body),
                                    .docstring = docstring,
-                                   .block = &node->block,
-                                   .scope = session.parent};
+                                   .block = &node->block};
     node->layer = (cmdr){&node->command, 1, session.parent};
     session.parent = &node->layer;
     return 0;
@@ -162,7 +161,9 @@ static int evaluate(const char *line, const char *where)
 {
     cmdr_value value;
     char *error;
-    int status = cmdr_eval(&session, line, &value, &error);
+    /* Compile against the layers as they are now: blocks keep this scope, and
+     * a later def must not change what they call. */
+    int status = cmdr_eval(session.parent, line, &value, &error);
     fflush(stdout); /* Keep errors in order with earlier output. */
     if (status) {
         fprintf(stderr, "cmdr: %s%s\n", where ? where : "", error ? error : "command failed");
