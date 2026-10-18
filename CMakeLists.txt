@@ -8,26 +8,82 @@ set(CMAKE_C_EXTENSIONS OFF)
 # Commands share one callback signature, so most ignore some parameters.
 add_compile_options(-Wall -Wextra -Wpedantic -Wno-unused-parameter)
 
-# Embed src/prelude.cmdr as a NUL-terminated array; C11 has no #embed.
-set(CMDR_PRELUDE "${CMAKE_CURRENT_SOURCE_DIR}/src/prelude.cmdr")
-set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMDR_PRELUDE}")
-file(READ "${CMDR_PRELUDE}" CMDR_PRELUDE_HEX HEX)
-string(REGEX REPLACE "(..)" "0x\\1," CMDR_PRELUDE_BYTES "${CMDR_PRELUDE_HEX}")
-file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/prelude.c.tmp"
-     "const char cmdr_prelude_source[] = {${CMDR_PRELUDE_BYTES}0};\n")
+# Embed each prelude file as a NUL-terminated array; C11 has no #embed.
+set(CMDR_PRELUDE_C "")
+foreach(name IN ITEMS prelude prelude-effects)
+  set(file "${CMAKE_CURRENT_SOURCE_DIR}/src/${name}.cmdr")
+  set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${file}")
+  file(READ "${file}" hex HEX)
+  string(REGEX REPLACE "(..)" "0x\\1," bytes "${hex}")
+  string(REPLACE "-" "_" symbol "cmdr_${name}_source")
+  string(APPEND CMDR_PRELUDE_C "const char ${symbol}[] = {${bytes}0};\n")
+endforeach()
+file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/prelude.c.tmp" "${CMDR_PRELUDE_C}")
 # Copy only on change, so reconfiguring does not force a rebuild.
 configure_file("${CMAKE_CURRENT_BINARY_DIR}/prelude.c.tmp"
                "${CMAKE_CURRENT_BINARY_DIR}/prelude.c" COPYONLY)
 
-add_executable(cmdr src/main.c src/cmdr.c src/primitives.c
-               "${CMAKE_CURRENT_BINARY_DIR}/prelude.c")
-target_compile_definitions(cmdr PRIVATE CMDR_VERSION="${PROJECT_VERSION}")
+include(GNUInstallDirs)
+
+# libcmdr.a and libcmdr.so: the interpreter, primitives, sessions, and
+# prelude, for embedding. Both use one set of position-independent objects.
+option(CMDR_SHARED "Build libcmdr.so as well as libcmdr.a" ON)
+add_library(cmdr_objects OBJECT src/cmdr.c src/primitives.c src/session.c
+            "${CMAKE_CURRENT_BINARY_DIR}/prelude.c")
+set_target_properties(cmdr_objects PROPERTIES POSITION_INDEPENDENT_CODE ON)
+target_include_directories(cmdr_objects PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
+add_library(cmdr_static STATIC $<TARGET_OBJECTS:cmdr_objects>)
+set(CMDR_LIBRARIES cmdr_static)
+if(CMDR_SHARED)
+  add_library(cmdr_shared SHARED $<TARGET_OBJECTS:cmdr_objects>)
+  # Before 1.0, a minor version may break the API.
+  set_target_properties(cmdr_shared PROPERTIES VERSION ${PROJECT_VERSION}
+    SOVERSION ${PROJECT_VERSION_MAJOR}.${PROJECT_VERSION_MINOR})
+  list(APPEND CMDR_LIBRARIES cmdr_shared)
+endif()
 
 # isfinite() and related helpers may live in libm.
 find_library(CMDR_LIBM m)
+foreach(target IN LISTS CMDR_LIBRARIES)
+  string(REPLACE "cmdr_" "" kind "${target}")
+  set_target_properties(${target} PROPERTIES OUTPUT_NAME cmdr EXPORT_NAME ${kind})
+  target_include_directories(${target} PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
+  if(CMDR_LIBM)
+    target_link_libraries(${target} PUBLIC m)
+  endif()
+endforeach()
+
+add_executable(cmdr src/main.c)
+target_link_libraries(cmdr PRIVATE cmdr_static)
+target_compile_definitions(cmdr PRIVATE CMDR_VERSION="${PROJECT_VERSION}")
+
+# find_package(cmdr) gives cmdr::static and cmdr::shared; pkg-config gives cmdr.
+install(TARGETS cmdr RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+install(TARGETS ${CMDR_LIBRARIES} EXPORT cmdrTargets
+        ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+        LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR})
+install(FILES include/cmdr.h DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+set(CMDR_CMAKE_DIR "${CMAKE_INSTALL_LIBDIR}/cmake/cmdr")
+install(EXPORT cmdrTargets NAMESPACE cmdr:: DESTINATION ${CMDR_CMAKE_DIR})
+file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/cmdrConfig.cmake"
+     "include(\"\${CMAKE_CURRENT_LIST_DIR}/cmdrTargets.cmake\")\n")
+include(CMakePackageConfigHelpers)
+write_basic_package_version_file("${CMAKE_CURRENT_BINARY_DIR}/cmdrConfigVersion.cmake"
+                                 COMPATIBILITY SameMinorVersion)
+install(FILES "${CMAKE_CURRENT_BINARY_DIR}/cmdrConfig.cmake"
+              "${CMAKE_CURRENT_BINARY_DIR}/cmdrConfigVersion.cmake"
+        DESTINATION ${CMDR_CMAKE_DIR})
+# The .pc file finds its prefix from its own location, so --prefix works.
+file(RELATIVE_PATH CMDR_PC_PREFIX "/${CMAKE_INSTALL_LIBDIR}/pkgconfig" "/")
+set(CMDR_PC_LIBS_PRIVATE "")
 if(CMDR_LIBM)
-  target_link_libraries(cmdr PRIVATE ${CMDR_LIBM})
+  set(CMDR_PC_LIBS_PRIVATE "-lm")
 endif()
+configure_file(cmake/cmdr.pc.in "${CMAKE_CURRENT_BINARY_DIR}/cmdr.pc" @ONLY)
+install(FILES "${CMAKE_CURRENT_BINARY_DIR}/cmdr.pc"
+        DESTINATION ${CMAKE_INSTALL_LIBDIR}/pkgconfig)
 
 # Line editing for the interactive REPL; without it, cmdr reads plain lines.
 option(CMDR_EDITOR "Build line editing with the vendored linenoise" ON)
@@ -70,6 +126,31 @@ if(CMDR_BUILD_TESTS)
   else()
     message(STATUS "Python 3 not found: skipping the test_cmdr checks")
   endif()
+  # Embedding checks; threads exercise the per-thread call depth.
+  find_package(Threads REQUIRED)
+  set(CMDR_TEST_TARGETS cmdr)
+  foreach(target IN LISTS CMDR_LIBRARIES)
+    string(REPLACE "cmdr_" "test_api_" test "${target}")
+    add_executable(${test} tests/test_api.c)
+    target_link_libraries(${test} PRIVATE ${target} Threads::Threads)
+    add_test(NAME ${test} COMMAND ${test})
+    set_tests_properties(${test} PROPERTIES TIMEOUT 60)
+    list(APPEND CMDR_TEST_TARGETS ${test})
+  endforeach()
+  # Install into the build tree, then build and run tests/consumer against it.
+  set(CMDR_STAGED "${CMAKE_BINARY_DIR}/staged")
+  add_test(NAME install COMMAND ${CMAKE_COMMAND} --install ${CMAKE_BINARY_DIR}
+                                --prefix ${CMDR_STAGED})
+  add_test(NAME consumer
+    COMMAND ${CMAKE_COMMAND} -E env
+            "PKG_CONFIG_PATH=${CMDR_STAGED}/${CMAKE_INSTALL_LIBDIR}/pkgconfig"
+            ${CMAKE_CTEST_COMMAND} --build-and-test
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/consumer" "${CMAKE_BINARY_DIR}/consumer"
+            --build-generator "${CMAKE_GENERATOR}"
+            --build-options "-DCMAKE_PREFIX_PATH=${CMDR_STAGED}"
+            --test-command ${CMAKE_CTEST_COMMAND} --output-on-failure)
+  set_tests_properties(install PROPERTIES FIXTURES_SETUP staged)
+  set_tests_properties(consumer PROPERTIES FIXTURES_REQUIRED staged TIMEOUT 120)
   include(ProcessorCount)
   ProcessorCount(CMDR_JOBS)
   if(NOT CMDR_JOBS)
@@ -77,7 +158,7 @@ if(CMDR_BUILD_TESTS)
   endif()
   add_custom_target(check
     COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure -j ${CMDR_JOBS}
-    DEPENDS cmdr
+    DEPENDS ${CMDR_TEST_TARGETS}
     WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
     COMMENT "Running cmdr checks"
   )

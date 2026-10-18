@@ -1,0 +1,7 @@
+# Commands composed from the effect primitives. Sessions with effects run
+# this file after prelude.cmdr.
+
+def cat { each { read } | concat } "Concatenate files"
+def grep { (f p) read $f | keep { matches $p } } "Return lines of FILE matching REGEX"
+def sh { (c) run sh -c $c } "Run a shell command, returning stdout"
+def sh-in { (t c) run-in $t sh -c $c } "Run a shell command with TEXT on stdin"

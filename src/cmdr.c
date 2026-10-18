@@ -12,10 +12,21 @@
  * value depth stays bounded. */
 enum { MAX_CALL_DEPTH = 128, MAX_VALUE_DEPTH = 1024 };
 
+static void (*out_of_memory)(void *data, size_t size);
+static void *out_of_memory_data;
+
+void cmdr_set_out_of_memory(void (*handler)(void *data, size_t size), void *data)
+{
+    out_of_memory = handler;
+    out_of_memory_data = data;
+}
+
 void *cmdr_realloc(void *p, size_t count, size_t size)
 {
     if (!count) count = 1;
-    if (count <= SIZE_MAX / size && (p = realloc(p, count * size))) return p;
+    int fits = count <= SIZE_MAX / size;
+    if (fits && (p = realloc(p, count * size))) return p;
+    if (out_of_memory) out_of_memory(out_of_memory_data, fits ? count * size : SIZE_MAX);
     fputs("cmdr: out of memory\n", stderr);
     exit(1);
 }
@@ -559,7 +570,8 @@ int cmdr_run(const cmdr_value *block, size_t argc, const cmdr_value *argv,
 int cmdr_call(const cmdr *repl, const char *name, size_t argc,
               const cmdr_value *argv, cmdr_value *result, char **error)
 {
-    static unsigned depth;
+    /* Per thread, since it bounds this thread's stack. */
+    static _Thread_local unsigned depth;
     *result = (cmdr_value){0};
     *error = NULL;
     const cmdr_command *command = cmdr_find(repl, name);
@@ -571,7 +583,7 @@ int cmdr_call(const cmdr *repl, const char *name, size_t argc,
         return cmdr_error(error, "command '%s' is nested too deeply "
                           "(possible cycle in composed commands)", name);
     ++depth;
-    int status = command->run ? command->run(repl, argc, argv, result, error)
+    int status = command->run ? command->run(repl, command->user, argc, argv, result, error)
         : call_block(command->block, name, argc, argv, result, error);
     --depth;
     if (status) cmdr_free(result);

@@ -1,0 +1,134 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "cmdr",
+  "scopeName": "source.cmdr",
+  "fileTypes": [
+    "cmdr"
+  ],
+  "patterns": [
+    {
+      "include": "#line"
+    }
+  ],
+  "repository": {
+    "line": {
+      "patterns": [
+        {
+          "include": "#comment"
+        },
+        {
+          "include": "#block"
+        },
+        {
+          "include": "#definition"
+        },
+        {
+          "include": "#command"
+        },
+        {
+          "include": "#argument"
+        }
+      ]
+    },
+    "comment": {
+      "name": "comment.line.number-sign.cmdr",
+      "match": "^\\s*#.*$"
+    },
+    "definition": {
+      "match": "(?:^|(?<=^[|{])|(?<=[^\\\\][|{]))\\s*(def)(?=\\s|$)(?:\\s+([^\\s|{}'\"$\\\\]+))?",
+      "captures": {
+        "1": {
+          "name": "keyword.other.def.cmdr"
+        },
+        "2": {
+          "name": "entity.name.function.cmdr"
+        }
+      }
+    },
+    "command": {
+      "match": "(?:^|(?<=^[|{])|(?<=[^\\\\][|{]))\\s*([^\\s|{}'\"$\\\\]+)",
+      "captures": {
+        "1": {
+          "name": "entity.name.function.call.cmdr"
+        }
+      }
+    },
+    "block": {
+      "begin": "\\{",
+      "end": "\\}",
+      "beginCaptures": {
+        "0": {
+          "name": "punctuation.section.block.begin.cmdr"
+        }
+      },
+      "endCaptures": {
+        "0": {
+          "name": "punctuation.section.block.end.cmdr"
+        }
+      },
+      "name": "meta.block.cmdr",
+      "patterns": [
+        {
+          "match": "\\G\\s*(\\()([^)]*)(\\))(?:\\s*([^\\s|{}'\"$\\\\]+))?",
+          "captures": {
+            "1": {
+              "name": "punctuation.definition.parameters.begin.cmdr"
+            },
+            "2": {
+              "patterns": [
+                {
+                  "match": "[A-Za-z][A-Za-z0-9_-]*",
+                  "name": "variable.parameter.cmdr"
+                }
+              ]
+            },
+            "3": {
+              "name": "punctuation.definition.parameters.end.cmdr"
+            },
+            "4": {
+              "name": "entity.name.function.call.cmdr"
+            }
+          }
+        },
+        {
+          "include": "#line"
+        }
+      ]
+    },
+    "argument": {
+      "patterns": [
+        {
+          "name": "keyword.operator.pipe.cmdr",
+          "match": "\\|"
+        },
+        {
+          "name": "variable.other.reference.cmdr",
+          "match": "\\$[A-Za-z][A-Za-z0-9_-]*"
+        },
+        {
+          "name": "string.quoted.single.cmdr",
+          "match": "'[^']*'"
+        },
+        {
+          "name": "string.quoted.double.cmdr",
+          "begin": "\"",
+          "end": "\"|$",
+          "patterns": [
+            {
+              "name": "constant.character.escape.cmdr",
+              "match": "\\\\."
+            }
+          ]
+        },
+        {
+          "name": "constant.character.escape.cmdr",
+          "match": "\\\\."
+        },
+        {
+          "name": "constant.numeric.cmdr",
+          "match": "(?<![^\\s])-?(?:0[xX][0-9a-fA-F]+|\\d+(?:\\.\\d+)?(?:[eE][-+]?\\d+)?)(?![^\\s|}])"
+        }
+      ]
+    }
+  }
+}

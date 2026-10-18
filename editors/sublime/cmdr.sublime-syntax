@@ -1,0 +1,87 @@
+%YAML 1.2
+---
+# Sublime Text syntax for cmdr scripts. Token rules follow the lexer in src/cmdr.c.
+name: cmdr
+scope: source.cmdr
+file_extensions: [cmdr]
+
+variables:
+  word: '[^\s|{}''"$\\]+'
+  # Line start, or after an unescaped '|' or a '{'.
+  stage: '(?:^|(?<=^[|{])|(?<=[^\\][|{]))\s*'
+
+contexts:
+  main:
+    - include: line
+
+  line:
+    # A comment is a whole line; '#' later in a line is text.
+    - match: '^\s*#.*$'
+      scope: comment.line.number-sign.cmdr
+    - match: '\{'
+      scope: punctuation.section.block.begin.cmdr
+      push: [block, block-params]
+    - match: '{{stage}}(def)(?=\s|$)(?:\s+({{word}}))?'
+      captures:
+        1: keyword.declaration.function.cmdr
+        2: entity.name.function.cmdr
+    - match: '{{stage}}({{word}})'
+      captures:
+        1: variable.function.cmdr
+    - include: argument
+
+  block:
+    - meta_scope: meta.block.cmdr
+    - match: '\}'
+      scope: punctuation.section.block.end.cmdr
+      pop: true
+    - include: line
+
+  # "(a b)" directly after '{' declares parameters.
+  block-params:
+    - match: '\s*(\()'
+      captures:
+        1: punctuation.section.parameters.begin.cmdr
+      set: params
+    - match: '(?=\s*[^\s(])|$'
+      pop: true
+
+  params:
+    - match: '\)'
+      scope: punctuation.section.parameters.end.cmdr
+      set: after-params
+    - match: '[A-Za-z][A-Za-z0-9_-]*'
+      scope: variable.parameter.cmdr
+
+  after-params:
+    - match: '\s*({{word}})'
+      captures:
+        1: variable.function.cmdr
+      pop: true
+    - match: '(?=\S)|$'
+      pop: true
+
+  argument:
+    - match: '\|'
+      scope: keyword.operator.pipe.cmdr
+    - match: '\$[A-Za-z][A-Za-z0-9_-]*'
+      scope: variable.other.cmdr
+    - match: "'[^']*'"
+      scope: string.quoted.single.cmdr
+    - match: '"'
+      scope: punctuation.definition.string.begin.cmdr
+      push: double-quoted
+    - match: '\\.'
+      scope: constant.character.escape.cmdr
+    - match: '(?<![^\s])-?(?:0[xX][0-9a-fA-F]+|\d+(?:\.\d+)?(?:[eE][-+]?\d+)?)(?![^\s|}])'
+      scope: constant.numeric.cmdr
+
+  double-quoted:
+    - meta_scope: string.quoted.double.cmdr
+    - match: '\\.'
+      scope: constant.character.escape.cmdr
+    - match: '"'
+      scope: punctuation.definition.string.end.cmdr
+      pop: true
+    - match: '$'
+      pop: true

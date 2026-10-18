@@ -18,7 +18,7 @@
 extern char **environ;
 
 #define COMMAND(name) \
-    static int name(const cmdr *repl, size_t argc, const cmdr_value *argv, \
+    static int name(const cmdr *repl, void *user, size_t argc, const cmdr_value *argv, \
                     cmdr_value *result, char **error)
 
 typedef struct {
@@ -752,7 +752,7 @@ COMMAND(append_command) { return save("ab", "append", argc, argv, result, error)
 
 #define TEXT(n, u, d, f) {.name = n, .usage = u, .docstring = d, .run = f, .text = 1}
 #define VALUE(n, u, d, f) {.name = n, .usage = u, .docstring = d, .run = f}
-static const cmdr_command commands[] = {
+static const cmdr_command pure[] = {
     TEXT("text", "text [ARG ...]", "Join arguments with spaces", text_command),
     TEXT("upper", "upper TEXT", "Uppercase text", upper_command),
     TEXT("lower", "lower TEXT", "Lowercase text", lower_command),
@@ -793,14 +793,20 @@ static const cmdr_command commands[] = {
     VALUE("try", "try [INPUT] BLOCK FALLBACK", "Return FALLBACK if the block fails", try_command),
     VALUE("or", "or [INPUT] BLOCK FALLBACK", "Return FALLBACK if the block mismatches", or_command),
     VALUE("check", "check [INPUT] BLOCK MESSAGE", "Mismatch with MESSAGE if the block mismatches", check_command),
+    TEXT("basename", "basename PATH", "Return the final path component", basename_command),
+    TEXT("dirname", "dirname PATH", "Return the parent path", dirname_command),
+};
+
+/* Commands that read or write files or run programs. */
+static const cmdr_command effects[] = {
     TEXT("read", "read PATH", "Read a text file", read_command),
     VALUE("write", "write VALUE PATH", "Replace a file, returning VALUE", write_command),
     VALUE("append", "append VALUE PATH", "Append to a file, returning VALUE", append_command),
     TEXT("files", "files [DIRECTORY]", "List regular files, sorted by path", files_command),
-    TEXT("basename", "basename PATH", "Return the final path component", basename_command),
-    TEXT("dirname", "dirname PATH", "Return the parent path", dirname_command),
     TEXT("run", "run PROGRAM [ARG ...]", "Run an executable, returning stdout", run_command),
     TEXT("run-in", "run-in TEXT PROGRAM [ARG ...]", "Run with TEXT on stdin, returning stdout", run_in_command),
 };
 
-const cmdr cmdr_primitives = {commands, sizeof(commands) / sizeof(commands[0]), NULL};
+static const cmdr effect_table = {effects, sizeof(effects) / sizeof(effects[0]), NULL};
+const cmdr cmdr_pure = {pure, sizeof(pure) / sizeof(pure[0]), NULL};
+const cmdr cmdr_primitives = {pure, sizeof(pure) / sizeof(pure[0]), &effect_table};

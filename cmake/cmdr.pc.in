@@ -1,0 +1,10 @@
+prefix=${pcfiledir}/@CMDR_PC_PREFIX@
+libdir=${prefix}/@CMAKE_INSTALL_LIBDIR@
+includedir=${prefix}/@CMAKE_INSTALL_INCLUDEDIR@
+
+Name: cmdr
+Description: Typed command pipelines, checked before they run
+Version: @PROJECT_VERSION@
+Cflags: -I${includedir}
+Libs: -L${libdir} -lcmdr
+Libs.private: @CMDR_PC_LIBS_PRIVATE@

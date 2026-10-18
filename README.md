@@ -161,30 +161,56 @@ md
 txt
 ```
 
-Put definitions in a file, such as `ext.cmdr`, and run `load ext.cmdr` in a session or at the top of a script. Move a definition into `src/prelude.cmdr` when every session should have it. The build embeds the file, and cmdr runs it at startup; an error there stops cmdr with `prelude.cmdr:LINE:`. Because definitions are lexical, a later `def tail` does not change the prelude's `last`.
+Put definitions in a file, such as `ext.cmdr`, and run `load ext.cmdr` in a session or at the top of a script. Move a definition into `src/prelude.cmdr` when every session should have it, or into `src/prelude-effects.cmdr` if it reads files or runs programs. The build embeds the file, and cmdr runs it at startup; an error there stops cmdr with `prelude.cmdr:LINE:`. Because definitions are lexical, a later `def tail` does not change the prelude's `last`.
 
 ## Adding commands
 
-Write a command in C only when it cannot be composed. Add it to the `commands` table in [src/main.c](src/main.c), where it shadows the primitives in [src/primitives.c](src/primitives.c). Set `.run` to a `cmdr_fn` from [src/cmdr.h](src/cmdr.h):
+Write a command in C only when it cannot be composed. The build produces `libcmdr.a`, with the API in [include/cmdr.h](include/cmdr.h). A host puts its commands in a table in front of the primitives in [src/primitives.c](src/primitives.c), where they shadow them, and opens a session on it:
 
 ```c
-static int initial(const cmdr *repl, size_t argc, const cmdr_value *argv,
-                 cmdr_value *result, char **error)
+static int initial(const cmdr *repl, void *user, size_t argc, const cmdr_value *argv,
+                   cmdr_value *result, char **error)
 {
     if (argc != 1) return cmdr_error(error, "usage: initial TEXT");
     *result = cmdr_text(argv[0].text, argv[0].text[0] ? 1 : 0);
     return 0;
 }
 
-/* In the commands table: */
-{.name = "initial", .usage = "initial TEXT", .docstring = "Return the first byte",
- .run = initial, .text = 1},
+static const cmdr_command commands[] = {
+    {.name = "initial", .usage = "initial TEXT", .docstring = "Return the first byte",
+     .run = initial, .text = 1},
+};
+static const cmdr table = {commands, 1, &cmdr_primitives};
+
+cmdr_session *session = cmdr_session_open(&table, 1, stdout);
+char *error;
+cmdr_value value;
+if (cmdr_session_prelude(session, &error)
+    || cmdr_session_eval(session, "list ab cd | map initial", &value, &error))
+    fprintf(stderr, "%s\n", error);
 ```
 
-`.text = 1` guarantees text arguments. Arguments are borrowed, including the values a block captured; clone what you keep. The result is owned by the caller. A predicate returns `CMDR_MISMATCH` when it does not hold; `cmdr_describe` gives a short form of a value for its message. Allocation failure exits the process.
+`.text = 1` guarantees text arguments, and `.user` is passed to `.run`. Arguments are borrowed, including the values a block captured; clone what you keep. The result is owned by the caller. A predicate returns `CMDR_MISMATCH` when it does not hold; `cmdr_describe` gives a short form of a value for its message.
+
+A session adds `help` and `def`, and frees its definitions on `cmdr_session_close`. `cmdr_session_load` runs a script and stops at its first failure. Sessions on different threads are independent. [src/main.c](src/main.c) is the cmdr executable, built on this API.
+
+The second argument of `cmdr_session_open` allows effects. With it, the session adds `load`, and `cmdr_session_prelude` also runs [src/prelude-effects.cmdr](src/prelude-effects.cmdr), which defines `cat`, `grep`, `sh`, and `sh-in`. For a console without file or process access, pass 0 and end the host's table in `&cmdr_pure`, which omits `read`, `write`, `append`, `files`, `run`, and `run-in`.
+
+Allocation failure exits the process with status 1. `cmdr_set_out_of_memory` installs a handler that runs first, to log or save host state.
+
+## Installing
+
+```sh
+cmake -S . -B build && cmake --build build
+cmake --install build --prefix /usr/local
+```
+
+This installs `cmdr`, `libcmdr.a`, `libcmdr.so`, `cmdr.h`, a CMake package, and `cmdr.pc`. A CMake host uses `find_package(cmdr)` and links `cmdr::static` or `cmdr::shared`; others use `pkg-config --cflags --libs cmdr`. `-DCMDR_SHARED=OFF` builds only the static library. The shared library's soname is `libcmdr.so.0.1`, since a minor version may break the API before 1.0.
+
+Syntax highlighting for Vim, Sublime Text, and VS Code is in [editors/](editors/README.md).
 
 ## Checks
 
-`make test` builds cmdr and runs [tests/test_cmdr.py](tests/test_cmdr.py) with Python 3, in parallel. Each test method is a CTest test, so `ctest --test-dir build -R test_editor` runs only the editor tests. Tests that need the editor show as skipped in a build without it. Configure with `-DCMDR_BUILD_TESTS=OFF` to build without Python.
+`make test` builds cmdr and runs [tests/test_cmdr.py](tests/test_cmdr.py) with Python 3, in parallel. It runs [tests/test_api.c](tests/test_api.c) against both libraries, then installs into `build/staged` and builds [tests/consumer](tests/consumer) against it. Each test method is a CTest test, so `ctest --test-dir build -R test_editor` runs only the editor tests. Tests that need the editor show as skipped in a build without it. Configure with `-DCMDR_BUILD_TESTS=OFF` to build without Python.
 
 Design history: [docs/dev/minimal.md](docs/dev/minimal.md), [docs/dev/blocks.md](docs/dev/blocks.md).

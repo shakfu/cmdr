@@ -1,0 +1,23 @@
+{
+  "name": "cmdr",
+  "displayName": "cmdr",
+  "description": "Syntax highlighting for cmdr scripts",
+  "version": "0.1.0",
+  "publisher": "cmdr",
+  "license": "SEE LICENSE IN ../../LICENSE",
+  "engines": { "vscode": "^1.60.0" },
+  "categories": ["Programming Languages"],
+  "contributes": {
+    "languages": [{
+      "id": "cmdr",
+      "aliases": ["cmdr"],
+      "extensions": [".cmdr"],
+      "configuration": "./language-configuration.json"
+    }],
+    "grammars": [{
+      "language": "cmdr",
+      "scopeName": "source.cmdr",
+      "path": "./syntaxes/cmdr.tmLanguage.json"
+    }]
+  }
+}

@@ -30,6 +30,18 @@
 
 ### Added
 
+- `libcmdr.a` and an embedding API in `include/cmdr.h`, restoring what [docs/dev/minimal.md](docs/dev/minimal.md) removed. `help`, `def`, `load`, and the prelude moved from `src/main.c` into `cmdr_session`, since the prelude is `def`s and a host cannot use it without them. `cmdr_command.user` is passed to `cmdr_fn` as a new second parameter. A session takes the host's table, so a host can omit the primitives. See [docs/dev/scenarios-of-use.md](docs/dev/scenarios-of-use.md).
+
+  The composed-command depth counter is per thread. It was one `static`, so two threads nesting at once shared the limit of 128 and failed with `nested too deeply`.
+
+- `cmdr_pure`, the primitives without `read`, `write`, `append`, `files`, `run`, and `run-in`, for a host console without file or process access. `cmdr_session_open` takes an `effects` flag, which adds `load` and runs `src/prelude-effects.cmdr` after the prelude. The definitions that use effects (`cat`, `grep`, `sh`, `sh-in`) moved there from `src/prelude.cmdr`, since a pure session fails to compile them. `basename` and `dirname` are pure and now list before `read` in `help`.
+
+- `cmdr_set_out_of_memory` sets a handler that runs before an allocation failure exits. The handler cannot recover by `longjmp`, because the failed evaluation's values would leak, and those values are often what used up the memory. Returning an error from every allocation is the alternative, and [docs/dev/minimal.md](docs/dev/minimal.md) removed it.
+
+- `libcmdr.so` (`-DCMDR_SHARED=OFF` omits it) and install rules: the executable, both libraries, `cmdr.h`, a CMake package (`cmdr::static`, `cmdr::shared`), and `cmdr.pc`. `cmdr.pc` finds its prefix from its own location, so `cmake --install --prefix` works without reconfiguring.
+
+- `editors/`: highlighting for Vim, Sublime Text, and VS Code, and Helix file detection. Helix and Zed need a tree-sitter grammar; see `TODO.md`.
+
 - Primitives `with`, `fold`, `or`, `check`, `matches`, `sort-n`, `le`, and `ge`. `with` passes a computed value to any argument position, which a pipe cannot. `or` is `try` restricted to mismatches, so a conditional does not hide errors as `try` does. `check` replaces a mismatch's message; errors pass through. `matches` uses POSIX extended regular expressions. `ge` and `le` are primitives rather than `not { lt }`, so a failure reads `ge: 4 is not at least 5`.
 
   ```text

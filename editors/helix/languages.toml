@@ -1,0 +1,9 @@
+# Append to ~/.config/helix/languages.toml. Helix highlights only through
+# tree-sitter, so this gives file detection and comment toggling until a
+# cmdr grammar exists; see TODO.md.
+[[language]]
+name = "cmdr"
+scope = "source.cmdr"
+file-types = ["cmdr"]
+comment-tokens = ["#"]
+indent = { tab-width = 2, unit = "  " }

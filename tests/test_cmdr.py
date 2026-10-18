@@ -1,9 +1,12 @@
 """Integration checks for value boundaries, effects, and error recovery."""
+import json
 import os
 import re
+import shutil
 from pathlib import Path
 import subprocess
 import tempfile
+import tomllib
 import unittest
 
 
@@ -750,6 +753,57 @@ class Commands(unittest.TestCase):
         self.run_line('list abc def | map run-in tr a-z A-Z | join ,', 'ABC,DEF\n')
         self.run_line("try { () run false } fallback", 'fallback\n')
         self.run_line("run printf '%s' '$HOME;*.c'", '$HOME;*.c\n')
+
+    def test_syntax_files(self):
+        editors = ROOT / 'editors'
+        package = json.loads((editors / 'vscode' / 'package.json').read_text())
+        grammar_path = editors / 'vscode' / package['contributes']['grammars'][0]['path']
+        self.assertEqual(json.loads(grammar_path.read_text())['scopeName'], 'source.cmdr')
+        json.loads((editors / 'vscode' / 'language-configuration.json').read_text())
+        helix = tomllib.loads((editors / 'helix' / 'languages.toml').read_text())
+        self.assertEqual(helix['language'][0]['file-types'], ['cmdr'])
+        try:
+            import yaml
+        except ImportError:
+            yaml = None
+        if yaml:
+            sublime = yaml.safe_load((editors / 'sublime' / 'cmdr.sublime-syntax').read_text())
+            self.assertEqual(sublime['scope'], 'source.cmdr')
+        if not shutil.which('vim'):
+            self.skipTest('vim not found')
+        source = ("# note | x\n"
+                  "def shout { (s) upper $s | text \"a\\tb\" 'x y' }\n"
+                  "list 1 -2.5 a1 | each { gt 0 }\n"
+                  "text a#b \\| c\n")
+        expected = [
+            [('# note | x', 'cmdrComment')],
+            [('def', 'cmdrKeyword'), ('shout', 'cmdrDefName'), ('s', 'cmdrParam'),
+             ('upper', 'cmdrCommand'), ('$s', 'cmdrReference'), ('|', 'cmdrPipe'),
+             ('text', 'cmdrCommand'), ('\\t', 'cmdrStringEscape'), ("'x y'", 'cmdrString'),
+             ('}', 'cmdrBrace')],
+            [('list', 'cmdrCommand'), ('1', 'cmdrNumber'), ('-2.5', 'cmdrNumber'),
+             ('a1', ''), ('each', 'cmdrCommand'), ('gt', 'cmdrCommand'), ('0', 'cmdrNumber')],
+            [('text', 'cmdrCommand'), ('a#b', ''), ('\\|', 'cmdrEscape'), ('c', '')],
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            sample, out = Path(directory) / 'sample.cmdr', Path(directory) / 'groups'
+            sample.write_text(source)
+            # One line per source line: each byte's syntax group, or '-'.
+            dump = ('for l in range(1, line("$")) | call writefile([join(map(range(1, col([l, "$"]) - 1),'
+                    ' {_, c -> synIDattr(synID(g:l, c, 1), "name")}), " ")], "' + str(out) + '", "a") | endfor')
+            subprocess.run(['vim', '-Nu', 'NONE', '-es', '-i', 'NONE',
+                            '--cmd', f'set rtp^={editors / "vim"}', '-c', 'filetype on',
+                            '-c', 'syntax on', '-c', f'e {sample}', '-c', dump, '-c', 'qa!'],
+                           timeout=20, check=True, stdin=subprocess.DEVNULL)
+            groups = [line.split(' ') for line in out.read_text().splitlines()]
+        self.assertEqual(len(groups), len(expected))
+        for text, row, want in zip(source.splitlines(), groups, expected):
+            start = 0  # Tokens are listed in order.
+            for token, group in want:
+                with self.subTest(line=text, token=token):
+                    start = text.index(token, start)
+                    self.assertEqual(set(row[start:start + len(token)]), {group})
+                    start += len(token)
 
     def test_help_and_repl(self):
         result = self.run_line('help')
