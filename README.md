@@ -35,8 +35,7 @@ The REPL starts with a line such as `cmdr 0.1.0 (prelude: standard)`, or the pre
 
 Errors go to stderr; the exit status is nonzero if any line failed. Lines starting with `#`, including a `#!/usr/bin/env cmdr` shebang, are comments.
 A line ending in an unescaped `|` continues on the next line; blank and
-comment lines inside a continuation are skipped.
-Quotes and blocks cannot span lines otherwise: write a newline as `\n`, and
+comment lines inside a continuation are skipped. Quotes and blocks cannot span lines otherwise: write a newline as `\n`, and
 end a line inside a block with `|` to continue it.
 
 ## Composition
@@ -73,7 +72,7 @@ a,c
 
 - References substitute values, not text: a list stays one argument. Quote or escape `$` and braces for literal text; `a$x` is literal. Unquoted braces inside a block must balance.
 
-`def NAME BLOCK [DOC]` defines a command for the rest of the session. `help` shows DOC, or the body if DOC is absent. Definitions are lexical: a body uses the commands that existed when it was defined, and a body that names its own command calls the one it shadows. A definition may shadow any command except `def`. Errors from a body are prefixed with its name (`outer: inner: equals: ...`).
+`def NAME BLOCK [DOC]` defines a command for the rest of the session. `help` shows DOC, or the body if DOC is absent. Definitions are lexical: a body uses the commands that existed when it was defined, and a body that names its own command calls the one it shadows. A definition may shadow any command except `def`. Errors from a body are prefixed with its name (`outer: inner: equals: ...`). A mismatch from a def called on the line also shows the call's arguments: `ends-with ar bar: ge: 2 is not at least 3`.
 
 `each`, `keep`, `not`, and `try` take blocks. Extra arguments follow the item:
 `list a b c | keep { (s v) not $s { equals $v } } b`.
@@ -182,7 +181,7 @@ static int initial(const cmdr *repl, size_t argc, const cmdr_value *argv,
  .run = initial, .text = 1},
 ```
 
-`.text = 1` guarantees text arguments. Arguments are borrowed, including the values a block captured; clone what you keep. The result is owned by the caller. A predicate returns `CMDR_MISMATCH` when it does not hold. Allocation failure exits the process.
+`.text = 1` guarantees text arguments. Arguments are borrowed, including the values a block captured; clone what you keep. The result is owned by the caller. A predicate returns `CMDR_MISMATCH` when it does not hold; `cmdr_describe` gives a short form of a value for its message. Allocation failure exits the process.
 
 ## Checks
 

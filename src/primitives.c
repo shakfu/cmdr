@@ -317,11 +317,21 @@ COMMAND(split_command)
 
 /* Predicates return their input when they hold, else CMDR_MISMATCH. */
 
+/* Fail with format, which describes a and then b as %s. */
+static int mismatch(char **error, const char *format, const cmdr_value *first,
+                    const cmdr_value *second)
+{
+    char *a = cmdr_describe(first), *b = cmdr_describe(second);
+    cmdr_error(error, format, a, b);
+    free(a);
+    free(b);
+    return CMDR_MISMATCH;
+}
+
 COMMAND(equals_command)
 {
     if (argc != 2) return cmdr_error(error, "usage: equals TEXT EXPECTED");
-    if (strcmp(argv[0].text, argv[1].text))
-        return cmdr_error(error, "equals: text differs from '%s'", argv[1].text), CMDR_MISMATCH;
+    if (strcmp(argv[0].text, argv[1].text)) return mismatch(error, "equals: %s differs from %s", &argv[0], &argv[1]);
     *result = cmdr_text(argv[0].text, strlen(argv[0].text));
     return 0;
 }
@@ -329,8 +339,7 @@ COMMAND(equals_command)
 COMMAND(contains_command)
 {
     if (argc != 2) return cmdr_error(error, "usage: contains TEXT SUBSTRING");
-    if (!strstr(argv[0].text, argv[1].text))
-        return cmdr_error(error, "contains: '%s' not found", argv[1].text), CMDR_MISMATCH;
+    if (!strstr(argv[0].text, argv[1].text)) return mismatch(error, "contains: %s not found in %s", &argv[1], &argv[0]);
     *result = cmdr_text(argv[0].text, strlen(argv[0].text));
     return 0;
 }
@@ -348,8 +357,7 @@ COMMAND(matches_command)
     }
     rc = regexec(&re, argv[0].text, 0, NULL, 0);
     regfree(&re);
-    if (rc == REG_NOMATCH)
-        return cmdr_error(error, "matches: no match for '%s'", argv[1].text), CMDR_MISMATCH;
+    if (rc == REG_NOMATCH) return mismatch(error, "matches: %s does not match %s", &argv[0], &argv[1]);
     if (rc) return cmdr_error(error, "matches: regexec failed");
     *result = cmdr_text(argv[0].text, strlen(argv[0].text));
     return 0;
@@ -646,8 +654,7 @@ COMMAND(not_command)
     } else if (failed) {
         cmdr_error(error, "not: %s", detail);
     } else {
-        cmdr_error(error, "not: {%s} succeeded", argv[1].text);
-        status = CMDR_MISMATCH;
+        status = mismatch(error, "not: %s satisfies %s", &argv[0], &argv[1]);
     }
     free(detail);
     return status;

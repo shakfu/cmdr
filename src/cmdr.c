@@ -82,6 +82,63 @@ void cmdr_render(const cmdr_value *value, FILE *out)
     }
 }
 
+typedef struct {
+    char *data;
+    size_t length;
+} text_buffer;
+
+static void append(text_buffer *b, const char *text, size_t n)
+{
+    b->data = cmdr_realloc(b->data, b->length + n + 1, 1);
+    memcpy(b->data + b->length, text, n);
+    b->data[b->length += n] = '\0';
+}
+
+/* Bounds on a description, so a file's text or a long list stays one line. */
+enum { DESCRIBE_BYTES = 32, DESCRIBE_ITEMS = 5, DESCRIBE_DEPTH = 2 };
+
+static void describe(const cmdr_value *value, unsigned depth, text_buffer *b)
+{
+    if (value->kind == CMDR_NONE) { append(b, "no value", 8); return; }
+    if (value->kind == CMDR_LIST) {
+        if (depth >= DESCRIBE_DEPTH) { append(b, "[...]", 5); return; }
+        append(b, "[", 1);
+        for (size_t i = 0; i < value->count && i < DESCRIBE_ITEMS; ++i) {
+            if (i) append(b, ", ", 2);
+            describe(&value->items[i], depth + 1, b);
+        }
+        if (value->count > DESCRIBE_ITEMS) {
+            char more[48];
+            append(b, more, (size_t)snprintf(more, sizeof(more), ", ... %zu items", value->count));
+        }
+        append(b, "]", 1);
+        return;
+    }
+    const char *text = value->text;
+    size_t n = strlen(text), shown = n < DESCRIBE_BYTES ? n : DESCRIBE_BYTES;
+    int block = value->kind == CMDR_BLOCK;
+    /* Quote text that would not read back as one word. */
+    int quote = !block && (!n || strpbrk(text, " \t\n'\"\\,[]{}|"));
+    append(b, block ? "{" : "'", (size_t)(block || quote));
+    for (size_t i = 0; i < shown; ++i) {
+        if (text[i] == '\n') append(b, "\\n", 2);
+        else if (text[i] == '\t') append(b, "\\t", 2);
+        else if (quote && (text[i] == '\'' || text[i] == '\\')) {
+            append(b, "\\", 1);
+            append(b, &text[i], 1);
+        } else append(b, &text[i], 1);
+    }
+    if (n > shown) append(b, "...", 3);
+    append(b, block ? "}" : "'", (size_t)(block || quote));
+}
+
+char *cmdr_describe(const cmdr_value *value)
+{
+    text_buffer b = {0};
+    describe(value, 0, &b);
+    return b.data;
+}
+
 int cmdr_error(char **error, const char *format, ...)
 {
     va_list args;
@@ -358,10 +415,34 @@ fail:
     return 1;
 }
 
+/* A mismatch from a def called on a line names the call and its arguments,
+ * in place of the def's name alone. */
+static void frame(const cmdr *repl, const char *name, size_t argc, const cmdr_value *argv,
+                  char **error)
+{
+    const cmdr_command *command = cmdr_find(repl, name);
+    if (!command || !command->block || !*error) return;
+    size_t n = strlen(name);
+    const char *inner = *error;
+    if (!strncmp(inner, name, n) && !strncmp(inner + n, ": ", 2)) inner += n + 2;
+    text_buffer b = {0};
+    append(&b, name, n);
+    for (size_t i = 0; i < argc; ++i) {
+        char *arg = cmdr_describe(&argv[i]);
+        append(&b, " ", 1);
+        append(&b, arg, strlen(arg));
+        free(arg);
+    }
+    append(&b, ": ", 2);
+    append(&b, inner, strlen(inner));
+    free(*error);
+    *error = b.data;
+}
+
 /* Run pg with input, which may be NULL, and env, the values of its scope's
  * names. Blocks it makes capture env. name labels a defined command's errors;
- * NULL otherwise. */
-static int evaluate(const cmdr *repl, const program *pg, const char *name,
+ * NULL otherwise. line is set for a line's own stages. */
+static int evaluate(const cmdr *repl, const program *pg, const char *name, int line,
                     const cmdr_value *input, const cmdr_value *env, size_t envc,
                     cmdr_value *result, char **error)
 {
@@ -396,6 +477,7 @@ static int evaluate(const cmdr *repl, const program *pg, const char *name,
                 : (cmdr_value){.kind = CMDR_TEXT, .text = w->text};
         }
         status = cmdr_call(repl, s->words[0].text, n, argv, &next, error);
+        if (status == CMDR_MISMATCH && line) frame(repl, s->words[0].text, n, argv, error);
         free(argv);
         cmdr_free(result);
         *result = next;
@@ -420,7 +502,7 @@ int cmdr_eval(const cmdr *repl, const char *line, cmdr_value *result, char **err
     free(sc.names);
     free(sc.used); /* compile_block grew it. */
     if (failed) return 1;
-    int status = evaluate(repl, &pg, NULL, NULL, NULL, 0, result, error);
+    int status = evaluate(repl, &pg, NULL, 1, NULL, NULL, 0, result, error);
     dispose(&pg);
     return status;
 }
@@ -461,7 +543,7 @@ static int call_block(const cmdr_value *block, const char *name,
         memcpy(bound + block->count, argv, argc * sizeof(*bound));
         env = bound;
     }
-    int status = evaluate(code->scope, &code->body, name, input, env, block->count + code->params,
+    int status = evaluate(code->scope, &code->body, name, 0, input, env, block->count + code->params,
                           result, error);
     free(bound);
     return status;

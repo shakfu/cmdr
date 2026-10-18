@@ -299,7 +299,7 @@ class Commands(unittest.TestCase):
             ("list a | keep { read }", 'keep item 1: read a'),
             ("text a | not { try { bogus } x }", 'unknown command: bogus'),
             ("list a | each { text a | }", "expected a command after '|'"),
-            ('text x | not { nonempty }', "not: { nonempty } succeeded"),
+            ('text x | not { nonempty }', "not: x satisfies { nonempty }"),
             ("list a b | each { equals a }", 'each item 2: equals'),
             ("list a | each { text a", "unclosed '{'"),
             ("text {a}b", "expected a space after '}'"),
@@ -307,8 +307,13 @@ class Commands(unittest.TestCase):
             ("list a | each " + "{ " * 200 + "}" * 200, 'blocks nested too deeply'),
             ('text "" | nonempty', 'nonempty: empty text'),
             ('list | nonempty', 'nonempty: empty list'),
-            ('text a | equals b', "equals: text differs from 'b'"),
-            ('text a | contains b', "contains: 'b' not found"),
+            ('text a | equals b', "equals: a differs from b"),
+            # Descriptions quote text that is not one word, and stay short.
+            ("text 'a b' | equals ''", "equals: 'a b' differs from ''"),
+            ('text "x\ny" | equals ' + 'z' * 40, "differs from " + 'z' * 32 + "..."),
+            ('text "x\ny" | equals x', r"equals: 'x\ny' differs from x"),
+            ('list a b c d e f g | not { nonempty }', 'not: [a, b, c, d, e, ... 7 items] satisfies'),
+            ('text acd | contains b', "contains: b not found in acd"),
             ('list a | equals a', "command 'equals' expects text"),
         ]
         for source, error in errors:
@@ -357,10 +362,10 @@ class Commands(unittest.TestCase):
             with self.subTest(source=source):
                 self.run_line(source, error=error)
 
-        # A def's name still prefixes the message.
+        # A def's call still prefixes the message.
         result = self.run_input("def is-a { (s) text $s 'is not a' | with { (m) check $s { equals a } $m } }\n"
                                 "text b | is-a\n")
-        self.assertIn('is-a: b is not a', result.stderr)
+        self.assertIn('is-a b: b is not a', result.stderr)
 
     def test_matches_and_sort_n(self):
         cases = [
@@ -374,7 +379,7 @@ class Commands(unittest.TestCase):
         for source, expected in cases:
             with self.subTest(source=source):
                 self.run_line(source, expected)
-        self.run_line("text abc | matches '^[0-9]'", error="matches: no match for '^[0-9]'")
+        self.run_line("text abc | matches '^[0-9]'", error="matches: abc does not match '^[0-9]'")
         self.run_line("text abc | not { matches '^[0-9]' }", 'abc\n')
         self.run_line("text abc | matches '('", error="matches: invalid regex '('")
         self.run_line("list 1 x | sort-n", error='invalid finite number: x')
@@ -436,7 +441,13 @@ class Commands(unittest.TestCase):
         self.assertEqual(result.stdout, 'A !\nA !\na\n')
         # Errors from a body name the command, giving a call chain.
         result = self.run_input("def inner { equals x }\ndef outer { trim | inner }\ntext y | outer\n")
-        self.assertIn("outer: inner: equals: text differs from 'x'", result.stderr)
+        self.assertIn("outer y: inner: equals: y differs from x", result.stderr)
+        # Only a mismatch names the call's arguments, and only on the line
+        # itself: an error keeps the plain chain.
+        result = self.run_input("def num { (s) add $s 1 }\nnum x\n"
+                                "def inner { equals x }\nlist y | each { inner }\n")
+        self.assertIn("num: invalid finite number: x", result.stderr)
+        self.assertIn("each item 1: inner: equals: y differs from x", result.stderr)
         # A block keeps the names it captured after its def returns.
         result = self.run_input(
             "def adder { (n) try $n { equals never } { (x) add $x $n } }\n"
@@ -525,19 +536,19 @@ class Commands(unittest.TestCase):
             with self.subTest(source=source):
                 self.run_line(source, expected)
         errors = [
-            ('list a b c | nth 4', 'nth: le: 4 is not at most 3'),
-            ('list a b c | nth 0', 'nth: gt: 0 is not greater than 0'),
-            ('list | init', 'init: nonempty: empty list'),
-            ('list | first', 'first: nonempty: empty list'),
-            ('list | last', 'last: nonempty: empty list'),
-            ('text "" | last', 'last: nonempty: empty text'),
-            ('list 1 2 | any { gt 5 }', 'any: nonempty: empty list'),
-            ('list 1 2 | all { gt 1 }', 'all: empty'),
-            ('list | max', 'max: nonempty: empty list'),
+            ('list a b c | nth 4', 'nth [a, b, c] 4: le: 4 is not at most 3'),
+            ('list a b c | nth 0', 'nth [a, b, c] 0: gt: 0 is not greater than 0'),
+            ('list | init', 'init []: nonempty: empty list'),
+            ('list | first', 'first []: nonempty: empty list'),
+            ('list | last', 'last []: nonempty: empty list'),
+            ('text "" | last', "last '': nonempty: empty text"),
+            ('list 1 2 | any { gt 5 }', 'any [1, 2] { gt 5 }: nonempty: empty list'),
+            ('list 1 2 | all { gt 1 }', 'all [1, 2] { gt 1 }: empty: not: [1] satisfies { nonempty }'),
+            ('list | max', 'max []: nonempty: empty list'),
             ('list 3 x | max', 'max: fold item 2: invalid finite number: x'),
-            ('text fo | starts-with foo', "starts-with: equals: text differs from 'foo'"),
-            ('text ar | ends-with bar', 'ends-with: ge: 2 is not at least 3'),
-            ('text foo | strip-prefix bar', 'strip-prefix: starts-with'),
+            ('text fo | starts-with foo', "starts-with fo foo: equals: fo differs from foo"),
+            ('text ar | ends-with bar', 'ends-with ar bar: ge: 2 is not at least 3'),
+            ('text foo | strip-prefix bar', 'strip-prefix foo bar: starts-with: equals: foo differs from bar'),
         ]
         for source, error in errors:
             with self.subTest(source=source):

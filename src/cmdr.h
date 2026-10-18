@@ -64,6 +64,8 @@ int cmdr_clone(const cmdr_value *value, cmdr_value *out, char **error);
 /* Write text as is and list items each followed by a newline. */
 void cmdr_render(const cmdr_value *value, FILE *out);
 
+/* A short, one-line, malloc-owned description of value for a message. */
+char *cmdr_describe(const cmdr_value *value);
 /* Set *error to a formatted, malloc-owned message and return 1. */
 int cmdr_error(char **error, const char *format, ...);
 

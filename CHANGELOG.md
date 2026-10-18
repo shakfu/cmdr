@@ -24,6 +24,8 @@
 
 - `last` fails with a mismatch on an empty list or text; it returned empty text, which could not be told apart from an empty last item. `first` does the same, and so does `ext` on empty text.
 
+- Mismatch messages name the values involved: `equals: foo differs from bar`, `not: [1] satisfies { nonempty }`. They omitted the tested value, so a composed predicate's failure did not say which input failed. A mismatch from a def called on a line also shows the call's arguments, `ends-with ar bar: ...`; errors keep the plain call chain, which serves debugging. Values print in one line, up to 32 bytes and 5 items.
+
 - Each test method is a CTest test, read from `tests/test_cmdr.py` at configure time, and `make test` runs them in parallel.
 
 ### Added
