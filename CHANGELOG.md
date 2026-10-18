@@ -28,6 +28,8 @@
 
 - Each test method is a CTest test, read from `tests/test_cmdr.py` at configure time, and `make test` runs them in parallel.
 
+- The build is split into three files: `CMakeLists.txt`, `cmake/CmdrExtensions.cmake` for code generation and `cmdr_add_binary`, and `tests/CMakeLists.txt`. The test fixture binaries now build in `build/tests/`.
+
 - `docs/dev/scenarios-of-use.md` marks regex capture and environment access done, through `ext/re` and `ext/env`, and shows D1 log triage with `re-groups`.
 
 ### Added
