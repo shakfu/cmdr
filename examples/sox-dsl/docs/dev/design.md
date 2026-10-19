@@ -1,0 +1,24 @@
+# Sox DSL design
+
+Decision record, 2026-10-19.
+
+| Choice | Over | Because |
+|-|-|-|
+| Bind libsox | libsoxr for resampling plus effects written here | libsox gives all 62 sox effects with sox's arguments and its tested DSP. Writing filters, reverb, compand, pitch, and noise reduction here is thousands of lines and covers a subset. Homebrew's sox does not use libsoxr; its `rate` has its own resampler |
+| `snd-run` takes sox's arguments after its output file | A grammar of our own | sox's documentation and users' commands carry over word for word |
+| OUT is `snd-run`'s first argument | sox's order, output between inputs and effects | A chain is built input first and run last; putting OUT first means `snd.out` never inserts into the middle of the list |
+| The combiner, auto effects, and output signal ported from `sox.c` | Calling the sox binary with `run` | In-process: no subprocess per call, effects' output is captured by `snd-report`, and errors arrive as cmdr errors |
+| `:`, `newfile`, and `restart` are errors; the module splits with `snd-segments` and `trim` | Multiple effects chains in `snd-run` | sox restarts chains on the same open input, which `sox.c` does with process-wide state. Splitting in cmdr renders once and cuts with `trim`, `remix`, or silence positions |
+| Commands take paths | Audio as a cmdr value | Values are text without NUL bytes, so samples cannot pass through a pipeline |
+| A chain is a list of words | A registry of `snd:N` handles to audio held in C | cmdr has no finalizers, so handles would leak or need explicit freeing |
+| Named effects with fixed arguments, plus `effect SPEC` | One `def` per sox effect | A `def` has fixed parameters and sox effects mostly have optional ones; `effect` passes sox's own syntax |
+| A separate binary, `cmdr-snd`, configured in `examples/sox-dsl/` | `ext/snd/` in the tree's `ext/` | `cmdr` would then require libsox to build |
+| Write to a temporary file, then rename | Write OUT directly | OUT may be an input, and a failed write would otherwise destroy it |
+| One lock around every command | Unrestricted calls | libsox keeps global state, such as its message handler and buffer size |
+| OUT's type checked before effects parse their arguments | Checking when the output opens | Some effects' kill functions assume start ran, such as `channels` dereferencing specs only start allocates, so an effect not yet in a chain is freed without kill. Checking first keeps that leak to failures after parsing |
+| `snd-segments` prints fixed-point seconds | `cmdr_number_value` | sox's time arguments reject exponents, such as `2.2675736961451248e-05` |
+| Extension and module share the name `snd`: `snd-*` is the C layer, `snd.*` the API | An underscore name for the C part, as Python's `_socket` | Python needs two names because both are modules in one namespace; in cmdr `snd-*` commands and `snd.*` bindings cannot collide. A module definition does not reuse an extension command's suffix unless it does the same thing, so `snd.info` and `snd-info` never mean different things |
+
+## History
+
+The first version linked libsoxr and libsndfile, with nine effects written in C, including a `varispeed` on libsoxr's variable-rate mode. It was replaced for coverage of sox's features. Its one finding: a ramp keyed to input consumed ran early, since soxr reads input ahead of its output, giving 65365 frames where 61131 were expected. A ramp over output time made the length exact.

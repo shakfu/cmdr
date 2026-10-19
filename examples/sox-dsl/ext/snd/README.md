@@ -1,0 +1,38 @@
+# snd
+
+sox in-process, through [libsox](https://sourceforge.net/projects/sox/). These commands are the low-level layer; scripts use the [snd module](../../snd/__init__.cmdr). Built only into `cmdr-snd`; see [../../README.md](../../README.md).
+
+| Command | Result |
+|-|-|
+| `snd-run OUT ARG ...` | Run sox with ARGs as the arguments after its output file, writing OUT. Returns OUT. |
+| `snd-report OUT ARG ...` | The same, but returns what the effects print, such as `stats` and `stat`. |
+| `snd-info PATH` | Lines `type T`, `rate R`, `channels N`, `frames N`, `seconds S`, `bits B`, and `encoding E`, as `soxi`. `frames` and `seconds` are absent if the length is unknown. |
+| `snd-segments PATH DB SECONDS` | Lines `START LENGTH`, in seconds, for each part of PATH between silences at or below DB dBFS lasting at least SECONDS. |
+| `snd-effects` | The names of the 62 effects. |
+| `snd-usage EFFECT` | EFFECT's name and arguments, as `sox --help-effect`. |
+
+`sox -m a.wav b.wav -b 16 out.wav reverb gain -3` is:
+
+```text
+cmdr> list -b 16 out.wav | snd-run -m a.wav b.wav reverb gain -3
+out.wav
+```
+
+OUT is a path, or a list of format options and a path. Each ARG is text or a list, whose items are added at any depth. ARGs follow sox's grammar: global options and input files, each after its own format options, then effects. The first word that names an effect starts the effects, and each effect takes the words up to the next effect name, as in sox.
+
+| sox | snd-run |
+|-|-|
+| Every effect, with sox's arguments | Yes |
+| `--combine` `sequence`, `concatenate`, `mix`, `mix-power`, `merge`, `multiply`; `-m`, `-M`, `-T` | Yes. Inputs must share a rate; `concatenate` and `sequence` also need equal channels, so `sequence` is `concatenate`. |
+| Format options `-v`, `-t`, `-r` (with `k`), `-c`, `-b`, `-e`, and their long forms | Yes; `-v` only on inputs. |
+| `-n` null file; `-d` default audio device, from `AUDIODRIVER` and `AUDIODEV` | Yes. `play` is `snd-run -d ...`; `rec` is `snd-run OUT -d trim 0 SECONDS`. |
+| `-D`, `--no-dither` | Yes. Otherwise dither is added before output below 24 bits, as sox does. |
+| Automatic `rate` and `channels` when OUT's options differ from the chain | Yes |
+| `:`, `newfile`, `restart` | No; an error. The module's `split-at`, `split-silence`, and `split-channels` split files. |
+| `-` (stdin, stdout), `-p`, `--effects-file`, `--plot`, `-G`, `--norm`, `-V`, `-S`, comments, endianness, `--ignore-length` | No |
+
+A regular OUT is written to a temporary file in its directory, then renamed, so a failure leaves OUT unchanged and OUT may also be an input. It gets mode 0644. OUT's type is `-t`, else its extension. As in sox, OUT keeps the first input's encoding if its type allows it.
+
+Ctrl-C stops a run, such as a long `-d` playback, and `snd-run` fails with `interrupted`. libsox keeps global state, so the commands hold a lock and run one at a time. `snd-report` reads the effects' output by redirecting stderr while it runs, so another thread's stderr in that time is captured too.
+
+`snd-segments` exists because sox's `silence ... : newfile : restart` needs chains, which `snd-run` does not run. cmdr values are text without NUL bytes, so audio cannot pass through a pipeline; the commands take paths.

@@ -1,0 +1,36 @@
+#!/usr/bin/env cmdr-snd
+# Sox in cmdr: build chains, combine and split files, and inspect results.
+#
+#   build/examples/sox-dsl/cmdr-snd examples/sox-dsl/demo.cmdr
+#
+# Files go in SND_OUT (default snd-out/ in the current directory). Nothing
+# plays; snd.play CHAIN would send a chain to the default audio device.
+
+import snd
+
+def at { (p) env-or SND_OUT snd-out | fs-mkdir | path-join $p } "Path P in the output directory"
+def report { (p) snd.info $p | head 3 | rest | unwords | with { (i) path-basename $p | with { (b) list $b $i | unwords } } } "One line: the file name, rate, and channels"
+
+# 1. Synthesize two tones. A chain is a list of sox's arguments until out runs it.
+snd.tone 2 440 | unwords
+snd.tone 2 440 | with { (c) at a440.wav | with { (o) snd.out $c $o } } | report
+snd.tone 2 330 | with { (c) at e330.wav | with { (o) snd.out $c $o } } | report
+
+# 2. Effects, named or as sox writes them.
+at a440.wav | snd.in | snd.rate 48000 | snd.fade 0.1 0.5 | snd.effect "chorus 0.7 0.9 55 0.4 0.25 2 -t" | with { (c) at chorus.wav | with { (o) snd.out $c $o } } | report
+
+# 3. Combine: mix into a chord, merge into stereo, join end to end.
+list a440.wav e330.wav | each { at } | snd.mix | with { (c) at chord.wav | with { (o) snd.out $c $o } } | report
+list a440.wav e330.wav | each { at } | snd.merge | with { (c) at stereo.wav | with { (o) snd.out $c $o } } | report
+list a440.wav e330.wav | each { at } | snd.join | snd.stats-field "Length s"
+
+# 4. Presets are definitions from chain to chain.
+at stereo.wav | snd.in | snd.telephone | with { (c) at telephone.wav | with { (o) snd.out $c $o } } | report
+
+# 5. Split: at times, at silences, and by channel.
+at cut.wav | with { (o) at a440.wav | snd.in | snd.split-at "0.5 1" $o } | each { report }
+at note.wav | with { (o) at e330.wav | snd.in | snd.trim 0 0.4 | snd.pad 0 0.6 | snd.repeat 2 | snd.split-silence -40 0.3 $o } | each { report }
+at voice.wav | with { (o) at stereo.wav | snd.in | snd.split-channels $o } | each { report }
+
+# 6. sox's stats for any chain, with no file written.
+at chord.wav | snd.in | snd.stats | lines | head 4

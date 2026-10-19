@@ -128,3 +128,6 @@ if(CMDR_BUILD_TESTS)
   enable_testing()
   add_subdirectory(tests)
 endif()
+
+# An example with its own binary, which needs libraries cmdr does not.
+add_subdirectory(examples/sox-dsl)

@@ -68,3 +68,6 @@ dkms.conf
 
 # examples/agent-workflows run logs and demo copies (AW_RUNS default)
 agent-runs/
+
+# examples/sox-dsl output (SND_OUT default)
+snd-out/

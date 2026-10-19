@@ -1,0 +1,49 @@
+# Checks the snd module. CTest runs it as example_sox_dsl, with CMDR_PATH set
+# to examples/sox-dsl and SND_OUT to a directory under build/.
+
+import snd
+
+def tmp { (p) env SND_OUT | fs-mkdir | path-join $p } "Path P in the test directory"
+def write-to { (chain p) tmp $p | with { (o) snd.out $chain $o } } "Run CHAIN into P in the test directory"
+
+# Building a chain only adds words; nothing runs until out.
+snd.in a.wav | snd.rate 8000 | snd.gain -3 | snd.reverse | unwords | equals "a.wav rate 8000 gain -3 reverse"
+snd.in a.wav | snd.trim 0 1 | snd.fade 1 2 | snd.mono | snd.stereo | rest | unwords | equals "trim 0 1 fade 1 -0 2 channels 1 channels 2"
+snd.in a.wav | snd.effect "reverb 50 50" | snd.remix "1,2 2" | rest | unwords | equals "reverb 50 50 remix 1,2 2"
+snd.in-as "-t raw -r 8k" a.raw | unwords | equals "-t raw -r 8k a.raw"
+list a.wav b.wav | snd.mix | unwords | equals "--combine mix a.wav b.wav"
+snd.tone 1 440 | unwords | equals "-r 44100 -n synth 1 sine 440 gain -6"
+
+# Running and inspecting.
+snd.tone 1 440 | write-to a.wav | snd.info-field seconds | equals 1
+snd.tone 2 220 | write-to b.wav | snd.info-field rate | equals 44100
+tmp a.wav | snd.in | snd.stats-field "Pk lev dB" | equals -6.00
+tmp a.wav | snd.in | snd.speed 2 | snd.pad 0.5 0 | write-to c.wav | snd.info-field seconds | equals 1
+tmp a.wav | snd.in | snd.tempo 0.5 | write-to c.wav | snd.info-field seconds | between 1.99 2.01
+tmp a.wav | snd.in | snd.pitch 1200 | snd.lowpass 2000 | snd.highpass 100 | snd.norm -1 | snd.stats-field "Pk lev dB" | equals -1.00
+tmp a.wav | snd.in | snd.repeat 2 | snd.reverb | snd.swap | write-to c.wav | snd.info-field seconds | equals 3
+tmp a.wav | snd.in | with { (c) tmp c.wav | with { (o) snd.out-as $c "-b 16 -r 22050" $o } } | snd.info | filter bits | join "" | equals "bits 16"
+tmp c.wav | snd.info-field rate | equals 22050
+snd.effects | count | equals 62
+snd.usage fade | starts-with "fade "
+
+# Combining.
+list a.wav b.wav | each { tmp } | snd.join | snd.stats-field "Length s" | equals 3.000
+list a.wav b.wav | each { tmp } | snd.merge | write-to m.wav | snd.info-field channels | equals 2
+list a.wav b.wav | each { tmp } | snd.mix | snd.stats-field "Pk lev dB" | equals -7.11
+list a.wav b.wav | each { tmp } | snd.mix-power | snd.stats-field "Pk lev dB" | equals -4.10
+tmp b.wav | snd.scaled 0.1 | with { (s) tmp a.wav | with { (a) list $a $s } } | snd.mix | snd.stats-field "Pk lev dB" | equals -5.40
+list a.wav a.wav | each { tmp } | snd.multiply | snd.stats-field "Pk lev dB" | equals -12.00
+
+# Splitting writes numbered files and returns their paths.
+tmp s.wav | with { (o) tmp a.wav | snd.in | snd.split-at "0.25 0.5" $o } | map path-basename | join , | equals s001.wav,s002.wav,s003.wav
+tmp s003.wav | snd.info-field seconds | equals 0.5
+tmp s000.wav | not { fs-exists }
+tmp p.wav | with { (o) tmp a.wav | snd.in | snd.pad 0 0.5 | snd.repeat 2 | snd.split-silence -40 0.3 $o } | count | equals 3
+tmp ch.wav | with { (o) tmp m.wav | snd.in | snd.split-channels $o } | each { (p) snd.info-field $p channels } | join , | equals 1,1
+tmp ch002.wav | snd.in | snd.stats-field "Length s" | equals 2.000
+snd.numbered out/take.wav 7 | equals out/take007.wav
+snd.numbered take.wav 12 | equals take012.wav
+
+# Presets.
+tmp a.wav | snd.in | snd.stereo | snd.telephone | write-to t.wav | snd.info | head 3 | join , | equals "type wav,rate 8000,channels 1"
