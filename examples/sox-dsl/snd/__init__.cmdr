@@ -19,11 +19,12 @@ def merge { (paths) combine merge $paths } "Start a chain with the channels of P
 def multiply { (paths) combine multiply $paths } "Start a chain that multiplies PATHS sample by sample"
 
 # Effects: each takes a chain and returns it with an effect appended.
-# effect takes any of sox's effects; snd.effects lists them.
+# effect takes any of sox's effects, or varispeed; snd.effects lists them.
 def effect { (chain spec) words $spec | fold $chain { (c w) push $c $w } } "Append the sox effect SPEC, such as \"reverb 50 50 100\""
 def rate { (chain hz) push $chain rate $hz } "Resample to HZ"
 def speed { (chain factor) push $chain speed $factor } "Play FACTOR times as fast, shifting pitch with it"
 def tempo { (chain factor) push $chain tempo $factor } "Play FACTOR times as fast, keeping pitch"
+def varispeed { (chain from to) push $chain varispeed $from $to } "Change speed linearly from FROM to TO over the output, as a tape does; not in sox"
 def pitch { (chain cents) push $chain pitch $cents } "Shift pitch by CENTS, keeping tempo"
 def gain { (chain db) push $chain gain $db } "Amplify by DB decibels"
 def norm { (chain db) push $chain norm $db } "Scale so the peak is DB dBFS"
@@ -67,6 +68,7 @@ def split-channels { (chain path) render $chain $path | with { (w) info-field $w
 
 # Presets: definitions from chain to chain.
 def telephone { (chain) highpass $chain 300 | lowpass 3400 | rate 8000 | mono | norm -3 } "Band-limit to 300-3400 Hz, mono at 8 kHz"
+def tape-stop { (chain) varispeed $chain 1 0.1 | fade 0 0.05 } "Slow to a tenth of normal speed, as a stopping tape does"
 
 # Last, since it shadows the trim primitive, which field uses.
 def trim { (chain start length) push $chain trim $start $length } "Keep LENGTH seconds from START"

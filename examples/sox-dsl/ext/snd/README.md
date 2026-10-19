@@ -1,6 +1,6 @@
 # snd
 
-sox in-process, through [libsox](https://sourceforge.net/projects/sox/). These commands are the low-level layer; scripts use the [snd module](../../snd/__init__.cmdr). Built only into `cmdr-snd`; see [../../README.md](../../README.md).
+sox in-process, through [libsox](https://sourceforge.net/projects/sox/), plus a `varispeed` effect on [libsoxr](https://sourceforge.net/projects/soxr/). These commands are the low-level layer; scripts use the [snd module](../../snd/__init__.cmdr). Built only into `cmdr-snd`; see [../../README.md](../../README.md).
 
 | Command | Result |
 |-|-|
@@ -8,7 +8,7 @@ sox in-process, through [libsox](https://sourceforge.net/projects/sox/). These c
 | `snd-report OUT ARG ...` | The same, but returns what the effects print, such as `stats` and `stat`. |
 | `snd-info PATH` | Lines `type T`, `rate R`, `channels N`, `frames N`, `seconds S`, `bits B`, and `encoding E`, as `soxi`. `frames` and `seconds` are absent if the length is unknown. |
 | `snd-segments PATH DB SECONDS` | Lines `START LENGTH`, in seconds, for each part of PATH between silences at or below DB dBFS lasting at least SECONDS. |
-| `snd-effects` | The names of the 62 effects. |
+| `snd-effects` | The names of the 63 effects: sox's 62, then `varispeed`. |
 | `snd-usage EFFECT` | EFFECT's name and arguments, as `sox --help-effect`. |
 
 `sox -m a.wav b.wav -b 16 out.wav reverb gain -3` is:
@@ -22,7 +22,7 @@ OUT is a path, or a list of format options and a path. Each ARG is text or a lis
 
 | sox | snd-run |
 |-|-|
-| Every effect, with sox's arguments | Yes |
+| Every effect, with sox's arguments | Yes, plus `varispeed`, below |
 | `--combine` `sequence`, `concatenate`, `mix`, `mix-power`, `merge`, `multiply`; `-m`, `-M`, `-T` | Yes. Inputs must share a rate; `concatenate` and `sequence` also need equal channels, so `sequence` is `concatenate`. |
 | Format options `-v`, `-t`, `-r` (with `k`), `-c`, `-b`, `-e`, and their long forms | Yes; `-v` only on inputs. |
 | `-n` null file; `-d` default audio device, from `AUDIODRIVER` and `AUDIODEV` | Yes. `play` is `snd-run -d ...`; `rec` is `snd-run OUT -d trim 0 SECONDS`. |
@@ -30,6 +30,8 @@ OUT is a path, or a list of format options and a path. Each ARG is text or a lis
 | Automatic `rate` and `channels` when OUT's options differ from the chain | Yes |
 | `:`, `newfile`, `restart` | No; an error. The module's `split-at`, `split-silence`, and `split-channels` split files. |
 | `-` (stdin, stdout), `-p`, `--effects-file`, `--plot`, `-G`, `--norm`, `-V`, `-S`, comments, endianness, `--ignore-length` | No |
+
+`varispeed FROM TO` is not in sox. Speed moves linearly from FROM to TO over the output, as a tape slows or speeds up, so pitch and tempo move together. FROM and TO are each from 1/32 to 32. N input frames give exactly round(2N/(FROM+TO)) output frames, so later effects such as `fade ... -0` see the right length. soxr gives about 0.1% fewer frames, so the end is padded with silence. The input length must be known, as for sox's `fade` with an end position. It runs in libsoxr's variable-rate mode, as in its [examples/5-variable-rate.c](https://github.com/nanake/libsoxr/blob/master/examples/5-variable-rate.c), which sox's `speed` and `bend` do not use.
 
 A regular OUT is written to a temporary file in its directory, then renamed, so a failure leaves OUT unchanged and OUT may also be an input. It gets mode 0644. OUT's type is `-t`, else its extension. As in sox, OUT keeps the first input's encoding if its type allows it.
 

@@ -10,8 +10,10 @@ tmp a.wav | snd-run -r 44100 -n synth 1 sine 440 gain -6 | snd-info | join , | e
 tmp a.wav | peak | equals -6.00
 tmp b.wav | with { (p) list -b 16 $p } | snd-run -r 44100 -n synth 2 sine 220 gain -6 | field bits | equals 16
 tmp b.wav | field seconds | equals 2
-snd-effects | count | equals 62
+snd-effects | count | equals 63
 snd-effects | filter reverb | count | equals 1
+snd-effects | last | equals varispeed
+snd-usage varispeed | equals "varispeed FROM TO"
 snd-usage trim | equals "trim {position}"
 
 # Effects, with sox's own arguments.
@@ -26,6 +28,15 @@ tmp a.wav | apply c.wav "pad 0.5 0.5 reverse" | field seconds | equals 2
 tmp a.wav | apply c.wav "channels 2" | field channels | equals 2
 tmp a.wav | apply c.wav "remix 1 1 1" | field channels | equals 3
 tmp a.wav | apply c.wav "reverb 50 50 100 highpass 100 echo 0.8 0.9 100 0.3" | field rate | equals 44100
+
+# varispeed, ours: N frames give round(2N/(FROM+TO)), in any channels, and
+# later effects see that length.
+tmp a.wav | apply c.wav "varispeed 1 0.5" | field frames | equals 58800
+tmp a.wav | apply c.wav "varispeed 2 2" | field frames | equals 22050
+tmp a.wav | apply c.wav "varispeed 0.5 2" | field frames | equals 35280
+tmp a.wav | apply c.wav "varispeed 1 1" | field frames | equals 44100
+tmp a.wav | apply c.wav "channels 2 varispeed 1 0.1 fade 0 -0 0.05" | snd-info | filter frames | join "" | equals "frames 80182"
+tmp a.wav | apply c.wav "varispeed 1 0.25 trim 0 0.1" | peak | between -6.1 -5.9
 
 # Combining: concatenate by default; mix sums at 1/N each, unless any input
 # has -v; -M merges channels; -T multiplies.
@@ -55,6 +66,10 @@ tmp a.wav | with { (a) tmp e.wav | snd-run $a | with { (e) snd-run $e $e speed 2
 tmp a.wav | try { (p) snd-run $p $p echo-not 1 } failed | equals failed
 tmp a.wav | try { (p) snd-run $p $p gain x } failed | equals failed
 tmp a.wav | try { (p) snd-run $p $p fade } failed | equals failed
+tmp a.wav | try { (p) snd-run $p $p varispeed 1 } failed | equals failed
+tmp a.wav | try { (p) snd-run $p $p varispeed 1 64 } failed | equals failed
+tmp a.wav | try { (p) snd-run $p $p varispeed 0 1 } failed | equals failed
+tmp a.wav | try { (p) snd-run $p -n varispeed 1 0.5 } failed | equals failed
 tmp a.wav | try { (p) snd-run $p $p : newfile } failed | equals failed
 tmp a.wav | try { (p) snd-run $p $p { upper } } failed | equals failed
 tmp a.wav | try { (p) snd-run $p --combine nope $p } failed | equals failed

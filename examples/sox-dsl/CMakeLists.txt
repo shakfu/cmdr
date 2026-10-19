@@ -1,11 +1,11 @@
-# cmdr-snd: cmdr with ext/ and ext/snd, which links libsox. Skipped when
-# pkg-config cannot find it.
+# cmdr-snd: cmdr with ext/ and ext/snd, which links libsox, and libsoxr for
+# varispeed. Skipped when pkg-config cannot find both.
 find_package(PkgConfig QUIET)
 if(PkgConfig_FOUND)
-  pkg_check_modules(SND IMPORTED_TARGET sox)
+  pkg_check_modules(SND IMPORTED_TARGET sox soxr)
 endif()
 if(NOT SND_FOUND)
-  message(STATUS "libsox not found: skipping examples/sox-dsl")
+  message(STATUS "libsox or libsoxr not found: skipping examples/sox-dsl")
   return()
 endif()
 

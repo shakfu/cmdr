@@ -26,6 +26,7 @@ list a440.wav e330.wav | each { at } | snd.join | snd.stats-field "Length s"
 
 # 4. Presets are definitions from chain to chain.
 at stereo.wav | snd.in | snd.telephone | with { (c) at telephone.wav | with { (o) snd.out $c $o } } | report
+at chord.wav | snd.in | snd.tape-stop | with { (c) at tape-stop.wav | with { (o) snd.out $c $o } } | snd.info-field seconds
 
 # 5. Split: at times, at silences, and by channel.
 at cut.wav | with { (o) at a440.wav | snd.in | snd.split-at "0.5 1" $o } | each { report }

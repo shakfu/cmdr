@@ -9,6 +9,7 @@ def write-to { (chain p) tmp $p | with { (o) snd.out $chain $o } } "Run CHAIN in
 # Building a chain only adds words; nothing runs until out.
 snd.in a.wav | snd.rate 8000 | snd.gain -3 | snd.reverse | unwords | equals "a.wav rate 8000 gain -3 reverse"
 snd.in a.wav | snd.trim 0 1 | snd.fade 1 2 | snd.mono | snd.stereo | rest | unwords | equals "trim 0 1 fade 1 -0 2 channels 1 channels 2"
+snd.in a.wav | snd.tape-stop | rest | unwords | equals "varispeed 1 0.1 fade 0 -0 0.05"
 snd.in a.wav | snd.effect "reverb 50 50" | snd.remix "1,2 2" | rest | unwords | equals "reverb 50 50 remix 1,2 2"
 snd.in-as "-t raw -r 8k" a.raw | unwords | equals "-t raw -r 8k a.raw"
 list a.wav b.wav | snd.mix | unwords | equals "--combine mix a.wav b.wav"
@@ -20,11 +21,12 @@ snd.tone 2 220 | write-to b.wav | snd.info-field rate | equals 44100
 tmp a.wav | snd.in | snd.stats-field "Pk lev dB" | equals -6.00
 tmp a.wav | snd.in | snd.speed 2 | snd.pad 0.5 0 | write-to c.wav | snd.info-field seconds | equals 1
 tmp a.wav | snd.in | snd.tempo 0.5 | write-to c.wav | snd.info-field seconds | between 1.99 2.01
+tmp a.wav | snd.in | snd.varispeed 1 0.5 | write-to c.wav | snd.info-field frames | equals 58800
 tmp a.wav | snd.in | snd.pitch 1200 | snd.lowpass 2000 | snd.highpass 100 | snd.norm -1 | snd.stats-field "Pk lev dB" | equals -1.00
 tmp a.wav | snd.in | snd.repeat 2 | snd.reverb | snd.swap | write-to c.wav | snd.info-field seconds | equals 3
 tmp a.wav | snd.in | with { (c) tmp c.wav | with { (o) snd.out-as $c "-b 16 -r 22050" $o } } | snd.info | filter bits | join "" | equals "bits 16"
 tmp c.wav | snd.info-field rate | equals 22050
-snd.effects | count | equals 62
+snd.effects | count | equals 63
 snd.usage fade | starts-with "fade "
 
 # Combining.
@@ -47,3 +49,4 @@ snd.numbered take.wav 12 | equals take012.wav
 
 # Presets.
 tmp a.wav | snd.in | snd.stereo | snd.telephone | write-to t.wav | snd.info | head 3 | join , | equals "type wav,rate 8000,channels 1"
+tmp a.wav | snd.in | snd.tape-stop | write-to s.wav | snd.info-field frames | equals 80182

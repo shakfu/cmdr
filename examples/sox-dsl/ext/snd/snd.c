@@ -7,6 +7,7 @@
 #include <signal.h>
 #include <stdint.h>
 #include <sox.h>
+#include <soxr.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -60,6 +61,134 @@ static void leave(void) { pthread_mutex_unlock(&lock); }
 static int fail(char **error, const char *name, const char *what)
 {
     return cmdr_error(error, "%s: %s%s%s", name, what, message[0] ? ": " : "", message);
+}
+
+/* varispeed FROM TO: speed moves linearly from FROM to TO over the output,
+ * with libsoxr's variable-rate mode, as in its examples/5-variable-rate.c. N
+ * input frames give exactly round(2N/(FROM+TO)), the length start reports to
+ * later effects; soxr gives about 0.1% fewer, so the end is padded with
+ * silence. The ramp follows output, not input consumed, since soxr reads
+ * input ahead of its output. */
+
+/* FROM and TO lie in [1/MAX_SPEED, MAX_SPEED], the range of that example. */
+#define MAX_SPEED 32.0
+
+typedef struct {
+    double from, to, length;
+    sox_uint64_t done, target;
+    soxr_t soxr;
+} varispeed;
+
+static int varispeed_getopts(sox_effect_t *effp, int argc, char **argv)
+{
+    varispeed *p = effp->priv;
+    double *x[] = {&p->from, &p->to};
+    int ok = argc == 3;
+    for (int i = 0; ok && i < 2; ++i) {
+        char *end;
+        *x[i] = strtod(argv[i + 1], &end);
+        ok = end != argv[i + 1] && !*end && *x[i] >= 1 / MAX_SPEED && *x[i] <= MAX_SPEED;
+    }
+    if (ok) return SOX_SUCCESS;
+    snprintf(message, sizeof(message), "usage: %s; each from 1/32 to 32",
+             effp->handler.usage);
+    return SOX_EOF;
+}
+
+static int varispeed_start(sox_effect_t *effp)
+{
+    varispeed *p = effp->priv;
+    sox_uint64_t length = effp->in_signal.length;
+    if (!length || length == SOX_UNKNOWN_LEN) {
+        snprintf(message, sizeof(message), "varispeed: audio length is unknown");
+        return SOX_EOF;
+    }
+    if (p->from == 1 && p->to == 1) return SOX_EFF_NULL;
+    unsigned ch = effp->in_signal.channels;
+    p->length = 2 * (double)(length / ch) / (p->from + p->to);
+    p->done = 0;
+    p->target = (sox_uint64_t)(p->length + .5);
+    effp->out_signal.length = p->target * ch;
+    soxr_io_spec_t io = soxr_io_spec(SOXR_INT32_I, SOXR_INT32_I);
+    soxr_quality_spec_t quality = soxr_quality_spec(SOXR_HQ, SOXR_VR);
+    soxr_error_t e = NULL;
+    /* In VR mode the creation ratio is the largest io ratio used later. */
+    p->soxr = soxr_create(fmax(p->from, p->to), 1, ch, &e, &io, &quality, NULL);
+    if (!e) e = soxr_set_io_ratio(p->soxr, p->from, 0);
+    if (!e) return SOX_SUCCESS;
+    snprintf(message, sizeof(message), "varispeed: %s", e);
+    soxr_delete(p->soxr);
+    p->soxr = NULL;
+    return SOX_EOF;
+}
+
+/* Resample into OBUF, moving the ratio to its value at the end of this block.
+ * Past the target length, input is consumed and dropped. */
+static int varispeed_process(sox_effect_t *effp, const sox_sample_t *ibuf, size_t *isamp,
+                             sox_sample_t *obuf, size_t *osamp)
+{
+    varispeed *p = effp->priv;
+    unsigned ch = effp->in_signal.channels;
+    size_t olen = *osamp / ch, idone = 0, odone = 0;
+    if (olen > p->target - p->done) olen = (size_t)(p->target - p->done);
+    if (!olen) {
+        *osamp = 0;
+        return SOX_SUCCESS;
+    }
+    double position = fmin(((double)p->done + (double)olen) / p->length, 1);
+    soxr_error_t e = soxr_set_io_ratio(p->soxr, p->from + (p->to - p->from) * position, olen);
+    /* NULL input tells soxr the input has ended, so it flushes. */
+    if (!e) e = soxr_process(p->soxr, ibuf, ibuf ? *isamp / ch : 0, &idone, obuf, olen, &odone);
+    if (e) {
+        snprintf(message, sizeof(message), "varispeed: %s", e);
+        return SOX_EOF;
+    }
+    p->done += odone;
+    if (isamp) *isamp = idone * ch;
+    *osamp = odone * ch;
+    return SOX_SUCCESS;
+}
+
+static int varispeed_flow(sox_effect_t *effp, const sox_sample_t *ibuf, sox_sample_t *obuf,
+                          size_t *isamp, size_t *osamp)
+{
+    return varispeed_process(effp, ibuf, isamp, obuf, osamp);
+}
+
+static int varispeed_drain(sox_effect_t *effp, sox_sample_t *obuf, size_t *osamp)
+{
+    varispeed *p = effp->priv;
+    unsigned ch = effp->in_signal.channels;
+    size_t room = *osamp;
+    int status = varispeed_process(effp, NULL, NULL, obuf, osamp);
+    if (status != SOX_SUCCESS) return status;
+    if (!*osamp && p->done < p->target) {
+        size_t n = room / ch;
+        if (n > p->target - p->done) n = (size_t)(p->target - p->done);
+        memset(obuf, 0, n * ch * sizeof(*obuf));
+        p->done += n;
+        *osamp = n * ch;
+    }
+    return *osamp ? SOX_SUCCESS : SOX_EOF;
+}
+
+static int varispeed_stop(sox_effect_t *effp)
+{
+    varispeed *p = effp->priv;
+    effp->clips += *soxr_num_clips(p->soxr);
+    soxr_delete(p->soxr);
+    return SOX_SUCCESS;
+}
+
+static const sox_effect_handler_t varispeed_handler = {
+    "varispeed", "FROM TO", SOX_EFF_MCHAN | SOX_EFF_LENGTH, varispeed_getopts, varispeed_start,
+    varispeed_flow, varispeed_drain, varispeed_stop, NULL, sizeof(varispeed),
+};
+
+/* An effect by name: libsox's, or varispeed. */
+static const sox_effect_handler_t *find_effect(const char *name)
+{
+    return !strcmp(name, varispeed_handler.name) ? &varispeed_handler : sox_find_effect(name);
 }
 
 /* Append the text in VALUE, or in its items at any depth, to WORDS. */
@@ -239,7 +368,7 @@ static const char *extension(const char *path)
 
 static int is_effect(const char *w)
 {
-    return sox_find_effect(w) != NULL || !strcmp(w, ":") || !strcmp(w, "newfile")
+    return find_effect(w) != NULL || !strcmp(w, ":") || !strcmp(w, "newfile")
            || !strcmp(w, "restart");
 }
 
@@ -300,7 +429,7 @@ static int parse(run *r, const char *const *out, size_t out_count, const char *c
 
     while (i < count) {
         const char *w = words[i];
-        if (!sox_find_effect(w))
+        if (!find_effect(w))
             return cmdr_error(error, "%s: %s is not supported; use snd.split-*", name, w);
         effect_spec e = {.name = w};
         size_t start = ++i;
@@ -632,7 +761,7 @@ static int execute(run *r, char **error)
     }
     for (size_t i = 0; i < r->effect_count; ++i) {
         effect_spec *e = &r->effects[i];
-        sox_effect_t *effp = sox_create_effect(sox_find_effect(e->name));
+        sox_effect_t *effp = sox_create_effect(find_effect(e->name));
         e->effect = effp;
         if (effp->handler.flags & SOX_EFF_INTERNAL) {
             cmdr_error(error, "%s: %s is internal to libsox", name, e->name);
@@ -877,6 +1006,7 @@ COMMAND(effects_command)
         if (h && h->name && !(h->flags & SOX_EFF_INTERNAL))
             cmdr_push(result, cmdr_text(h->name, strlen(h->name)));
     }
+    cmdr_push(result, cmdr_text(varispeed_handler.name, strlen(varispeed_handler.name)));
     leave();
     return 0;
 }
@@ -885,7 +1015,7 @@ COMMAND(usage_command)
 {
     if (argc != 1) return cmdr_error(error, "usage: snd-usage EFFECT");
     if (enter("snd-usage", error)) return 1;
-    const sox_effect_handler_t *h = sox_find_effect(argv[0].text);
+    const sox_effect_handler_t *h = find_effect(argv[0].text);
     int status = 0;
     if (!h || (h->flags & SOX_EFF_INTERNAL)) {
         status = cmdr_error(error, "snd-usage: unknown effect: %s", argv[0].text);
@@ -912,7 +1042,7 @@ static const cmdr_command commands[] = {
          info_command),
     TEXT("snd-segments", "snd-segments PATH DB SECONDS",
          "List START LENGTH of each part between silences at or below DB dBFS", segments_command),
-    TEXT("snd-effects", "snd-effects", "List the effects libsox provides", effects_command),
+    TEXT("snd-effects", "snd-effects", "List the effects: libsox's, and varispeed", effects_command),
     TEXT("snd-usage", "snd-usage EFFECT", "Return EFFECT's name and arguments", usage_command),
 };
 const cmdr cmdr_ext_snd = {commands, sizeof(commands) / sizeof(commands[0]), NULL};

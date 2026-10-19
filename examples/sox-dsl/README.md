@@ -1,6 +1,6 @@
 # Sox DSL
 
-sox in cmdr. The [snd](ext/snd/README.md) extension runs sox's effects chains in-process through libsox. The extension commands, `snd-NAME`, are the low-level layer, as `_socket` is to Python's `socket`. The [snd](snd/__init__.cmdr) module definitions, `snd.NAME` after `import snd`, are the API scripts use. They build a chain as a list of sox's arguments.
+sox in cmdr. The [snd](ext/snd/README.md) extension runs sox's effects chains in-process through libsox, and adds a `varispeed` effect on libsoxr. The extension commands, `snd-NAME`, are the low-level layer, as `_socket` is to Python's `socket`. The [snd](snd/__init__.cmdr) module definitions, `snd.NAME` after `import snd`, are the API scripts use. They build a chain as a list of sox's arguments.
 
 | File | Contents |
 |-|-|
@@ -11,12 +11,12 @@ sox in cmdr. The [snd](ext/snd/README.md) extension runs sox's effects chains in
 | [CMakeLists.txt](CMakeLists.txt) | Builds `cmdr-snd` |
 
 ```sh
-brew install sox    # or the distribution's libsox-dev
+brew install sox libsoxr    # or the distribution's libsox-dev and libsoxr-dev
 make
 ./build/examples/sox-dsl/cmdr-snd examples/sox-dsl/demo.cmdr
 ```
 
-The build makes `build/examples/sox-dsl/cmdr-snd`: `cmdr` with `ext/` and `ext/snd`. pkg-config must find `sox`, or configure skips this example with a status message. `cmdr` itself does not link libsox. The demo writes into `SND_OUT`, default `snd-out/`. CTest runs the demo, `tests/test_snd.cmdr`, and `ext/snd/tests/test.cmdr`. None of them use an audio device.
+The build makes `build/examples/sox-dsl/cmdr-snd`: `cmdr` with `ext/` and `ext/snd`. pkg-config must find `sox` and `soxr`, or configure skips this example with a status message. `cmdr` itself links neither. The demo writes into `SND_OUT`, default `snd-out/`. CTest runs the demo, `tests/test_snd.cmdr`, and `ext/snd/tests/test.cmdr`. None of them use an audio device.
 
 ## Chains
 
@@ -37,14 +37,14 @@ cmdr> snd.in chord.wav | snd.stats-field "Pk lev dB"
 | Inputs | `in PATH`, `in-as OPTIONS PATH`, `null`, `device`, `tone SECONDS HZ`, `scaled PATH FACTOR` |
 | Combining | `combine METHOD PATHS`, `join`, `mix`, `mix-power`, `merge`, `multiply` |
 | Any effect | `effect CHAIN SPEC`, as `snd.effect "chorus 0.7 0.9 55 0.4 0.25 2 -t"` |
-| Named effects | `rate`, `speed`, `tempo`, `pitch`, `gain`, `norm`, `reverse`, `pad`, `repeat`, `fade`, `trim`, `highpass`, `lowpass`, `reverb` |
+| Named effects | `rate`, `speed`, `tempo`, `varispeed`, `pitch`, `gain`, `norm`, `reverse`, `pad`, `repeat`, `fade`, `trim`, `highpass`, `lowpass`, `reverb` |
 | Channels | `channels N`, `mono`, `stereo`, `remix SPEC`, `swap`. `merge` joins files' channels; `split-channels` separates them. |
 | Output | `out CHAIN PATH`, `out-as CHAIN OPTIONS PATH`, `play CHAIN`, `record SECONDS PATH` |
 | Inspecting | `info PATH`, `info-field PATH NAME`, `stats CHAIN`, `stats-field CHAIN NAME`, `effects`, `usage EFFECT` |
 | Splitting | `split-at CHAIN POINTS PATH`, `split-silence CHAIN DB SECONDS PATH`, `split-channels CHAIN PATH` |
-| Presets | `telephone` |
+| Presets | `telephone`, `tape-stop` |
 
-`help` gives each definition's arguments. SPEC, OPTIONS, and POINTS are text, split into words. The named effects have fixed arguments, since a `def` has fixed parameters; `effect` takes any of sox's 62 effects, with sox's own arguments. `fade IN OUT` is sox's `fade IN -0 OUT`. Like sox, `fade` with an end position fails after an effect that makes the length unknown, such as `chorus`, so put it first.
+`help` gives each definition's arguments. SPEC, OPTIONS, and POINTS are text, split into words. The named effects have fixed arguments, since a `def` has fixed parameters; `effect` takes any of the 63 effects, with sox's own arguments. `varispeed FROM TO`, not in sox, changes speed linearly over the output, as a tape does; `tape-stop` is `varispeed 1 0.1` with a short fade. `fade IN OUT` is sox's `fade IN -0 OUT`. Like sox, `fade` with an end position fails after an effect that makes the length unknown, such as `chorus`, so put it first.
 
 `combine` and its forms take a list of paths. `scaled` makes an item with sox's `-v`; as in sox, `mix` scales each input by 1/N only if no input is scaled.
 
