@@ -29,7 +29,7 @@ add_test(NAME example_agent_workflows
   COMMAND cmdr "${PROJECT_SOURCE_DIR}/examples/agent-workflows/tests/test_workflows.cmdr"
   WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}")
 set_tests_properties(example_agent_workflows PROPERTIES TIMEOUT 60
-  ENVIRONMENT "AW_RUNS=${CMAKE_CURRENT_BINARY_DIR}/agent-runs")
+  ENVIRONMENT "AW_RUNS=${CMAKE_CURRENT_BINARY_DIR}/agent-runs;CMDR_PATH=${PROJECT_SOURCE_DIR}/examples/agent-workflows")
 # The demo copies its sample into a git repository and runs python3 on it.
 find_program(CMDR_GIT git)
 find_program(CMDR_PYTHON3 python3)

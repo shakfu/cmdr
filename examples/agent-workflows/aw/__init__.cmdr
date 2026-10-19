@@ -1,23 +1,24 @@
 # Agent workflows: run coding agents on a target, as one prompt or a chain
-# of steps. See README.md. Needs the env, fs, re, and time extensions.
+# of steps. `import aw` binds these definitions as aw.NAME; see ../README.md.
+# Needs the env, fs, re, and time extensions.
 
-def aw-home { () script-dir } "Directory holding actions/"
-def aw-runs { () env-or AW_RUNS agent-runs } "Directory for run logs"
-def aw-timeout { () env-or AW_TIMEOUT 1800 } "Seconds an agent may run"
+def home-dir { () script-dir } "Directory holding actions/"
+def runs-dir { () env-or AW_RUNS agent-runs } "Directory for run logs"
+def agent-timeout { () env-or AW_TIMEOUT 1800 } "Seconds an agent may run"
 
 # Agents. An adapter takes PROMPT DIR MODEL MODE and returns the agent's
 # final text. An empty MODEL selects the agent's default; MODE is read or write.
+# Each runs in its agent's own sandbox, so agents without one are not here.
 def opt { (f v) list | with { (none) or $v { (x) nonempty $x | with { (y) list $f $y } } $none } } "Return FLAG VALUE as a list, or an empty list if VALUE is empty"
 def by-mode { (mode r w) or { () equals $mode read | $r } $w } "Return R for read mode, else W"
 def agent-out { (res) nth $res 1 | with { (s) nth $res 3 | lines | tail 20 | unlines | with { (e) list "failed with status " $s ":\n" $e | concat | with { (m) check $s { equals 0 } $m } } } | $res | nth 2 } "Return stdout of a run-with result, or fail with its stderr"
-def launch { (args d) aw-timeout | with { (t) list dir $d timeout $t | with { (o) run-with $o $args } } | agent-out } "Run ARGS in DIR with the agent timeout"
-def agent-claude { (p d m mode) opt --model $m | with { (mf) by-mode $mode plan auto | with { (pm) list claude -p $mf --permission-mode $pm $p | launch $d } } } "Run claude -p"
+def launch { (args d) agent-timeout | with { (t) list dir $d timeout $t | with { (o) run-with $o $args } } | agent-out } "Run ARGS in DIR with the agent timeout"
+def claude-sandbox { () text '{"sandbox":{"enabled":true,"autoAllowBashIfSandboxed":true,"allowUnsandboxedCommands":false,"failIfUnavailable":true}}' } "Settings for claude: Bash may write only in DIR, and never retries unsandboxed"
+def agent-claude { (p d m mode) opt --model $m | with { (mf) by-mode $mode plan acceptEdits | with { (pm) claude-sandbox | with { (sb) list claude -p $mf --permission-mode $pm --permission-prompts none --safe-mode --settings $sb $p | launch $d } } } } "Run claude -p in its sandbox, without user CLAUDE.md"
 def agent-codex { (p d m mode) opt -m $m | with { (mf) by-mode $mode read-only workspace-write | with { (sb) list codex exec $mf -s $sb $p | launch $d } } } "Run codex exec"
-def agent-cursor { (p d m mode) opt --model $m | with { (mf) by-mode $mode --mode=plan --force | with { (f) list cursor-agent -p --output-format text $mf $f $p | launch $d } } } "Run cursor-agent -p"
-def agent-pi { (p d m mode) opt --model $m | with { (mf) by-mode $mode read,grep,find,ls "" | with { (t) opt --tools $t | with { (tf) list pi -p $mf $tf $p | launch $d } } } } "Run pi -p"
-def agent-opencode { (p d m mode) opt -m $m | with { (mf) list --agent plan | with { (ro) by-mode $mode $ro --auto | with { (f) list opencode run $mf $f $p | launch $d } } } } "Run opencode run"
+def agent-cursor { (p d m mode) opt --model $m | with { (mf) by-mode $mode --mode=plan --force | with { (f) list cursor-agent -p --output-format text --sandbox enabled $mf $f $p | launch $d } } } "Run cursor-agent -p"
 def agent-dry { (p d m mode) list $mode $d $m | unwords | with { (h) list "[dry " $h "]\n" $p | concat } } "Return the prompt instead of running an agent"
-def agents { () list claude codex cursor pi opencode dry } "Known agent names"
+def agents { () list claude codex cursor dry } "Known agent names: those with a built-in sandbox, and dry"
 def agent { (name p d m mode) list agent- $name | concat | with { (c) list $p | map $c $d $m $mode | concat } } "Run agent NAME on PROMPT in DIR"
 
 # Targets: a list of KIND DIR BRIEF. BRIEF opens every prompt.
@@ -32,7 +33,7 @@ def require-kind { (t k) target-kind $t | check { equals $k } "wrong target kind
 
 # Actions: actions/NAME.md. The first line is "mode: read" or "mode: write";
 # the rest is a template with {{target}}, {{input}}, and {{history}}.
-def action-file { (a) list $a .md | concat | with { (f) aw-home | path-join actions | path-join $f } }
+def action-file { (a) list $a .md | concat | with { (f) home-dir | path-join actions | path-join $f } }
 def action-mode { (a) action-file $a | read | lines | first | strip-prefix "mode: " | check { matches '^(read|write)$' } "mode must be read or write" }
 def action-body { (a) action-file $a | read | lines | rest | unlines }
 
@@ -57,7 +58,7 @@ def log-append { (x log) list $x "\n\n" | concat | append $log | $x } "Append TE
 # Chains. Every step is checked before the first agent runs. Each step gets
 # the previous output as {{input}} and every earlier one as {{history}}.
 # The log in AW_RUNS records the run; steps do not read it.
-def run-log { (t) aw-runs | fs-mkdir | with { (r) time-local "%Y%m%d-%H%M%S" | with { (s) list $s -XXXXXX | concat | with { (n) path-join $r $n | with { (p) run mktemp $p | trim } } } } | with { (log) target-brief $t | with { (b) list "# Run\n\n" $b "\n\n" | concat | write $log } | $log } }
+def run-log { (t) runs-dir | fs-mkdir | with { (r) time-local "%Y%m%d-%H%M%S" | with { (s) list $s -XXXXXX | concat | with { (n) path-join $r $n | with { (p) run mktemp $p | trim } } } } | with { (log) target-brief $t | with { (b) list "# Run\n\n" $b "\n\n" | concat | write $log } | $log } }
 def first-history { (input) list | with { (none) or $input { (x) nonempty $x | with { (y) list "## input" $y } } $none } } "History holding INPUT, or empty"
 def chain-step { (h t p log) heading $p | log-append $log | with { (head) run-step $t $p $h | log-append $log | with { (out) push $h $head $out } } }
 def chain-from { (t specs input) map $specs parse-step | map check-step | with { (steps) run-log $t | with { (log) first-history $input | with { (h0) fold $steps $h0 { (h p) chain-step $h $t $p $log } } } } | history-last } "Run STEPS on TARGET, the first with INPUT; return the last output"
@@ -68,7 +69,7 @@ def edit { (t a q) list edit@ $a | concat | list | with { (s) chain-from $t $s $
 # Workflows: a default chain per target kind. Pass other steps to chain.
 def audit-steps { () list survey@claude review@codex report@claude }
 def fix-steps { () list reproduce@claude diagnose@codex patch@claude review@codex }
-def build-steps { () list plan@claude critique@codex implement@claude verify@codex review@opencode }
+def build-steps { () list plan@claude critique@codex implement@claude verify@codex review@cursor }
 def workflow { (t kind steps) require-kind $t $kind | with { (x) chain $x $steps } } "Run STEPS on TARGET if its kind is KIND"
 def audit { (t) audit-steps | with { (s) workflow $t path $s } } "Survey, review, and report on a path target"
 def fix { (t) fix-steps | with { (s) workflow $t bug $s } } "Reproduce, diagnose, patch, and review a bug target"

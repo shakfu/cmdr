@@ -595,7 +595,8 @@ class Commands(unittest.TestCase):
         # session. A shadowed command is listed once, at its definition.
         result = self.run_input("def zz { upper }\ndef upper { lower }\nhelp | lines | each { (row) split $row ' ' | head 1 | join '' }\n")
         names = result.stdout.split()
-        self.assertEqual(names[:6], ['help', 'def', 'script-file', 'script-dir', 'script-args', 'load'])
+        self.assertEqual(names[:7], ['help', 'def', 'script-file', 'script-dir', 'script-args',
+                                     'load', 'import'])
         self.assertEqual(names.count('upper'), 1)
         self.assertLess(names.index('run-in'), names.index('first'))
         self.assertEqual(names[names.index('first'):names.index('first') + 2], ['first', 'last'])
@@ -618,7 +619,7 @@ class Commands(unittest.TestCase):
         self.assertRegex(result.stdout, r'(?m)^split TEXT SEPARATOR +Split into a list$')
         # Extension commands precede primitives; their definitions precede the prelude's.
         names = [line.split()[0] for line in result.stdout.splitlines()[:-2]]
-        self.assertEqual(names[6], 'probe')
+        self.assertEqual(names[7], 'probe')
         self.assertLess(names.index('run-in'), names.index('probe-twice'))
         self.assertLess(names.index('probe-twice'), names.index('first'))
         # Extension scripts do not depend on the prelude, which --user replaces.
@@ -925,6 +926,55 @@ class Commands(unittest.TestCase):
             # A def keeps its script's arguments after the script ends.
             result = self.run_input(f'load {quote(lib)} q\nlib-args\n')
             self.assertEqual(result.stdout, 'q\nq\n', result.stderr)
+
+    def test_import(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            app, lib, home = root / 'app', root / 'lib', root / 'home'
+            for d in [app, lib / 'pkg', home / '.cmdr' / 'lib']:
+                d.mkdir(parents=True)
+            log = root / 'ran.log'
+            (app / 'util.cmdr').write_text(
+                f'def helper {{ upper }}\ndef shout {{ helper | text ! }}\n'
+                f'def where {{ () script-dir }}\nappend x {quote(log)}\n')
+            (lib / 'pkg' / '__init__.cmdr').write_text(
+                'import inner\ndef twice { (x) inner.up $x | with { (y) text $y $y } }\n')
+            (lib / 'pkg' / 'inner.cmdr').write_text('def up { upper }\n')
+            (lib / 'pkg.cmdr').write_text('def twice { (x) text file }\n')
+            (home / '.cmdr' / 'lib' / 'homemod.cmdr').write_text('def hi { () text home }\n')
+            env = {**os.environ, 'CMDR_PATH': f'/nonexistent::{lib}', 'HOME': str(home)}
+            def run(source, name='main.cmdr', cwd='/'):
+                (app / name).write_text(source)
+                return subprocess.run([str(BINARY), str(app / name)], capture_output=True,
+                                      text=True, timeout=20, cwd=cwd, env=env)
+            # The importer's directory first; the module runs once and prints nothing.
+            result = run('import util\nimport util as u\nutil.shout hi\nu.shout hey\nutil.where\n')
+            self.assertEqual(result.stdout.splitlines(), ['HI !', 'HEY !', str(app)], result.stderr)
+            self.assertEqual(log.read_text(), 'x')
+            # A package directory wins over NAME.cmdr; CMDR_PATH and ~/.cmdr/lib are searched.
+            result = run('import pkg\npkg.twice ab\nimport homemod\nhomemod.hi\n')
+            self.assertEqual(result.stdout.splitlines(), ['AB AB', 'home'], result.stderr)
+            # The module's own names and imports stay inside it.
+            for line, name in [('helper x', 'helper'), ('inner.up x', 'inner.up')]:
+                with self.subTest(line=line):
+                    result = run(f'import util\nimport pkg\n{line}\n')
+                    self.assertIn(f'unknown command: {name}', result.stderr)
+            result = run('import util\nhelp | filter util.\n')
+            self.assertRegex(result.stdout, r'(?m)^util\.shout VALUE +def: helper \| text !$')
+            # Errors; a failed import is not recorded, so it runs again.
+            (app / 'loop.cmdr').write_text('import loop\n')
+            (app / 'bad.cmdr').write_text('def ok { () text ok }\nbogus\n')
+            result = subprocess.run([str(BINARY)], input='import loop\nimport bad\nimport bad\nimport nosuch\n',
+                                    capture_output=True, text=True, timeout=20, cwd=app, env=env)
+            self.assertIn('import loop: circular import', result.stderr)
+            self.assertEqual(result.stderr.count('bad.cmdr:2: unknown command: bogus'), 2)
+            self.assertIn(f'import nosuch: not found in .:/nonexistent:{lib}:{home}/.cmdr/lib', result.stderr)
+        for source, message in [('import a.b', "invalid module name 'a.b'"),
+                                ('import a/b', "invalid module name 'a/b'"),
+                                ('import a as b.c', "invalid alias 'b.c'"),
+                                ('import a b', 'usage: import NAME [as ALIAS]')]:
+            with self.subTest(source=source):
+                self.run_line(source, error=message)
 
     def test_syntax_files(self):
         editors = ROOT / 'editors'

@@ -190,7 +190,7 @@ read bug-142.md | target-bug ~/src/app | fix
 
 - Fit: point 1 and point 4. Every step is checked before the first agent runs, and a failed agent stops the chain at its line.
 
-- Resolved: `run-with` gives a working directory, a timeout, stderr, and the exit status. `script-dir` finds the example's templates from any directory. `push` lets `fold` collect each step's output. See [run-with-script-push.md](run-with-script-push.md).
+- Resolved: `run-with` gives a working directory, a timeout, stderr, and the exit status. `import aw` loads the example as a package from any script, and `script-dir` finds its templates. `push` lets `fold` collect each step's output. See [run-with-script-push.md](run-with-script-push.md).
 
 - Blocks:
 
@@ -218,6 +218,7 @@ read bug-142.md | target-bug ~/src/app | fix
 | `run` has no working directory or timeout | D3, D5 | `run-with` options `dir` and `timeout` | Done |
 | No script-relative paths | D5 | `script-file`, `script-dir` | Done |
 | No list append | D5 | `push` | Done |
+| Loading a library by path | D5 | `import`, with qualified names; see [import.md](import.md) | Done |
 | `nth` cannot return a list item | D5 | `last` without `join` | Open |
 | Whole-file `read` | D1 | Line-at-a-time reading; changes the value model, so last | Open |
 

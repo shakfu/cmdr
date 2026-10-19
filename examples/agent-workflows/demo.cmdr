@@ -7,28 +7,28 @@
 # sample/ is copied into a fresh git repository under AW_RUNS (default
 # agent-runs/ in the current directory), so agents never touch your files.
 
-script-dir | path-join workflows.cmdr | load
+import aw
 
 def demo-agent { () script-args | or { first } dry } "AGENT[:MODEL] from the command line, or dry"
-def demo-dir { () aw-runs | fs-mkdir | path-join demo-project } "The copy of sample/"
-def in-demo { (args) demo-dir | with { (d) list dir $d | with { (o) run-with $o $args } } | agent-out } "Run ARGS in the copy; return stdout"
+def demo-dir { () aw.runs-dir | fs-mkdir | path-join demo-project } "The copy of sample/"
+def run-in-demo { (args) demo-dir | with { (d) list dir $d | with { (o) run-with $o $args } } | aw.agent-out } "Run the argv ARGS in the copy; return stdout"
 def demo-reset { () demo-dir | with { (d) run rm -rf $d | $d | with { (x) script-dir | path-join sample | with { (s) run cp -R $s $x } } | $d } } "Replace the copy with sample/"
-def demo-commit { () list "init -q" "add -A" "commit -q -m sample" "log --oneline" | each { (c) split $c " " | with { (args) list git -c user.name=demo -c user.email=demo@example.invalid $args | in-demo } } | last } "Commit the copy; return the log"
+def demo-commit { () list "init -q" "add -A" "commit -q -m 'sample project'" "log --oneline" | each { (c) shlex-split $c | with { (args) list git -c user.name=demo -c user.email=demo@example.invalid $args | run-in-demo } } | last } "Commit the copy; return the log"
 
 # 1. Copy sample/ and commit it, so git shows what the agent changes.
 demo-reset
 demo-commit
 
 # 2. Ask about the project. ask is read-only: the agent cannot edit files.
-demo-dir | target-path | with { (t) demo-agent | with { (a) ask $t $a "Summarize this project in three lines." } }
+demo-dir | aw.target-path | with { (t) demo-agent | with { (a) aw.ask $t $a "Summarize this project in three lines." } }
 
 # 3. Fix the bug in BUG.md: write a failing test, find the cause, patch it,
 #    and review the patch. One agent runs every step.
-demo-agent | with { (a) list @ $a | concat | with { (at) list reproduce diagnose patch review | suffix $at } } | with { (steps) demo-dir | with { (d) path-join $d BUG.md | read | target-bug $d } | with { (t) workflow $t bug $steps } }
+demo-agent | with { (a) list @ $a | concat | with { (at) list reproduce diagnose patch review | suffix $at } } | with { (steps) demo-dir | with { (d) path-join $d BUG.md | read | aw.target-bug $d } | with { (t) aw.workflow $t bug $steps } }
 
 # 4. What changed, and do the tests pass?
-list git status --short | in-demo | or { nonempty } "(no changes)"
+shlex-split "git status --short" | run-in-demo | or { nonempty } "(no changes)"
 demo-dir | with { (d) list dir $d | with { (o) run-with $o python3 -m unittest -q } } | nth 1 | with { (s) list "tests: exit status " $s | concat }
 
 # 5. The run logs, one per ask or chain, with every prompt and output.
-aw-runs | files | sort | tail 2
+aw.runs-dir | files | sort | tail 2

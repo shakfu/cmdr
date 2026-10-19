@@ -112,7 +112,7 @@ int cmdr_join(char **pipeline, size_t *used, const char *line, size_t n);
 typedef struct cmdr_session cmdr_session;
 
 /* commands, usually ending in &cmdr_primitives, must outlive the session.
- * effects adds load and the prelude's file and program commands; without it,
+ * effects adds load, import, and the prelude's file and program commands; without it,
  * end commands in &cmdr_pure for a session with no file or process access.
  * Scripts that load runs print their values to out; NULL discards them. */
 cmdr_session *cmdr_session_open(const cmdr *commands, int effects, FILE *out);

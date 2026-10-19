@@ -37,6 +37,9 @@ if(NOT CMDR_HAVE_ADDCHDIR)
   check_symbol_exists(posix_spawn_file_actions_addchdir_np spawn.h CMDR_HAVE_ADDCHDIR_NP)
 endif()
 unset(CMAKE_REQUIRED_DEFINITIONS)
+# The last directory import searches; fixed at configure time.
+target_compile_definitions(cmdr_objects PRIVATE
+  CMDR_LIBDIR="${CMAKE_INSTALL_FULL_DATADIR}/cmdr/lib")
 foreach(feature IN ITEMS CMDR_HAVE_ADDCHDIR CMDR_HAVE_ADDCHDIR_NP)
   if(${feature})
     target_compile_definitions(cmdr_objects PRIVATE ${feature})

@@ -7,32 +7,62 @@
 #include <limits.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 
 /* src/prelude.cmdr and src/prelude-effects.cmdr, embedded by the build. */
 extern const char cmdr_prelude_source[], cmdr_prelude_effects_source[];
 
-/* Names resolve through head.parent: each def pushes a one-command layer in
- * front of base, which holds the built-ins and then the host's commands.
- * Layers live until close, since a running body may still use an earlier one. */
-struct cmdr_session {
-    cmdr head;
-    cmdr base;
-    cmdr_command builtins[6];
-    int effects;
-    FILE *out;
-};
-
 /* A def's layer comes first, so a layer pointer is its node. A def uses
- * commands[0]. A script pushes a layer of the script commands, whose user is
- * the node holding its path and arguments; after it ends, a layer whose user
- * is the outer script's node, or NULL. */
-typedef struct {
+ * commands[0] and owns block. An import's alias also uses commands[0], whose
+ * block is the module's. A script pushes a layer of the script commands,
+ * whose user is the node holding its path and arguments; after it ends, a
+ * layer whose user is the outer script's node, or NULL. */
+typedef struct definition {
     cmdr layer;
     cmdr_command commands[3];
     cmdr_value block;
     char *path;
     cmdr_value args;
+    struct definition *next; /* The session's previous node. */
 } definition;
+
+/* A module imported, or being imported, by its resolved path. */
+typedef struct {
+    char *path;
+    int loading;
+    const cmdr_command **exports;
+    size_t count;
+} module;
+
+/* Names resolve through head.parent: each def pushes a one-command layer in
+ * front of base, which holds the built-ins and then the host's commands.
+ * Nodes live until close, since a running body may still use an earlier one;
+ * an import unlinks a module's layers, so close frees from nodes. */
+struct cmdr_session {
+    cmdr head;
+    cmdr base;
+    cmdr_command builtins[7];
+    int effects;
+    FILE *out;
+    definition *nodes;
+    module **modules;
+    size_t nmodules;
+};
+
+/* A zeroed node the session frees at close. */
+static definition *new_node(cmdr_session *session)
+{
+    definition *node = cmdr_realloc(NULL, 1, sizeof(*node));
+    *node = (definition){.next = session->nodes};
+    session->nodes = node;
+    return node;
+}
+
+static void push_node(cmdr_session *session, definition *node, size_t count)
+{
+    node->layer = (cmdr){node->commands, count, session->head.parent};
+    session->head.parent = &node->layer;
+}
 
 /* The node of the script whose layer user is, or an error naming command. */
 static const definition *script_of(void *user, const char *command, size_t argc, char **error)
@@ -184,17 +214,17 @@ static int def_command(const cmdr *repl, void *user, size_t argc, const cmdr_val
         free(docstring);
         docstring = cmdr_strndup(argv[2].text, strlen(argv[2].text));
     }
-    definition *node = cmdr_realloc(NULL, 1, sizeof(*node));
-    *node = (definition){0};
-    if (cmdr_clone(&argv[1], &node->block, error)) { free(node); free(docstring); return 1; }
+    cmdr_value block;
+    if (cmdr_clone(&argv[1], &block, error)) { free(docstring); return 1; }
+    definition *node = new_node(session);
+    node->block = block;
     /* The block resolves names where its line compiled, before this layer,
      * so naming itself calls the command it shadows. */
     node->commands[0] = (cmdr_command){.name = cmdr_strndup(name, strlen(name)),
                                        .usage = usage_of(name, body),
                                        .docstring = docstring,
                                        .block = &node->block};
-    node->layer = (cmdr){node->commands, 1, session->head.parent};
-    session->head.parent = &node->layer;
+    push_node(session, node, 1);
     return 0;
 }
 
@@ -214,6 +244,196 @@ static int load_command(const cmdr *repl, void *user, size_t argc, const cmdr_va
     if (status) cmdr_error(error, "load %s failed: %s", argv[0].text, inner);
     free(inner);
     return status ? 1 : 0;
+}
+
+/* A module name is one path component without a dot. */
+static int module_name(const char *name)
+{
+    return valid_name(name) && !strpbrk(name, "./");
+}
+
+static char *join_path(const char *dir, const char *a, const char *b)
+{
+    char *path = cmdr_realloc(NULL, strlen(dir) + strlen(a) + strlen(b) + 3, 1);
+    sprintf(path, "%s/%s%s%s", dir, a, *b ? "/" : "", b);
+    return path;
+}
+
+/* Append dir to the search list, and to searched for messages. */
+static void add_dir(char ***dirs, size_t *count, char *dir)
+{
+    *dirs = cmdr_realloc(*dirs, *count + 1, sizeof(**dirs));
+    (*dirs)[(*count)++] = dir;
+}
+
+/* The directories import searches, in order, for code compiled in repl. */
+static char **search_dirs(const cmdr *repl, size_t *count)
+{
+    char **dirs = NULL;
+    *count = 0;
+    const cmdr_command *file = cmdr_find(repl, "script-file");
+    const definition *script = file && file->run == script_file_command ? file->user : NULL;
+    if (script && script->path) {
+        char *copy = cmdr_strndup(script->path, strlen(script->path)), *dir = dirname(copy);
+        add_dir(&dirs, count, cmdr_strndup(dir, strlen(dir)));
+        free(copy);
+    } else {
+        add_dir(&dirs, count, cmdr_strndup(".", 1));
+    }
+    const char *path = getenv("CMDR_PATH");
+    for (const char *p = path; p && *p;) {
+        const char *end = strchr(p, ':');
+        size_t n = end ? (size_t)(end - p) : strlen(p);
+        if (n) add_dir(&dirs, count, cmdr_strndup(p, n));
+        p += n + (end != NULL);
+    }
+    const char *home = getenv("HOME");
+    if (home && *home) add_dir(&dirs, count, join_path(home, ".cmdr", "lib"));
+#ifdef CMDR_LIBDIR
+    add_dir(&dirs, count, cmdr_strndup(CMDR_LIBDIR, strlen(CMDR_LIBDIR)));
+#endif
+    return dirs;
+}
+
+static int regular_file(const char *path)
+{
+    struct stat st;
+    return !stat(path, &st) && S_ISREG(st.st_mode);
+}
+
+/* The resolved path of module name, or NULL with *error listing the search. */
+static char *find_module(const cmdr *repl, const char *name, char **error)
+{
+    size_t count;
+    char **dirs = search_dirs(repl, &count), *found = NULL;
+    char *file = cmdr_realloc(NULL, strlen(name) + sizeof(".cmdr"), 1);
+    sprintf(file, "%s.cmdr", name);
+    for (size_t i = 0; i < count && !found; ++i) {
+        char *candidates[] = {join_path(dirs[i], name, "__init__.cmdr"), join_path(dirs[i], file, "")};
+        for (size_t k = 0; k < 2; ++k) {
+            char resolved[PATH_MAX];
+            if (!found && regular_file(candidates[k]) && realpath(candidates[k], resolved))
+                found = cmdr_strndup(resolved, strlen(resolved));
+            free(candidates[k]);
+        }
+    }
+    if (!found) {
+        size_t n = 1;
+        for (size_t i = 0; i < count; ++i) n += strlen(dirs[i]) + 1;
+        char *searched = cmdr_realloc(NULL, n, 1);
+        *searched = '\0';
+        for (size_t i = 0; i < count; ++i) {
+            if (i) strcat(searched, ":");
+            strcat(searched, dirs[i]);
+        }
+        cmdr_error(error, "import %s: not found in %s", name, searched);
+        free(searched);
+    }
+    for (size_t i = 0; i < count; ++i) free(dirs[i]);
+    free(dirs);
+    free(file);
+    return found;
+}
+
+/* Run the module at path, record its definitions, and hide its names. */
+static int run_module(cmdr_session *session, module *m, const char *name, char **error)
+{
+    FILE *in = fopen(m->path, "r");
+    if (!in) return cmdr_error(error, "import %s: %s: %s", name, m->path, strerror(errno));
+    const cmdr *before = session->head.parent;
+    FILE *out = session->out;
+    session->out = NULL; /* As in Python, a module's values are not printed. */
+    char *inner;
+    int status = cmdr_session_load_args(session, in, m->path, 0, NULL, &inner);
+    session->out = out;
+    fclose(in);
+    /* Newest first, so the first definition of a name is its latest. */
+    for (const cmdr *layer = session->head.parent; !status && layer != before; layer = layer->parent) {
+        const definition *node = (const definition *)layer;
+        if (node->block.kind != CMDR_BLOCK) continue; /* Script layers and aliases. */
+        size_t i = 0;
+        while (i < m->count && strcmp(m->exports[i]->name, node->commands[0].name)) ++i;
+        if (i < m->count) continue;
+        m->exports = cmdr_realloc(m->exports, m->count + 1, sizeof(*m->exports));
+        m->exports[m->count++] = &node->commands[0];
+    }
+    for (size_t i = 0; i < m->count / 2; ++i) { /* Definition order, for help. */
+        const cmdr_command *t = m->exports[i];
+        m->exports[i] = m->exports[m->count - 1 - i];
+        m->exports[m->count - 1 - i] = t;
+    }
+    session->head.parent = before;
+    if (status) cmdr_error(error, "import %s: %s", name, inner);
+    free(inner);
+    return status;
+}
+
+/* Push ALIAS.NAME for each of the module's definitions. */
+static void bind_module(cmdr_session *session, const module *m, const char *alias)
+{
+    size_t n = strlen(alias);
+    for (size_t i = 0; i < m->count; ++i) {
+        const cmdr_command *command = m->exports[i];
+        const char *usage = command->usage ? command->usage : command->name;
+        char *name = cmdr_realloc(NULL, n + strlen(command->name) + 2, 1);
+        char *qualified = cmdr_realloc(NULL, n + strlen(usage) + 2, 1);
+        sprintf(name, "%s.%s", alias, command->name);
+        sprintf(qualified, "%s.%s", alias, usage);
+        const char *doc = command->docstring ? command->docstring : "";
+        definition *node = new_node(session);
+        node->commands[0] = (cmdr_command){.name = name, .usage = qualified,
+                                           .docstring = cmdr_strndup(doc, strlen(doc)),
+                                           .block = command->block};
+        push_node(session, node, 1);
+    }
+}
+
+static void free_module(module *m)
+{
+    free(m->path);
+    free(m->exports);
+    free(m);
+}
+
+static int import_command(const cmdr *repl, void *user, size_t argc, const cmdr_value *argv,
+                          cmdr_value *result, char **error)
+{
+    cmdr_session *session = user;
+    if (!(argc == 1 || (argc == 3 && !strcmp(argv[1].text, "as"))))
+        return cmdr_error(error, "usage: import NAME [as ALIAS]");
+    const char *name = argv[0].text, *alias = argv[argc - 1].text;
+    if (!module_name(name)) return cmdr_error(error, "import: invalid module name '%s'", name);
+    if (!module_name(alias)) return cmdr_error(error, "import: invalid alias '%s'", alias);
+    char *path = find_module(repl, name, error);
+    if (!path) return 1;
+    module *m = NULL;
+    for (size_t i = 0; i < session->nmodules && !m; ++i)
+        if (!strcmp(session->modules[i]->path, path)) m = session->modules[i];
+    if (m && m->loading) {
+        free(path);
+        return cmdr_error(error, "import %s: circular import", name);
+    }
+    if (!m) {
+        m = cmdr_realloc(NULL, 1, sizeof(*m));
+        *m = (module){.path = path, .loading = 1};
+        path = NULL;
+        session->modules = cmdr_realloc(session->modules, session->nmodules + 1,
+                                        sizeof(*session->modules));
+        session->modules[session->nmodules++] = m;
+        if (run_module(session, m, name, error)) {
+            /* Not recorded, so the next import runs the module again. */
+            size_t i = 0;
+            while (session->modules[i] != m) ++i;
+            memmove(&session->modules[i], &session->modules[i + 1],
+                    (--session->nmodules - i) * sizeof(*session->modules));
+            free_module(m);
+            return 1;
+        }
+        m->loading = 0;
+    }
+    free(path);
+    bind_module(session, m, alias);
+    return 0;
 }
 
 cmdr_session *cmdr_session_open(const cmdr *commands, int effects, FILE *out)
@@ -236,12 +456,15 @@ cmdr_session *cmdr_session_open(const cmdr *commands, int effects, FILE *out)
             {.name = "load", .usage = "load PATH [ARG ...]",
              .docstring = "Run a script in this session, with arguments",
              .run = load_command, .user = s, .text = 1},
+            {.name = "import", .usage = "import NAME [as ALIAS]",
+             .docstring = "Run module NAME once; bind its definitions as NAME.DEF",
+             .run = import_command, .user = s, .text = 1},
         },
         .effects = effects,
         .out = out,
     };
-    /* load is last, so a session without effects omits it. */
-    s->base = (cmdr){s->builtins, effects ? 6 : 5, commands};
+    /* load and import are last, so a session without effects omits them. */
+    s->base = (cmdr){s->builtins, effects ? 7 : 5, commands};
     s->head.parent = &s->base;
     return s;
 }
@@ -249,9 +472,8 @@ cmdr_session *cmdr_session_open(const cmdr *commands, int effects, FILE *out)
 void cmdr_session_close(cmdr_session *session)
 {
     if (!session) return;
-    for (const cmdr *layer = session->head.parent; layer != &session->base;) {
-        definition *node = (definition *)layer;
-        layer = layer->parent;
+    for (definition *node = session->nodes, *next; node; node = next) {
+        next = node->next;
         if (node->commands[0].block) { /* Script layers share the built-ins' strings. */
             free((char *)node->commands[0].name);
             free((char *)node->commands[0].usage);
@@ -262,6 +484,8 @@ void cmdr_session_close(cmdr_session *session)
         cmdr_free(&node->block);
         free(node);
     }
+    for (size_t i = 0; i < session->nmodules; ++i) free_module(session->modules[i]);
+    free(session->modules);
     free(session);
 }
 
@@ -307,14 +531,12 @@ int cmdr_join(char **pipeline, size_t *used, const char *line, size_t n)
 /* Push a layer of the script commands, reading user's path and arguments. */
 static definition *push_script(cmdr_session *session, const definition *user)
 {
-    definition *node = cmdr_realloc(NULL, 1, sizeof(*node));
-    *node = (definition){0};
+    definition *node = new_node(session);
     for (size_t i = 0; i < 3; ++i) {
         node->commands[i] = session->builtins[2 + i];
         node->commands[i].user = (void *)user;
     }
-    node->layer = (cmdr){node->commands, 3, session->head.parent};
-    session->head.parent = &node->layer;
+    push_node(session, node, 3);
     return node;
 }
 

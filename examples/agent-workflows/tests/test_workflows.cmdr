@@ -1,25 +1,26 @@
-# Checks every entry point of workflows.cmdr with the dry agent, which
-# returns its prompt. CTest runs it as example_agent_workflows.
+# Checks every entry point of the aw module with the dry agent, which returns
+# its prompt. CTest runs it as example_agent_workflows, with CMDR_PATH set to
+# examples/agent-workflows.
 
-script-dir | path-join ../workflows.cmdr | load
+import aw
 
 # One prompt: ask is read-only, edit may write.
-target-path . | with { (t) ask $t dry:opus "List the primitives." } | check { contains "[dry read . opus]" } "ask did not run read-only"
-target-path . | with { (t) edit $t dry "Rename parse." } | check { contains "[dry write . ]" } "edit did not run in write mode"
+aw.target-path . | with { (t) aw.ask $t dry:opus "List the primitives." } | check { contains "[dry read . opus]" } "ask did not run read-only"
+aw.target-path . | with { (t) aw.edit $t dry "Rename parse." } | check { contains "[dry write . ]" } "edit did not run in write mode"
 
 # chain-from gives its INPUT to the first step as {{input}}.
-target-path . | with { (t) list review@dry | with { (s) chain-from $t $s "the seed" } } | check { contains "the seed" } "chain-from did not pass its input"
+aw.target-path . | with { (t) list review@dry | with { (s) aw.chain-from $t $s "the seed" } } | check { contains "the seed" } "chain-from did not pass its input"
 
 # A chain: diagnose receives reproduce's output as {{input}}.
-text "help | count returns 0" | target-bug . | with { (t) list reproduce@dry diagnose@dry:gpt-5 | with { (s) chain $t $s } } | check { contains "[dry write . ]" } "diagnose did not receive reproduce's output"
+text "help | count returns 0" | aw.target-bug . | with { (t) list reproduce@dry diagnose@dry:gpt-5 | with { (s) aw.chain $t $s } } | check { contains "[dry write . ]" } "diagnose did not receive reproduce's output"
 
 # implement reads every earlier output as {{history}}, so it sees the plan.
-text "Add a sum-sq command" | target-feature . | with { (t) list plan@dry critique@dry implement@dry | with { (s) chain $t $s } } | check { contains "## critique@dry" } "implement did not receive the history"
+text "Add a sum-sq command" | aw.target-feature . | with { (t) list plan@dry critique@dry implement@dry | with { (s) aw.chain $t $s } } | check { contains "## critique@dry" } "implement did not receive the history"
 
 # workflow runs custom steps on a target of its kind.
-text "Add a sum-sq command" | target-feature . | with { (t) list plan@dry | with { (s) workflow $t feature $s } } | check { contains "Specification:" } "workflow did not run on a feature target"
+text "Add a sum-sq command" | aw.target-feature . | with { (t) list plan@dry | with { (s) aw.workflow $t feature $s } } | check { contains "Specification:" } "workflow did not run on a feature target"
 
 # Bad steps fail before any agent runs; a workflow rejects the wrong target kind.
-target-path . | try { (t) list survey@dry survey@nobody | with { (s) chain $t $s } } rejected | check { equals rejected } "unknown agent was accepted"
-target-path . | try { (t) fix $t } rejected | check { equals rejected } "fix accepted a path target"
-target-path . | try { (t) list plan@dry | with { (s) workflow $t feature $s } } rejected | check { equals rejected } "workflow accepted the wrong kind"
+aw.target-path . | try { (t) list survey@dry survey@nobody | with { (s) aw.chain $t $s } } rejected | check { equals rejected } "unknown agent was accepted"
+aw.target-path . | try { (t) aw.fix $t } rejected | check { equals rejected } "fix accepted a path target"
+aw.target-path . | try { (t) list plan@dry | with { (s) aw.workflow $t feature $s } } rejected | check { equals rejected } "workflow accepted the wrong kind"

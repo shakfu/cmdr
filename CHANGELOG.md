@@ -36,17 +36,21 @@
 
 ### Added
 
+- **`import NAME [as ALIAS]`** runs a module once per session and binds its definitions as `NAME.DEF`, as Python's `import` does. It searches the importing file's directory, `CMDR_PATH`, `~/.cmdr/lib`, and `share/cmdr/lib`; a package `NAME/__init__.cmdr` wins over `NAME.cmdr`. The module's other names stay inside it. Qualified names over a required `NAME-` prefix, because moving every module and importer to qualified names later would cost more with each module written. See [docs/dev/import.md](docs/dev/import.md).
+
 - **`run-with OPTIONS PROGRAM [ARG ...]`** runs a program with `dir`, `stdin`, and `timeout` options. It returns `STATUS STDOUT STDERR`, where `run` fails on a nonzero status. List arguments are flattened, so an optional flag is an empty or two-item list. One command with options over a `run` variant per option, since the options combine. See [docs/dev/run-with-script-push.md](docs/dev/run-with-script-push.md).
 
 - **`script-file` and `script-dir`** return the absolute path and directory of the script file in which they are written, like `realpath(__file__)` in Python, so a script can find its own files. A `def` in `lib/x.cmdr` whose body uses `script-dir` returns `lib`, even when a script elsewhere calls it. The alternative, the running script, would give that `def` its caller's directory.
 
 - **Script arguments.** `cmdr FILE [ARG ...]` and `load PATH [ARG ...]` pass arguments, which `script-args` returns as a list. It resolves as `script-file` does, so a loaded library sees its own arguments, not the top script's. A process-wide list, like Python's `sys.argv`, would let a library depend on its caller's command line. `cmdr_session_load_args` passes arguments from a host. See [docs/dev/run-with-script-push.md](docs/dev/run-with-script-push.md#script-args).
 
+- Extension `shlex`: `shlex-split`, `shlex-quote`, and `shlex-join`, as Python's `shlex` with `posix=True`. `shlex-split "git commit -m 'two words'"` gives four words, which `split` cannot, and nothing is expanded or run. See [ext/shlex](ext/shlex/README.md).
+
 - `path-join BASE PATH` joins two paths with one `/`, as Python's `os.path.join` does; an absolute PATH replaces BASE. `path-split PATH` returns `path-dirname` and `path-basename` of PATH, like `os.path.split` but with POSIX rules: `path-split c` gives `.` and `c`. Both are prelude `def`s, so `script-dir | path-join lib.cmdr | load` needs no `concat`.
 
 - `push LIST [ITEM ...]` appends items to a list. `list $xs x` nests `$xs` as one item, so `fold` could not collect results.
 
-- `examples/agent-workflows`: chains of coding agents (claude, codex, cursor, pi, opencode) over a project, bug, or feature target. `aw.cmdr` is its command-line entry point. `demo.cmdr` fixes a reported bug in a sample project with one agent. CTest runs the demo, `aw.cmdr`, and a test of every entry point with a dry agent.
+- `examples/agent-workflows`: chains of coding agents (claude, codex, cursor, pi, opencode) over a project, bug, or feature target. It is the package `aw`, used with `import aw`; `aw.cmdr` is its command-line entry point. `demo.cmdr` fixes a reported bug in a sample project with one agent. CTest runs the demo, `aw.cmdr`, and a test of every entry point with a dry agent.
 
 - **Extensions in `ext/NAME/`.** Each holds C commands, `.cmdr` definitions, a `README.md`, and `tests/`, and the build compiles them into `cmdr`. `make test` runs each `tests/*.cmdr` with `cmdr` and builds each `tests/*.c` against the extension. `help` shows C commands with `ext/NAME:` before the docstring. An extension command that reuses an existing name stops startup. A shadowed name would silently change prelude definitions, which bind names when defined. Extension scripts run before the prelude, because `--user` replaces it. See [README.md](README.md#extensions) and [ext/env](ext/env/README.md).
 

@@ -26,6 +26,8 @@ The REPL edits lines with a vendored copy of linenoise, in [thirdparty/linenoise
 
 - `load PATH [ARG ...]` runs a script in the current session, so its definitions remain. The script sees ARGs through `script-args`.
 
+- `import NAME [as ALIAS]` runs a module once per session and binds its definitions as `NAME.DEF`. See [Modules](#modules).
+
 - `script-file` returns the absolute path of the script file in which it is written, like `realpath(__file__)` in Python. `script-dir` returns that file's directory, and `script-args` the arguments it was run or loaded with, like `sys.argv[1:]`. A `def` in `lib/x.cmdr` whose body uses `script-dir` returns `lib`, even when a script elsewhere calls it. In the REPL, `-c`, and embedded scripts all three are errors.
 
 - `./cmdr --user ...` runs `~/.cmdr/prelude.cmdr` instead of the standard prelude; it is an error if the file is missing.
@@ -104,6 +106,7 @@ These are the primitives, in [src/primitives.c](src/primitives.c). Extensions ad
 | `run PROGRAM [ARG ...]`, `run-in TEXT PROGRAM [ARG ...]` | Run a program, returning stdout |
 | `run-with OPTIONS PROGRAM [ARG ...]` | Run a program with options, returning `STATUS STDOUT STDERR` |
 | `load PATH [ARG ...]` | Run a script in this session |
+| `import NAME [as ALIAS]` | Run a module once; bind its definitions as `NAME.DEF` |
 
 ```text
 cmdr> text "pear,apple,pear" | split , | sort | uniq | join ", "
@@ -168,6 +171,24 @@ txt
 
 Put definitions in a file, such as `ext.cmdr`, and run `load ext.cmdr` in a session or at the top of a script. Move a definition into `src/prelude.cmdr` when every session should have it, or into `src/prelude-effects.cmdr` if it reads files or runs programs. The build embeds the file, and cmdr runs it at startup; an error there stops cmdr with `prelude.cmdr:LINE:`. Because definitions are lexical, a later `def tail` does not change the prelude's `last`.
 
+## Modules
+
+`import NAME` follows Python's `import`. It searches, in order:
+
+1. the directory of the file in which `import` is written, or the current directory in the REPL and `-c`;
+2. each directory in `CMDR_PATH`, separated by `:`;
+3. `~/.cmdr/lib`;
+4. `share/cmdr/lib` under the install prefix.
+
+In each directory, a package `NAME/__init__.cmdr` wins over `NAME.cmdr`. The module runs once per session, with no arguments and without printing its values. Later imports bind its names again. The importer gets `NAME.DEF` for each definition, or `ALIAS.DEF` with `as`. The module's other names, including its own imports, stay inside it.
+
+```text
+cmdr> import aw
+cmdr> read bug.md | aw.target-bug ~/src/app | aw.fix
+```
+
+A package finds its own files with `script-dir`. Design and departures from Python: [docs/dev/import.md](docs/dev/import.md).
+
 ## Adding commands
 
 Write a command in C only when it cannot be composed. For the `cmdr` executable, write an [extension](#extensions). This section is for a host that embeds cmdr. The build produces `libcmdr.a`, with the API in [include/cmdr.h](include/cmdr.h). A host puts its commands in a table in front of the primitives in [src/primitives.c](src/primitives.c), where they shadow them, and opens a session on it:
@@ -199,7 +220,7 @@ if (cmdr_session_prelude(session, &error)
 
 A session adds `help` and `def`, and frees its definitions on `cmdr_session_close`. `cmdr_session_load` runs a script and stops at its first failure. Sessions on different threads are independent. [src/main.c](src/main.c) is the cmdr executable, built on this API.
 
-The second argument of `cmdr_session_open` allows effects. With it, the session adds `load`, and `cmdr_session_prelude` also runs [src/prelude-effects.cmdr](src/prelude-effects.cmdr), which defines `cat`, `grep`, `sh`, and `sh-in`. For a console without file or process access, pass 0 and end the host's table in `&cmdr_pure`, which omits `read`, `write`, `append`, `files`, `run`, and `run-in`.
+The second argument of `cmdr_session_open` allows effects. With it, the session adds `load` and `import`, and `cmdr_session_prelude` also runs [src/prelude-effects.cmdr](src/prelude-effects.cmdr), which defines `cat`, `grep`, `sh`, and `sh-in`. For a console without file or process access, pass 0 and end the host's table in `&cmdr_pure`, which omits `read`, `write`, `append`, `files`, `run`, and `run-in`.
 
 Allocation failure exits the process with status 1. `cmdr_set_out_of_memory` installs a handler that runs first, to log or save host state.
 
@@ -237,6 +258,7 @@ The extensions in `ext/`:
 | [fs](ext/fs/README.md) | Path tests, sizes, times, `fs-mkdir`, `fs-remove`, `fs-move` |
 | [num](ext/num/README.md) | `num-seq`, modulo, rounding |
 | [re](ext/re/README.md) | Regex extraction, splitting, and replacement |
+| [shlex](ext/shlex/README.md) | Shell-style word splitting and quoting, as Python's `shlex` |
 | [str](ext/str/README.md) | Byte offsets, repetition, padding, reversal |
 | [time](ext/time/README.md) | The current time, and strftime formatting |
 
