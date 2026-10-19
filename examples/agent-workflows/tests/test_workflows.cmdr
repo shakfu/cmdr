@@ -24,3 +24,8 @@ text "Add a sum-sq command" | aw.target-feature . | with { (t) list plan@dry | w
 aw.target-path . | try { (t) list survey@dry survey@nobody | with { (s) aw.chain $t $s } } rejected | check { equals rejected } "unknown agent was accepted"
 aw.target-path . | try { (t) aw.fix $t } rejected | check { equals rejected } "fix accepted a path target"
 aw.target-path . | try { (t) list plan@dry | with { (s) aw.workflow $t feature $s } } rejected | check { equals rejected } "workflow accepted the wrong kind"
+
+# check-sandbox passes an empty probe or one that exits 0, and rejects others.
+list | aw.check-sandbox | check { equals 0 } "empty probe was rejected"
+list true | aw.check-sandbox | check { equals 0 } "passing probe was rejected"
+list false | try { (a) aw.check-sandbox $a } rejected | check { equals rejected } "failing probe was accepted"

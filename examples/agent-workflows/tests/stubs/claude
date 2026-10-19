@@ -1,0 +1,3 @@
+#!/bin/sh
+# Stands in for claude: prints its arguments.
+echo "stub claude ran: $*"

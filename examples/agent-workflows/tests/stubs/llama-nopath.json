@@ -1,0 +1,10 @@
+{
+  "choices": [
+    {
+      "message": {
+        "role": "assistant",
+        "content": "<<<<<<< SEARCH\nfrom stats import median\n=======\nfrom stats import mean, median\n>>>>>>> REPLACE"
+      }
+    }
+  ]
+}
