@@ -4,6 +4,8 @@
 
 ### Changed
 
+- Path commands share the `path-` prefix: `basename`, `dirname`, `ext`, `has-ext`, and `stem` are now `path-basename`, `path-dirname`, `path-ext`, `path-has-ext`, and `path-stem`. The prefix groups them, as `run-` and `script-` do.
+
 - **Blocks replace string bodies and positional `$N`.** `{ ... }` is a pipeline passed as a value. Its command names and references are checked with the enclosing line, before any stage runs. Blocks declare parameters, which resolve lexically through nested blocks. Lexical scope over per-call `$N`, because per-call scope passed each outer value down at every nesting level and could not return a closure. See [docs/dev/blocks.md](docs/dev/blocks.md).
 
   ```text
@@ -22,7 +24,7 @@
 
 - A block resolves command names where it was written, and `cmdr_run` no longer takes a registry. `cmdr_command.scope` is removed: a block's compiled code carries its scope. See Fixed.
 
-- `last` fails with a mismatch on an empty list or text; it returned empty text, which could not be told apart from an empty last item. `first` does the same, and so does `ext` on empty text.
+- `last` fails with a mismatch on an empty list or text; it returned empty text, which could not be told apart from an empty last item. `first` does the same, and so does `path-ext` on empty text.
 
 - Mismatch messages name the values involved: `equals: foo differs from bar`, `not: [1] satisfies { nonempty }`. They omitted the tested value, so a composed predicate's failure did not say which input failed. A mismatch from a def called on a line also shows the call's arguments, `ends-with ar bar: ...`; errors keep the plain call chain, which serves debugging. Values print in one line, up to 32 bytes and 5 items.
 
@@ -33,6 +35,18 @@
 - `docs/dev/scenarios-of-use.md` marks regex capture and environment access done, through `ext/re` and `ext/env`, and shows D1 log triage with `re-groups`.
 
 ### Added
+
+- **`run-with OPTIONS PROGRAM [ARG ...]`** runs a program with `dir`, `stdin`, and `timeout` options. It returns `STATUS STDOUT STDERR`, where `run` fails on a nonzero status. List arguments are flattened, so an optional flag is an empty or two-item list. One command with options over a `run` variant per option, since the options combine. See [docs/dev/run-with-script-push.md](docs/dev/run-with-script-push.md).
+
+- **`script-file` and `script-dir`** return the absolute path and directory of the script file in which they are written, like `realpath(__file__)` in Python, so a script can find its own files. A `def` in `lib/x.cmdr` whose body uses `script-dir` returns `lib`, even when a script elsewhere calls it. The alternative, the running script, would give that `def` its caller's directory.
+
+- **Script arguments.** `cmdr FILE [ARG ...]` and `load PATH [ARG ...]` pass arguments, which `script-args` returns as a list. It resolves as `script-file` does, so a loaded library sees its own arguments, not the top script's. A process-wide list, like Python's `sys.argv`, would let a library depend on its caller's command line. `cmdr_session_load_args` passes arguments from a host. See [docs/dev/run-with-script-push.md](docs/dev/run-with-script-push.md#script-args).
+
+- `path-join BASE PATH` joins two paths with one `/`, as Python's `os.path.join` does; an absolute PATH replaces BASE. `path-split PATH` returns `path-dirname` and `path-basename` of PATH, like `os.path.split` but with POSIX rules: `path-split c` gives `.` and `c`. Both are prelude `def`s, so `script-dir | path-join lib.cmdr | load` needs no `concat`.
+
+- `push LIST [ITEM ...]` appends items to a list. `list $xs x` nests `$xs` as one item, so `fold` could not collect results.
+
+- `examples/agent-workflows`: chains of coding agents (claude, codex, cursor, pi, opencode) over a project, bug, or feature target. `aw.cmdr` is its command-line entry point. `demo.cmdr` fixes a reported bug in a sample project with one agent. CTest runs the demo, `aw.cmdr`, and a test of every entry point with a dry agent.
 
 - **Extensions in `ext/NAME/`.** Each holds C commands, `.cmdr` definitions, a `README.md`, and `tests/`, and the build compiles them into `cmdr`. `make test` runs each `tests/*.cmdr` with `cmdr` and builds each `tests/*.c` against the extension. `help` shows C commands with `ext/NAME:` before the docstring. An extension command that reuses an existing name stops startup. A shadowed name would silently change prelude definitions, which bind names when defined. Extension scripts run before the prelude, because `--user` replaces it. See [README.md](README.md#extensions) and [ext/env](ext/env/README.md).
 
@@ -50,7 +64,7 @@
 
   The composed-command depth counter is per thread. It was one `static`, so two threads nesting at once shared the limit of 128 and failed with `nested too deeply`.
 
-- `cmdr_pure`, the primitives without `read`, `write`, `append`, `files`, `run`, and `run-in`, for a host console without file or process access. `cmdr_session_open` takes an `effects` flag, which adds `load` and runs `src/prelude-effects.cmdr` after the prelude. The definitions that use effects (`cat`, `grep`, `sh`, `sh-in`) moved there from `src/prelude.cmdr`, since a pure session fails to compile them. `basename` and `dirname` are pure and now list before `read` in `help`.
+- `cmdr_pure`, the primitives without `read`, `write`, `append`, `files`, `run`, and `run-in`, for a host console without file or process access. `cmdr_session_open` takes an `effects` flag, which adds `load` and runs `src/prelude-effects.cmdr` after the prelude. The definitions that use effects (`cat`, `grep`, `sh`, `sh-in`) moved there from `src/prelude.cmdr`, since a pure session fails to compile them. `path-basename` and `path-dirname` are pure and now list before `read` in `help`.
 
 - `cmdr_set_out_of_memory` sets a handler that runs before an allocation failure exits. The handler cannot recover by `longjmp`, because the failed evaluation's values would leak, and those values are often what used up the memory. Returning an error from every allocation is the alternative, and [docs/dev/minimal.md](docs/dev/minimal.md) removed it.
 
@@ -65,7 +79,7 @@
   list 3 10 2 | fold 0 { (a x) or $a { gt $x } $x }
   ```
 
-- The prelude defines list commands (`first`, `nth`, `init`, `rest`, `concat`, `unlines`, `unwords`, `distinct`, `reject`, `without`, `compact`, `prefix`, `suffix`, `empty`, `any`, `all`), numbers (`sum`, `product`, `max`, `min`, `mean`, `between`), text (`words`, `starts-with`, `ends-with`, `strip-prefix`, `strip-suffix`), and paths and programs (`stem`, `cat`, `grep`, `sh`, `sh-in`). Each is composed from primitives.
+- The prelude defines list commands (`first`, `nth`, `init`, `rest`, `concat`, `unlines`, `unwords`, `distinct`, `reject`, `without`, `compact`, `prefix`, `suffix`, `empty`, `any`, `all`), numbers (`sum`, `product`, `max`, `min`, `mean`, `between`), text (`words`, `starts-with`, `ends-with`, `strip-prefix`, `strip-suffix`), and paths and programs (`path-stem`, `cat`, `grep`, `sh`, `sh-in`). Each is composed from primitives.
 
 - Version 0.1.0, set in `CMakeLists.txt`. `cmdr --version` prints it, and the REPL starts with `cmdr 0.1.0 (prelude: standard)`, in bold cyan where the prompt has color.
 
@@ -75,7 +89,7 @@
 
   linenoise keeps a paste's newlines in one buffer, so pasted lines ran as one pipeline: `text a` and `text b` printed `a text b`. They now run one at a time. The vendored copy switches terminal modes with `TCSADRAIN`, not `TCSAFLUSH`, which discarded a second line typed or pasted before the first returned.
 
-- `src/prelude.cmdr` defines `last`, the last item; `ext`, the text after the last dot; and `has-ext`, which keeps names with a dot after the first byte.
+- `src/prelude.cmdr` defines `last`, the last item; `path-ext`, the text after the last dot; and `path-has-ext`, which keeps names with a dot after the first byte.
 
 - `load PATH` runs a script in the current session, so its definitions remain.
 

@@ -1,4 +1,8 @@
 #define _POSIX_C_SOURCE 200809L
+#ifdef CMDR_HAVE_ADDCHDIR_NP
+#define _DEFAULT_SOURCE /* glibc and musl declare it as an extension. */
+#define _DARWIN_C_SOURCE
+#endif
 #include "cmdr.h"
 
 #include <ctype.h>
@@ -7,12 +11,14 @@
 #include <fcntl.h>
 #include <math.h>
 #include <regex.h>
+#include <signal.h>
 #include <spawn.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
+#include <time.h>
 #include <unistd.h>
 
 extern char **environ;
@@ -244,51 +250,142 @@ static FILE *process_stream(void)
     return file;
 }
 
-/* Files rather than pipes: a child that writes before reading cannot block. */
-static int execute(const char *input, size_t argc, const cmdr_value *argv,
-                   cmdr_value *result, char **error)
+/* How to run a program. capture returns STATUS STDOUT STDERR, as run-with
+ * does, in place of failing on a nonzero status. */
+typedef struct {
+    const char *name; /* The command, for messages. */
+    const char *input;
+    const char *dir;  /* NULL inherits cmdr's directory. */
+    double timeout;   /* Seconds; 0 waits without limit. */
+    int capture;
+} process;
+
+static double now(void)
 {
-    const char *program = argv[0].text;
+    struct timespec t;
+    clock_gettime(CLOCK_MONOTONIC, &t);
+    return (double)t.tv_sec + (double)t.tv_nsec / 1e9;
+}
+
+/* Poll until child exits or limit seconds pass; return the pid or 0 if it is
+ * still running. */
+static pid_t wait_until(pid_t child, int *wait_status, double limit)
+{
+    struct timespec tick = {0, 10 * 1000 * 1000};
+    double deadline = now() + limit;
+    for (;;) {
+        pid_t waited = waitpid(child, wait_status, WNOHANG);
+        if (waited > 0 || (waited < 0 && errno != EINTR)) return waited;
+        if (now() >= deadline) return 0;
+        nanosleep(&tick, NULL);
+    }
+}
+
+/* Wait for child; past the timeout, send SIGTERM, then SIGKILL after a second. */
+static pid_t wait_child(pid_t child, double timeout, int *wait_status, int *timed_out)
+{
+    pid_t waited = 0;
+    if (timeout > 0 && !(waited = wait_until(child, wait_status, timeout))) {
+        *timed_out = 1;
+        kill(child, SIGTERM);
+        if (!(waited = wait_until(child, wait_status, 1))) kill(child, SIGKILL);
+    }
+    if (!waited)
+        do waited = waitpid(child, wait_status, 0); while (waited < 0 && errno == EINTR);
+    return waited;
+}
+
+static int add_dir(posix_spawn_file_actions_t *actions, const char *dir)
+{
+#if defined(CMDR_HAVE_ADDCHDIR)
+    return posix_spawn_file_actions_addchdir(actions, dir);
+#elif defined(CMDR_HAVE_ADDCHDIR_NP)
+    return posix_spawn_file_actions_addchdir_np(actions, dir);
+#else
+    return ENOSYS;
+#endif
+}
+
+/* Files rather than pipes: a child that writes before reading cannot block. */
+static int execute(const process *p, char **args, cmdr_value *result, char **error)
+{
+    const char *program = args[0];
     if (!program[0]) return cmdr_error(error, "expected an executable name");
-    char **args = cmdr_realloc(NULL, argc + 1, sizeof(*args));
-    for (size_t i = 0; i < argc; ++i) args[i] = argv[i].text;
-    args[argc] = NULL;
+    struct stat st;
+    if (p->dir && stat(p->dir, &st))
+        return cmdr_error(error, "run-with: dir %s: %s", p->dir, strerror(errno));
+    if (p->dir && !S_ISDIR(st.st_mode))
+        return cmdr_error(error, "run-with: dir %s: %s", p->dir, strerror(ENOTDIR));
     FILE *in = process_stream(), *out = in ? process_stream() : NULL;
+    FILE *err = out && p->capture ? process_stream() : NULL;
     int status = 1;
-    size_t n = strlen(input);
-    if (!in || !out) {
-        cmdr_error(error, "run: temporary file: %s", strerror(errno));
+    size_t n = strlen(p->input);
+    if (!in || !out || (p->capture && !err)) {
+        cmdr_error(error, "%s: temporary file: %s", p->name, strerror(errno));
         goto done;
     }
-    if (fwrite(input, 1, n, in) != n || fflush(in) || fseek(in, 0, SEEK_SET)) {
-        cmdr_error(error, "run: preparing stdin: %s", strerror(errno));
+    if (fwrite(p->input, 1, n, in) != n || fflush(in) || fseek(in, 0, SEEK_SET)) {
+        cmdr_error(error, "%s: preparing stdin: %s", p->name, strerror(errno));
         goto done;
     }
     posix_spawn_file_actions_t actions;
     int rc = posix_spawn_file_actions_init(&actions);
-    if (rc) { cmdr_error(error, "run: %s", strerror(rc)); goto done; }
+    if (rc) { cmdr_error(error, "%s: %s", p->name, strerror(rc)); goto done; }
     rc = posix_spawn_file_actions_adddup2(&actions, fileno(in), STDIN_FILENO);
     if (!rc) rc = posix_spawn_file_actions_adddup2(&actions, fileno(out), STDOUT_FILENO);
+    if (!rc && err) rc = posix_spawn_file_actions_adddup2(&actions, fileno(err), STDERR_FILENO);
+    if (!rc && p->dir && (rc = add_dir(&actions, p->dir)) == ENOSYS) {
+        posix_spawn_file_actions_destroy(&actions);
+        cmdr_error(error, "run-with: dir is not supported on this platform");
+        goto done;
+    }
     pid_t child;
     if (!rc) rc = posix_spawnp(&child, program, &actions, NULL, args, environ);
     posix_spawn_file_actions_destroy(&actions);
-    if (rc) { cmdr_error(error, "run %s: %s", program, strerror(rc)); goto done; }
-    int wait_status;
-    pid_t waited;
-    do waited = waitpid(child, &wait_status, 0); while (waited < 0 && errno == EINTR);
-    if (waited < 0)
-        cmdr_error(error, "run %s: wait: %s", program, strerror(errno));
-    else if (WIFSIGNALED(wait_status))
+    if (rc) { cmdr_error(error, "%s %s: %s", p->name, program, strerror(rc)); goto done; }
+    int wait_status, timed_out = 0;
+    if (wait_child(child, p->timeout, &wait_status, &timed_out) < 0) {
+        cmdr_error(error, "%s %s: wait: %s", p->name, program, strerror(errno));
+        goto done;
+    }
+    if (fseek(out, 0, SEEK_SET) || (err && fseek(err, 0, SEEK_SET))) {
+        cmdr_error(error, "%s: reading output: %s", p->name, strerror(errno));
+        goto done;
+    }
+    if (p->capture) {
+        char code[16];
+        if (timed_out) snprintf(code, sizeof(code), "timeout");
+        else if (WIFSIGNALED(wait_status)) snprintf(code, sizeof(code), "%d", 128 + WTERMSIG(wait_status));
+        else snprintf(code, sizeof(code), "%d", WEXITSTATUS(wait_status));
+        cmdr_value stdout_text, stderr_text = {0};
+        if (slurp(out, program, &stdout_text, error)) goto done;
+        if (slurp(err, program, &stderr_text, error)) { cmdr_free(&stdout_text); goto done; }
+        *result = (cmdr_value){.kind = CMDR_LIST};
+        cmdr_push(result, cmdr_text(code, strlen(code)));
+        cmdr_push(result, stdout_text);
+        cmdr_push(result, stderr_text);
+        status = 0;
+    } else if (WIFSIGNALED(wait_status))
         cmdr_error(error, "run %s: terminated by signal %d", program, WTERMSIG(wait_status));
     else if (WEXITSTATUS(wait_status))
         cmdr_error(error, "run %s: exited with status %d", program, WEXITSTATUS(wait_status));
-    else if (fseek(out, 0, SEEK_SET))
-        cmdr_error(error, "run: reading stdout: %s", strerror(errno));
     else
         status = slurp(out, program, result, error);
 done:
     if (in) fclose(in);
     if (out) fclose(out);
+    if (err) fclose(err);
+    return status;
+}
+
+/* Run argv as PROGRAM ARG ..., all text. */
+static int run_text(const process *p, size_t argc, const cmdr_value *argv,
+                    cmdr_value *result, char **error)
+{
+    char **args = cmdr_realloc(NULL, argc + 1, sizeof(*args));
+    for (size_t i = 0; i < argc; ++i) args[i] = argv[i].text;
+    args[argc] = NULL;
+    int status = execute(p, args, result, error);
     free(args);
     return status;
 }
@@ -296,13 +393,61 @@ done:
 COMMAND(run_command)
 {
     if (!argc) return cmdr_error(error, "usage: run PROGRAM [ARG ...]");
-    return execute("", argc, argv, result, error);
+    return run_text(&(process){.name = "run", .input = ""}, argc, argv, result, error);
 }
 
 COMMAND(run_in_command)
 {
     if (argc < 2) return cmdr_error(error, "usage: run-in TEXT PROGRAM [ARG ...]");
-    return execute(argv[0].text, argc - 1, argv + 1, result, error);
+    return run_text(&(process){.name = "run-in", .input = argv[0].text}, argc - 1, argv + 1, result, error);
+}
+
+/* Append value's text to args, flattening lists; 1 for a block. */
+static int add_args(const cmdr_value *value, char ***args, size_t *count, char **error)
+{
+    if (value->kind != CMDR_LIST) {
+        if (require_text(value, error)) return 1;
+        *args = cmdr_realloc(*args, *count + 2, sizeof(**args));
+        (*args)[(*count)++] = value->text;
+        return 0;
+    }
+    for (size_t i = 0; i < value->count; ++i)
+        if (add_args(&value->items[i], args, count, error)) return 1;
+    return 0;
+}
+
+/* OPTIONS is a list of NAME VALUE pairs. A list argument adds its items as
+ * arguments, at any depth, so an empty list adds none. */
+COMMAND(run_with_command)
+{
+    static const char usage[] = "usage: run-with OPTIONS PROGRAM [ARG ...]";
+    if (argc < 2 || argv[0].kind != CMDR_LIST) return cmdr_error(error, usage);
+    const cmdr_value *options = &argv[0];
+    if (options->count % 2) return cmdr_error(error, "run-with: OPTIONS must be NAME VALUE pairs");
+    process p = {.name = "run-with", .input = "", .capture = 1};
+    int seen[3] = {0};
+    static const char *names[] = {"dir", "stdin", "timeout"};
+    for (size_t i = 0; i < options->count; i += 2) {
+        const cmdr_value *name = &options->items[i], *value = &options->items[i + 1];
+        if (require_text(name, error) || require_text(value, error)) return 1;
+        size_t k = 0;
+        while (k < 3 && strcmp(name->text, names[k])) ++k;
+        if (k == 3) return cmdr_error(error, "run-with: unknown option %s", name->text);
+        if (seen[k]++) return cmdr_error(error, "run-with: option %s given twice", name->text);
+        if (k == 0) p.dir = value->text;
+        if (k == 1) p.input = value->text;
+        if (k == 2 && cmdr_number(value->text, &p.timeout, error)) return 1;
+        if (k == 2 && p.timeout <= 0) return cmdr_error(error, "run-with: timeout must be positive");
+    }
+    char **args = NULL;
+    size_t count = 0;
+    for (size_t i = 1; i < argc; ++i)
+        if (add_args(&argv[i], &args, &count, error)) { free(args); return 1; }
+    if (!count) return cmdr_error(error, usage);
+    args[count] = NULL;
+    int status = execute(&p, args, result, error);
+    free(args);
+    return status;
 }
 
 COMMAND(split_command)
@@ -394,7 +539,7 @@ COMMAND(drop_command) { return bytes(1, argc, argv, result, error); }
 static int path_part(int directory, size_t argc, const cmdr_value *argv,
                      cmdr_value *result, char **error)
 {
-    if (argc != 1) return cmdr_error(error, "usage: %s PATH", directory ? "dirname" : "basename");
+    if (argc != 1) return cmdr_error(error, "usage: %s PATH", directory ? "path-dirname" : "path-basename");
     const char *path = argv[0].text;
     size_t end = strlen(path), start;
     while (end > 1 && path[end - 1] == '/') --end;
@@ -464,6 +609,18 @@ COMMAND(list_command)
     for (size_t i = 0; i < argc; ++i) {
         cmdr_value item;
         if (cmdr_clone(&argv[i], &item, error)) return 1;
+        cmdr_push(result, item);
+    }
+    return 0;
+}
+
+COMMAND(push_command)
+{
+    if (!argc) return cmdr_error(error, "usage: push LIST_OR_LINES [VALUE ...]");
+    if (as_list(&argv[0], result, error)) return 1;
+    for (size_t i = 1; i < argc; ++i) {
+        cmdr_value item;
+        if (cmdr_clone(&argv[i], &item, error)) { cmdr_free(result); return 1; }
         cmdr_push(result, item);
     }
     return 0;
@@ -780,6 +937,7 @@ static const cmdr_command pure[] = {
     TEXT("matches", "matches TEXT REGEX", "Return TEXT if it matches the extended REGEX", matches_command),
     VALUE("nonempty", "nonempty VALUE", "Return VALUE unless empty text or list", nonempty_command),
     VALUE("list", "list [VALUE ...]", "Construct a list", list_command),
+    VALUE("push", "push LIST_OR_LINES [VALUE ...]", "Append values to a list", push_command),
     VALUE("lines", "lines LIST_OR_LINES", "Split text into a list of lines", lines_command),
     VALUE("join", "join LIST_OR_LINES SEPARATOR", "Join text items", join_command),
     VALUE("sort", "sort LIST_OR_LINES", "Sort text items by byte order", sort_command),
@@ -798,8 +956,8 @@ static const cmdr_command pure[] = {
     VALUE("try", "try [INPUT] BLOCK FALLBACK", "Return FALLBACK if the block fails", try_command),
     VALUE("or", "or [INPUT] BLOCK FALLBACK", "Return FALLBACK if the block mismatches", or_command),
     VALUE("check", "check [INPUT] BLOCK MESSAGE", "Mismatch with MESSAGE if the block mismatches", check_command),
-    TEXT("basename", "basename PATH", "Return the final path component", basename_command),
-    TEXT("dirname", "dirname PATH", "Return the parent path", dirname_command),
+    TEXT("path-basename", "path-basename PATH", "Return the final path component", basename_command),
+    TEXT("path-dirname", "path-dirname PATH", "Return the parent path", dirname_command),
 };
 
 /* Commands that read or write files or run programs. */
@@ -810,6 +968,7 @@ static const cmdr_command effects[] = {
     TEXT("files", "files [DIRECTORY]", "List regular files, sorted by path", files_command),
     TEXT("run", "run PROGRAM [ARG ...]", "Run an executable, returning stdout", run_command),
     TEXT("run-in", "run-in TEXT PROGRAM [ARG ...]", "Run with TEXT on stdin, returning stdout", run_in_command),
+    VALUE("run-with", "run-with OPTIONS PROGRAM [ARG ...]", "Run with dir, stdin, and timeout; return STATUS STDOUT STDERR", run_with_command),
 };
 
 static const cmdr effect_table = {effects, sizeof(effects) / sizeof(effects[0]), NULL};

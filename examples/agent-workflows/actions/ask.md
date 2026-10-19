@@ -1,0 +1,4 @@
+mode: read
+{{target}}
+
+{{input}}

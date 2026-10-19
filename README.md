@@ -1,6 +1,6 @@
 # cmdr
 
-A small C REPL for commands with positional arguments, text and list values, and explicit effects. Requires a C11 compiler and CMake 3.16+ on Linux or macOS, using POSIX-2008 (`getline`, `open_memstream`, `posix_spawn`, `fstatat`). Make is an optional frontend for the same CMake build.
+A small C REPL for commands with positional arguments, text and list values, and explicit effects. Requires a C11 compiler and CMake 3.16+ on Linux or macOS, using POSIX-2008 (`getline`, `open_memstream`, `posix_spawn`, `fstatat`). The `dir` option of `run-with` also needs `posix_spawn_file_actions_addchdir`, or its older `_np` form (glibc 2.29, macOS 10.15); without either, `dir` is an error. Make is an optional frontend for the same CMake build.
 
 ```sh
 make
@@ -14,18 +14,19 @@ cmdr> read greeting.txt | lower
 hello world
 ```
 
-Run `help` for the command list; it returns text, so `help | filter map`
-works. Exit with `quit`, `exit`, or Ctrl-D.
+Run `help` for the command list; it returns text, so `help | filter map` works. Exit with `quit`, `exit`, or Ctrl-D.
 
 The REPL edits lines with a vendored copy of linenoise, in [thirdparty/linenoise](thirdparty/linenoise). The prompt is light green, except on terminals without escape sequences (`dumb`, `cons25`, `emacs`). It colors commands, references, blocks, and strings, and shows unknown commands in red. Tab completes command names. Up and Down recall history, saved in `~/.cmdr_history`, with a continued pipeline stored as one entry. Ctrl-C drops the current pipeline. Pasted lines run one at a time, each echoed after its prompt. Configure with `-DCMDR_EDITOR=OFF` to read plain lines instead.
 
 - `./cmdr -c 'PIPELINE'` evaluates one pipeline.
 
-- `./cmdr FILE` runs a script and stops at its first failing line, reporting `FILE:LINE:`.
+- `./cmdr FILE [ARG ...]` runs a script and stops at its first failing line, reporting `FILE:LINE:`. `script-args` in the script returns the ARGs as a list.
 
 - Piped stdin runs one pipeline per line and continues after errors.
 
-- `load PATH` runs a script in the current session, so its definitions remain.
+- `load PATH [ARG ...]` runs a script in the current session, so its definitions remain. The script sees ARGs through `script-args`.
+
+- `script-file` returns the absolute path of the script file in which it is written, like `realpath(__file__)` in Python. `script-dir` returns that file's directory, and `script-args` the arguments it was run or loaded with, like `sys.argv[1:]`. A `def` in `lib/x.cmdr` whose body uses `script-dir` returns `lib`, even when a script elsewhere calls it. In the REPL, `-c`, and embedded scripts all three are errors.
 
 - `./cmdr --user ...` runs `~/.cmdr/prelude.cmdr` instead of the standard prelude; it is an error if the file is missing.
 
@@ -33,15 +34,11 @@ The REPL edits lines with a vendored copy of linenoise, in [thirdparty/linenoise
 
 The REPL starts with a line such as `cmdr 0.1.0 (prelude: standard)`, or the prelude's path with `--user`, in bold cyan where the prompt has color.
 
-Errors go to stderr; the exit status is nonzero if any line failed. Lines starting with `#`, including a `#!/usr/bin/env cmdr` shebang, are comments.
-A line ending in an unescaped `|` continues on the next line; blank and
-comment lines inside a continuation are skipped. Quotes and blocks cannot span lines otherwise: write a newline as `\n`, and
-end a line inside a block with `|` to continue it.
+Errors go to stderr; the exit status is nonzero if any line failed. Lines starting with `#`, including a `#!/usr/bin/env cmdr` shebang, are comments. A line ending in an unescaped `|` continues on the next line; blank and comment lines inside a continuation are skipped. Quotes and blocks cannot span lines otherwise: write a newline as `\n`, and end a line inside a block with `|` to continue it.
 
 ## Composition
 
-`a | b x` evaluates `a`, then calls `b` with the returned value followed by
-`x`. The value stays one argument, even when it contains spaces, newlines, or pipes. A command returns text, a list, or no value; no value cannot feed another command. The REPL prints text as is and list items one per line.
+`a | b x` evaluates `a`, then calls `b` with the returned value followed by `x`. The value stays one argument, even when it contains spaces, newlines, or pipes. A command returns text, a list, or no value; no value cannot feed another command. The REPL prints text as is and list items one per line.
 
 Whitespace separates arguments. Single and double quotes preserve spaces and pipes, including empty arguments (`""`). Backslash escapes the next character outside single quotes; inside double quotes, `\n` and `\t` are a newline and a tab. Syntax and command names are checked for the whole pipeline before any command runs. Effects from earlier stages remain if a later stage fails. There is no variable expansion, globbing, redirection, or implicit shell.
 
@@ -63,8 +60,7 @@ a,c
 
 - `{ (a b) ... }` declares parameters, referenced as `$a` and `$b`. A block takes exactly the arguments it declares. `{ ... }` takes one input, received by pipe; `{ () ... }` takes none.
 
-- Declared parameters appear only where named, and each must be used. Only `{ ... }` pipes its input into its first stage, so a block can start from
-  something else: `{ (w) read app.log | contains $w }`.
+- Declared parameters appear only where named, and each must be used. Only `{ ... }` pipes its input into its first stage, so a block can start from something else: `{ (w) read app.log | contains $w }`.
 
 - Each later stage receives the previous result first. A stage that is a lone `$name` makes that value the result.
 
@@ -74,8 +70,7 @@ a,c
 
 `def NAME BLOCK [DOC]` defines a command for the rest of the session. `help` shows DOC, or the body if DOC is absent. Definitions are lexical: a body uses the commands that existed when it was defined, and a body that names its own command calls the one it shadows. A definition may shadow any command except `def`. Errors from a body are prefixed with its name (`outer: inner: equals: ...`). A mismatch from a def called on the line also shows the call's arguments: `ends-with ar bar: ge: 2 is not at least 3`.
 
-`each`, `keep`, `not`, and `try` take blocks. Extra arguments follow the item:
-`list a b c | keep { (s v) not $s { equals $v } } b`.
+`each`, `keep`, `not`, and `try` take blocks. Extra arguments follow the item: `list a b c | keep { (s v) not $s { equals $v } } b`.
 
 ## Commands
 
@@ -90,6 +85,7 @@ These are the primitives, in [src/primitives.c](src/primitives.c). Extensions ad
 | `split TEXT SEPARATOR` | Split into a list; empty fields are kept |
 | `add`, `mul` A B [NUMBER ...]; `sub`, `div` A B | Double-precision arithmetic |
 | `list [VALUE ...]`, `lines VALUE` | Build a list; split text into lines |
+| `push VALUE [ITEM ...]` | Append items to a list |
 | `join VALUE SEPARATOR` | Join text items |
 | `sort`, `sort-n`, `uniq`, `count` VALUE | Byte-order or numeric sort, adjacent dedup, item count |
 | `head`, `tail` VALUE N; `filter VALUE TEXT` | Select items |
@@ -104,9 +100,10 @@ These are the primitives, in [src/primitives.c](src/primitives.c). Extensions ad
 | `check [INPUT] BLOCK MESSAGE` | Mismatch with MESSAGE if the block mismatches |
 | `nonempty VALUE`, `equals TEXT X`, `contains TEXT X`, `matches TEXT REGEX`, `lt`/`gt`/`le`/`ge NUMBER X` | Predicates; REGEX is POSIX extended |
 | `read PATH`, `write VALUE PATH`, `append VALUE PATH` | Files; write and append return VALUE |
-| `files [DIR]`, `basename PATH`, `dirname PATH` | Regular files in DIR, sorted; lexical path parts |
+| `files [DIR]`, `path-basename PATH`, `path-dirname PATH` | Regular files in DIR, sorted; lexical path parts |
 | `run PROGRAM [ARG ...]`, `run-in TEXT PROGRAM [ARG ...]` | Run a program, returning stdout |
-| `load PATH` | Run a script in this session |
+| `run-with OPTIONS PROGRAM [ARG ...]` | Run a program with options, returning `STATUS STDOUT STDERR` |
+| `load PATH [ARG ...]` | Run a script in this session |
 
 ```text
 cmdr> text "pear,apple,pear" | split , | sort | uniq | join ", "
@@ -119,9 +116,7 @@ cmdr> text "hello world" | run-in tr a-z A-Z
 HELLO WORLD
 ```
 
-List commands accept lists or newline-separated text; in text, a final newline ends the last item. `sort`, `uniq`, `head`, `tail`, `filter`, and `keep` return text for text input and lists for lists, so
-`read app.log | filter ERROR | upper` works. `lines`, `split`, `map`, `each`,
-`list`, and `files` return lists. Text commands reject lists; use `map` per item or `join` first. `write` and `append` store lists one item per line.
+List commands accept lists or newline-separated text; in text, a final newline ends the last item. `sort`, `uniq`, `head`, `tail`, `filter`, and `keep` return text for text input and lists for lists, so `read app.log | filter ERROR | upper` works. `lines`, `split`, `map`, `each`, `list`, and `files` return lists. Text commands reject lists; use `map` per item or `join` first. `write` and `append` store lists one item per line.
 
 **Predicates** return their input when they hold, so they compose mid-pipeline. When they do not hold they fail with a mismatch, which `keep`, `not`, and `try` treat as false. Any other failure is an error, including one inside the block. Empty text and `"0"` are not false.
 
@@ -131,6 +126,15 @@ List commands accept lists or newline-separated text; in text, a final newline e
 
 **`run`** resolves PROGRAM through PATH and passes arguments unchanged. `run` supplies empty stdin; `run-in` supplies TEXT. Output is returned after the program exits. A nonzero exit status, such as `grep` without matches, fails the stage. The program's stderr is not captured; it goes to cmdr's stderr.
 
+**`run-with`** captures stderr and returns the exit status as data. OPTIONS is a list of NAME VALUE pairs: `dir` sets the working directory, `stdin` the input, and `timeout` a limit in seconds. Past the limit the program gets SIGTERM, then SIGKILL a second later; its own children are not signalled. STATUS is the exit status, 128 plus the signal number, or `timeout`. A list argument adds its items as arguments, at any depth, so an empty list adds none:
+
+```text
+cmdr> list dir / | with { (o) run-with $o sh -c 'pwd; echo warn >&2; exit 3' } | each { trim } | join ,
+3,/,warn
+cmdr> list | with { (o) list --model opus | with { (m) run-with $o printf '%s ' $m x } } | nth 2
+--model opus x
+```
+
 Text is bytes in the C locale. Files and program output containing NUL bytes are rejected.
 
 ## Growing a prelude
@@ -138,26 +142,25 @@ Text is bytes in the C locale. Files and program output containing NUL bytes are
 Start with a pipeline. This one lists the distinct file extensions in the current directory:
 
 ```text
-cmdr> files | map basename | keep { drop 1 | contains . } | each { split . | tail 1 | join "" } | sort | uniq
+cmdr> files | map path-basename | keep { drop 1 | contains . } | each { split . | tail 1 | join "" } | sort | uniq
 md
 txt
 ```
 
-`keep { drop 1 | contains . }` keeps names with a dot after the first byte, so
-it skips `Makefile` and `.gitignore`. `tail 1 | join ""` takes the last item.
+`keep { drop 1 | contains . }` keeps names with a dot after the first byte, so it skips `Makefile` and `.gitignore`. `tail 1 | join ""` takes the last item.
 
-[src/prelude.cmdr](src/prelude.cmdr) names the parts, each built on the ones before. It also defines list, number, text, and path commands, such as `nth`, `sum`, `max`, `starts-with`, and `stem`; `help` lists them. These are three of its definitions:
+[src/prelude.cmdr](src/prelude.cmdr) names the parts, each built on the ones before. It also defines list, number, text, and path commands, such as `nth`, `sum`, `max`, `starts-with`, `path-stem`, `path-join`, and `path-split`; `help` lists them. These are three of its definitions:
 
-```
+```text
 def last { nonempty | tail 1 | join "" } "Return the last item"
-def ext { split . | last } "Return the text after the last dot"
-def has-ext { keep { drop 1 | contains . } } "Keep names with a dot after the first byte"
+def path-ext { split . | last } "Return the text after the last dot"
+def path-has-ext { keep { drop 1 | contains . } } "Keep names with a dot after the first byte"
 ```
 
 A session builds on them:
 
 ```text
-cmdr> def exts { (dir) files $dir | map basename | has-ext | map ext | sort | uniq } "List extensions in DIR"
+cmdr> def exts { (dir) files $dir | map path-basename | path-has-ext | map path-ext | sort | uniq } "List extensions in DIR"
 cmdr> exts .
 md
 txt
@@ -205,8 +208,11 @@ Allocation failure exits the process with status 1. `cmdr_set_out_of_memory` ins
 An extension adds C commands to the `cmdr` executable without editing `src/main.c`. Each is a directory `ext/NAME/`:
 
 - `*.c`: the commands. One file defines `const cmdr cmdr_ext_NAME`, with `-` in NAME as `_`.
+
 - `*.cmdr`: definitions, embedded by the build and run in name order.
+
 - `README.md`: what the extension does. The build fails without it.
+
 - `tests/`: at least one `*.cmdr` or `*.c` file; configure fails without one. `make test` runs each `.cmdr` file with `cmdr`, in `tests/`, and fails at its first failing line. Each `.c` file is a program linked with the extension's sources and `libcmdr.a`, for checks a script cannot make, such as error messages. Configuring with `-DCMDR_BUILD_TESTS=OFF` skips both.
 
 `scripts/mk_ext.py NAME` creates `ext/NAME/` with these files and a command `NAME TEXT`, which returns TEXT. The skeleton builds and passes its tests, so edit from there. `--c-test` also creates `tests/test_NAME.c`. It refuses an existing directory. `make test` builds a fresh skeleton, so a template change that breaks it fails there.

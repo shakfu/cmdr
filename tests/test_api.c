@@ -152,12 +152,32 @@ static void scripts(void)
     cmdr_session_close(session);
 }
 
+/* A script file loaded with arguments sees them through script-args. */
+static void script_args(void)
+{
+    char path[] = "/tmp/cmdr-test-XXXXXX";
+    int fd = mkstemp(path);
+    CHECK(fd >= 0);
+    const char source[] = "def given { () script-args | join , }\n";
+    CHECK(write(fd, source, sizeof(source) - 1) == (ssize_t)(sizeof(source) - 1));
+    FILE *in = fdopen(fd, "r");
+    CHECK(in && !fseek(in, 0, SEEK_SET));
+    cmdr_session *session = cmdr_session_open(&cmdr_primitives, 1, NULL);
+    char *error;
+    const char *argv[] = {"a", "b c"};
+    CHECK(!cmdr_session_load_args(session, in, path, 2, argv, &error) && !error);
+    fclose(in);
+    unlink(path);
+    expect(session, "given", "a,b c\n");
+    cmdr_session_close(session);
+}
+
 static void sandbox(void)
 {
     cmdr_session *session = cmdr_session_open(&cmdr_pure, 0, NULL);
     char *error;
     CHECK(!cmdr_session_prelude(session, &error) && !error);
-    expect(session, "basename a/b.c | stem", "b\n");
+    expect(session, "path-basename a/b.c | path-stem", "b\n");
     const char *denied[] = {"read x", "run true", "files", "load x", "sh true", "cat x"};
     for (size_t i = 0; i < sizeof(denied) / sizeof(denied[0]); ++i)
         expect_error(session, denied[i], 1, "unknown command");
@@ -292,6 +312,7 @@ int main(void)
     host_commands();
     definitions();
     scripts();
+    script_args();
     sandbox();
     out_of_memory();
     lists();

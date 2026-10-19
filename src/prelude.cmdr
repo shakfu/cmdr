@@ -37,6 +37,8 @@ def strip-prefix { (s x) starts-with $s $x | $x | length | with { (n) drop $s $n
 def strip-suffix { (s x) ends-with $s $x | length | with { (a) $x | length | with { (b) sub $a $b | with { (k) take $s $k } } } } "Remove SUFFIX from TEXT"
 
 # Paths
-def ext { split . | last } "Return the text after the last dot"
-def has-ext { keep { drop 1 | contains . } } "Keep names with a dot after the first byte"
-def stem { basename | with { (b) or { () drop $b 1 | contains . | $b | split . | init | join . } $b } } "Return the basename without its extension"
+def path-ext { split . | last } "Return the text after the last dot"
+def path-has-ext { keep { drop 1 | contains . } } "Keep names with a dot after the first byte"
+def path-stem { path-basename | with { (b) or { () drop $b 1 | contains . | $b | split . | init | join . } $b } } "Return the basename without its extension"
+def path-join { (base p) or { () ends-with $base / | take 0 } / | with { (s) or { () empty $base } $s } | with { (s) list $base $s $p | concat } | with { (j) or { () starts-with $p / } $j } } "Join PATH to BASE with one /; an absolute PATH replaces BASE"
+def path-split { (p) path-dirname $p | with { (d) path-basename $p | with { (b) list $d $b } } } "Return the directory and last component of PATH"

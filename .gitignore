@@ -65,3 +65,6 @@ dkms.conf
 
 # debug information files
 *.dwo
+
+# examples/agent-workflows run logs and demo copies (AW_RUNS default)
+agent-runs/

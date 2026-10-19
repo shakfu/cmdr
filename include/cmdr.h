@@ -125,8 +125,13 @@ const cmdr *cmdr_session_commands(const cmdr_session *session);
 int cmdr_session_eval(cmdr_session *session, const char *line, cmdr_value *result,
                       char **error);
 /* Evaluate a script's pipelines, printing values to the session's out. Stops
- * at the first failure, with *error starting "PATH:LINE: ". */
+ * at the first failure, with *error starting "PATH:LINE: ". If PATH exists,
+ * script-file and script-dir return it and its directory in code the
+ * script compiles, and script-args returns an empty list. */
 int cmdr_session_load(cmdr_session *session, FILE *in, const char *path, char **error);
+/* cmdr_session_load, with argv as the script's script-args. */
+int cmdr_session_load_args(cmdr_session *session, FILE *in, const char *path, size_t argc,
+                           const char *const *argv, char **error);
 /* Evaluate a script held in memory, as cmdr_session_load does; name is its
  * path in messages. */
 int cmdr_session_source(cmdr_session *session, const char *source, const char *name,

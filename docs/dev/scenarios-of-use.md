@@ -140,7 +140,7 @@ Output: `5` (total quantity), `4` (total value).
 A project prelude defines its steps:
 
 ```text
-def object { (f) stem $f | with { (s) list $s .o | concat } }
+def object { (f) path-stem $f | with { (s) list $s .o | concat } }
 files src | keep { ends-with .c } | each { (f) object $f | with { (o) run echo cc -c $f -o $o } } | concat
 ```
 
@@ -150,7 +150,7 @@ Output (with `echo` in place of the compiler): `cc -c src/a.c -o a.o`, then `cc 
 
 - Blocks:
 
-  - The child's stderr goes to cmdr's stderr, and a failure reports only `run sh: exited with status 3`. A build log needs the stderr as a value.
+  - The child's stderr goes to cmdr's stderr, and a failure reports only `run sh: exited with status 3`. A build log needs the stderr as a value. `run-with` now returns STATUS STDOUT STDERR, with `dir` and `timeout` options.
 
   - Steps run one at a time. There is no dependency tracking or out-of-date check, which `make` provides.
 
@@ -163,12 +163,12 @@ Output (with `echo` in place of the compiler): `cc -c src/a.c -o a.o`, then `cc 
 Assertions over files, with exit status 1 on failure:
 
 ```text
-files src | all { (f) basename $f | matches '^[a-z]+\.[ch]$' } | count
-files src | all { (f) basename $f | matches '^[a-z]\.c$' } | count
+files src | all { (f) path-basename $f | matches '^[a-z]+\.[ch]$' } | count
+files src | all { (f) path-basename $f | matches '^[a-z]\.c$' } | count
 ```
 
 Output: `3`. The second line fails:
-`all [src/a.c, src/b.c, src/util.h] { (f) basename $f | matches '^[a-...}: empty: not: [src/util.h] satisfies { nonempty }`.
+`all [src/a.c, src/b.c, src/util.h] { (f) path-basename $f | matches ...}: empty: not: [src/util.h] satisfies { nonempty }`.
 
 - Fit: point 4 and point 5. The failure names the file that broke the rule.
 
@@ -176,9 +176,31 @@ Output: `3`. The second line fails:
 
   - A `check` inside `all`'s block is not shown. `keep` treats the mismatch as false, and `all` then reports its own `empty: not:`.
 
-  - Block source in the message is cut at 32 bytes (`'^[a-...}`).
+  - Block source in the message is cut at 32 bytes (`matches ...}`), which here drops the regex.
 
 - Verdict: useful today. If these messages are read often, collapsing helper names for mismatches (change 3, not done) would shorten the second line.
+
+### D5. Coding-agent workflows
+
+[examples/agent-workflows](../../examples/agent-workflows/README.md) chains coding agents (claude, codex, cursor, pi, opencode) over a project, bug, or feature:
+
+```text
+read bug-142.md | target-bug ~/src/app | fix
+```
+
+- Fit: point 1 and point 4. Every step is checked before the first agent runs, and a failed agent stops the chain at its line.
+
+- Resolved: `run-with` gives a working directory, a timeout, stderr, and the exit status. `script-dir` finds the example's templates from any directory. `push` lets `fold` collect each step's output. See [run-with-script-push.md](run-with-script-push.md).
+
+- Blocks:
+
+  - `nth` cannot return a list item, so the history is a flat list.
+
+  - Each computed argument needs a `with` level; adapters are three or four deep.
+
+  - Steps run one at a time, so a fan-out to two reviewers needs an extension.
+
+- Verdict: useful today for sequential chains. Decisions specific to the example are in [its design record](../../examples/agent-workflows/docs/dev/design.md).
 
 ## Gaps across scenarios
 
@@ -192,7 +214,11 @@ Output: `3`. The second line fails:
 | `double` numbers | E3 | Integer path in `arithmetic` when both operands are integers | Open |
 | No regex capture | D1 | `re-groups TEXT REGEX` in `ext/re` | Done |
 | No environment access | D3 | `env NAME` in `ext/env` | Done |
-| `run` stderr not captured | D3 | `run` variant returning stdout and stderr | Open |
+| `run` stderr not captured | D3 | `run-with`, returning status, stdout, and stderr | Done |
+| `run` has no working directory or timeout | D3, D5 | `run-with` options `dir` and `timeout` | Done |
+| No script-relative paths | D5 | `script-file`, `script-dir` | Done |
+| No list append | D5 | `push` | Done |
+| `nth` cannot return a list item | D5 | `last` without `join` | Open |
 | Whole-file `read` | D1 | Line-at-a-time reading; changes the value model, so last | Open |
 
 Resuming after allocation failure and per-line limits need the same change: an error return after every allocation. Each DSL scenario works within its stated limits, and none needs that change.

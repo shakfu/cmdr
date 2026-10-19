@@ -24,6 +24,33 @@ endif()
 foreach(fixture IN ITEMS probe clash)
   cmdr_add_binary(test_ext_${fixture} "${CMAKE_CURRENT_SOURCE_DIR}/ext/${fixture}")
 endforeach()
+# examples/agent-workflows with its dry agent, which runs no programs.
+add_test(NAME example_agent_workflows
+  COMMAND cmdr "${PROJECT_SOURCE_DIR}/examples/agent-workflows/tests/test_workflows.cmdr"
+  WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}")
+set_tests_properties(example_agent_workflows PROPERTIES TIMEOUT 60
+  ENVIRONMENT "AW_RUNS=${CMAKE_CURRENT_BINARY_DIR}/agent-runs")
+# The demo copies its sample into a git repository and runs python3 on it.
+find_program(CMDR_GIT git)
+find_program(CMDR_PYTHON3 python3)
+if(CMDR_GIT AND CMDR_PYTHON3)
+  add_test(NAME example_agent_demo
+    COMMAND cmdr "${PROJECT_SOURCE_DIR}/examples/agent-workflows/demo.cmdr")
+  set_tests_properties(example_agent_demo PROPERTIES TIMEOUT 60
+    ENVIRONMENT "AW_RUNS=${CMAKE_CURRENT_BINARY_DIR}/agent-demo"
+    PASS_REGULAR_EXPRESSION "Bug report:.*tests: exit status 0")
+endif()
+# examples/agent-workflows/aw.cmdr, with the dry agent.
+set(CMDR_AW "${PROJECT_SOURCE_DIR}/examples/agent-workflows/aw.cmdr")
+add_test(NAME example_aw_ask COMMAND cmdr "${CMDR_AW}" ask . dry:opus where is it)
+add_test(NAME example_aw_fix COMMAND cmdr "${CMDR_AW}" fix . README.md reproduce@dry diagnose@dry)
+add_test(NAME example_aw_usage COMMAND cmdr "${CMDR_AW}")
+set_tests_properties(example_aw_ask PROPERTIES PASS_REGULAR_EXPRESSION "dry read [.] opus.*where is it")
+set_tests_properties(example_aw_fix PROPERTIES PASS_REGULAR_EXPRESSION "Bug report:")
+set_tests_properties(example_aw_usage PROPERTIES PASS_REGULAR_EXPRESSION "usage: aw.cmdr ask DIR")
+set_tests_properties(example_aw_ask example_aw_fix example_aw_usage PROPERTIES TIMEOUT 60
+  WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
+  ENVIRONMENT "AW_RUNS=${CMAKE_CURRENT_BINARY_DIR}/agent-runs")
 # Embedding checks; threads exercise the per-thread call depth.
 find_package(Threads REQUIRED)
 set(CMDR_TEST_TARGETS cmdr test_ext_probe test_ext_clash)

@@ -1,0 +1,4 @@
+mode: write
+{{target}}
+
+{{input}}

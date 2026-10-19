@@ -1,0 +1,18 @@
+#!/usr/bin/env cmdr
+# Command-line entry point for workflows.cmdr. Run without arguments for usage.
+
+script-dir | path-join workflows.cmdr | load
+
+def aw-usage { () list "usage: aw.cmdr ask DIR AGENT[:MODEL] PROMPT ..." "       aw.cmdr edit DIR AGENT[:MODEL] PROMPT ..." "       aw.cmdr chain DIR STEP ..." "       aw.cmdr audit DIR [STEP ...]" "       aw.cmdr fix DIR REPORT-FILE [STEP ...]" "       aw.cmdr build DIR SPEC-FILE [STEP ...]" | unlines }
+def aw-args { (a n) count $a | with { (c) aw-usage | with { (u) check $c { ge $n } $u } } | $a } "Return ARGS if it has at least N items, else fail with usage"
+def after { (xs n) count $xs | sub $n | with { (k) tail $xs $k } } "Drop the first N items"
+def aw-steps { (a n d) after $a $n | with { (s) or $s { nonempty } $d } } "Items after N, or D if there are none"
+def aw-prompt { (a f) aw-args $a 4 | nth 2 | target-path | with { (t) after $a 3 | unwords | with { (q) nth $a 3 | with { (s) list $t | map $f $s $q | concat } } } }
+def aw-ask { (a) aw-prompt $a ask }
+def aw-edit { (a) aw-prompt $a edit }
+def aw-chain { (a) aw-args $a 3 | nth 2 | target-path | with { (t) after $a 2 | with { (s) chain $t $s } } }
+def aw-audit { (a) aw-args $a 2 | nth 2 | target-path | with { (t) audit-steps | with { (d) aw-steps $a 2 $d | with { (s) workflow $t path $s } } } }
+def aw-fix { (a) aw-args $a 3 | nth 3 | read | with { (r) nth $a 2 | with { (d) target-bug $r $d } } | with { (t) fix-steps | with { (d) aw-steps $a 3 $d | with { (s) workflow $t bug $s } } } }
+def aw-build { (a) aw-args $a 3 | nth 3 | read | with { (r) nth $a 2 | with { (d) target-feature $r $d } } | with { (t) build-steps | with { (d) aw-steps $a 3 $d | with { (s) workflow $t feature $s } } } }
+
+script-args | with { (a) aw-args $a 1 | first | with { (c) aw-usage | with { (u) list ask edit chain audit fix build | check { any { equals $c } } $u } | $c | with { (n) list aw- $n | concat } | with { (cmd) list $a | map $cmd | concat } } }

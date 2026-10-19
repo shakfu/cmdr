@@ -24,8 +24,8 @@ static int evaluate(cmdr_session *session, const char *line)
     return status;
 }
 
-/* Run a script, or the standard prelude when path is NULL. */
-static int load(cmdr_session *session, const char *path)
+/* Run a script with arguments, or the standard prelude when path is NULL. */
+static int load(cmdr_session *session, const char *path, size_t argc, char **argv)
 {
     char *error;
     int status;
@@ -34,7 +34,8 @@ static int load(cmdr_session *session, const char *path)
     } else {
         FILE *file = fopen(path, "r");
         if (!file) { fprintf(stderr, "cmdr: %s: %s\n", path, strerror(errno)); return 1; }
-        status = cmdr_session_load(session, file, path, &error);
+        status = cmdr_session_load_args(session, file, path, argc, (const char *const *)argv,
+                                        &error);
         fclose(file);
     }
     fflush(stdout);
@@ -194,8 +195,9 @@ int main(int argc, char **argv)
     int user = argc > 1 && !strcmp(argv[1], "--user");
     argc -= user;
     argv += user;
-    if (argc > 3 || (argc == 3 && strcmp(argv[1], "-c")) || (argc == 2 && argv[1][0] == '-')) {
-        fprintf(stderr, "usage: cmdr [--user] [-c PIPELINE | FILE]\n       cmdr --version\n");
+    int command = argc > 1 && !strcmp(argv[1], "-c");
+    if ((command && argc != 3) || (!command && argc > 1 && argv[1][0] == '-')) {
+        fprintf(stderr, "usage: cmdr [--user] [-c PIPELINE | FILE [ARG ...]]\n       cmdr --version\n");
         return 2;
     }
     char *path = NULL;
@@ -208,10 +210,10 @@ int main(int argc, char **argv)
     cmdr *layers = chain_extensions();
     cmdr_session *session = cmdr_session_open(layers, 1, stdout);
     const cmdr **ends = NULL;
-    int status = load_extensions(session, &ends) || load(session, path)
+    int status = load_extensions(session, &ends) || load(session, path, 0, NULL)
         || check_extensions(session, layers, ends);
     if (!status) {
-        if (argc == 3) {
+        if (command) {
             status = evaluate(session, argv[2]);
         } else if (argc == 1) {
             const char *prelude = path ? path : "standard";
@@ -220,7 +222,7 @@ int main(int argc, char **argv)
             status = run(session, banner);
             free(banner);
         } else {
-            status = load(session, argv[1]);
+            status = load(session, argv[1], (size_t)argc - 2, argv + 2);
         }
     }
     cmdr_session_close(session);

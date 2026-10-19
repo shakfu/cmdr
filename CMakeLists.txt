@@ -26,6 +26,22 @@ option(CMDR_SHARED "Build libcmdr.so as well as libcmdr.a" ON)
 add_library(cmdr_objects OBJECT src/cmdr.c src/primitives.c src/session.c
             "${CMAKE_CURRENT_BINARY_DIR}/prelude.c")
 set_target_properties(cmdr_objects PROPERTIES POSITION_INDEPENDENT_CODE ON)
+# run-with's dir needs a chdir file action: POSIX.1-2024's, or the older _np
+# extension. Checked under src/primitives.c's feature macros. Without either,
+# dir is an error.
+include(CheckSymbolExists)
+set(CMAKE_REQUIRED_DEFINITIONS -D_POSIX_C_SOURCE=200809L)
+check_symbol_exists(posix_spawn_file_actions_addchdir spawn.h CMDR_HAVE_ADDCHDIR)
+if(NOT CMDR_HAVE_ADDCHDIR)
+  list(APPEND CMAKE_REQUIRED_DEFINITIONS -D_DEFAULT_SOURCE -D_DARWIN_C_SOURCE)
+  check_symbol_exists(posix_spawn_file_actions_addchdir_np spawn.h CMDR_HAVE_ADDCHDIR_NP)
+endif()
+unset(CMAKE_REQUIRED_DEFINITIONS)
+foreach(feature IN ITEMS CMDR_HAVE_ADDCHDIR CMDR_HAVE_ADDCHDIR_NP)
+  if(${feature})
+    target_compile_definitions(cmdr_objects PRIVATE ${feature})
+  endif()
+endforeach()
 target_include_directories(cmdr_objects PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
 add_library(cmdr_static STATIC $<TARGET_OBJECTS:cmdr_objects>)
 set(CMDR_LIBRARIES cmdr_static)

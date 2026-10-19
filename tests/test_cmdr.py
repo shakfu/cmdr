@@ -7,6 +7,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import time
 import tomllib
 import unittest
 
@@ -107,13 +108,13 @@ class Commands(unittest.TestCase):
 
     def test_paths(self):
         cases = [
-            ('basename /a/b.txt', 'b.txt\n'), ('dirname /a/b.txt', '/a\n'),
-            ('basename /a/b/', 'b\n'), ('dirname /a/b/', '/a\n'),
-            ('basename /', '/\n'), ('dirname /', '/\n'),
-            ('basename ////', '/\n'), ('dirname ////', '/\n'),
-            ('basename ""', '.\n'), ('dirname ""', '.\n'),
-            ('dirname name', '.\n'), ('dirname a//b', 'a\n'),
-            ('list /a/b /c/d | map basename | join ,', 'b,d\n'),
+            ('path-basename /a/b.txt', 'b.txt\n'), ('path-dirname /a/b.txt', '/a\n'),
+            ('path-basename /a/b/', 'b\n'), ('path-dirname /a/b/', '/a\n'),
+            ('path-basename /', '/\n'), ('path-dirname /', '/\n'),
+            ('path-basename ////', '/\n'), ('path-dirname ////', '/\n'),
+            ('path-basename ""', '.\n'), ('path-dirname ""', '.\n'),
+            ('path-dirname name', '.\n'), ('path-dirname a//b', 'a\n'),
+            ('list /a/b /c/d | map path-basename | join ,', 'b,d\n'),
         ]
         for source, expected in cases:
             with self.subTest(source=source):
@@ -131,7 +132,7 @@ class Commands(unittest.TestCase):
             self.run_line(f'files {quote(directory)} | count', '4\n')
             self.run_line(f'files {quote(directory)} | filter .log | map read | count', '3\n')
             self.run_line(f'files {quote(directory)} | filter .log | map read | map length | join ,', '8,5,9\n')
-            self.run_line(f'files {quote(directory)} | filter .log | map basename | map length | join ,', '5,5,7\n')
+            self.run_line(f'files {quote(directory)} | filter .log | map path-basename | map length | join ,', '5,5,7\n')
             self.run_line(f'files {quote(directory / "subdir")} | count', '0\n')
             self.run_line(f'files {quote(directory / "missing")}', error='files ')
             self.run_line(f'files {quote(directory / "a.log")}', error='Not a directory')
@@ -220,7 +221,7 @@ class Commands(unittest.TestCase):
         for source, error in cases:
             with self.subTest(source=source):
                 self.run_line(source, error=error)
-        for source in ['map', 'files a b', 'basename', 'dirname', 'take a', 'drop a',
+        for source in ['map', 'files a b', 'path-basename', 'path-dirname', 'take a', 'drop a',
                        'append a', 'write a', 'try', 'try a', 'text a | try a b c']:
             with self.subTest(source=source):
                 self.run_line(source, error='usage:')
@@ -494,12 +495,21 @@ class Commands(unittest.TestCase):
             self.assertIn('missing', missing.stderr)
         usage = subprocess.run([str(BINARY), '-x'], capture_output=True, text=True, timeout=20)
         self.assertEqual(usage.returncode, 2)
-        self.assertIn('usage: cmdr [--user] [-c PIPELINE | FILE]', usage.stderr)
+        self.assertIn('usage: cmdr [--user] [-c PIPELINE | FILE [ARG ...]]', usage.stderr)
+        usage = subprocess.run([str(BINARY), '-c', 'text x', 'extra'], capture_output=True,
+                               text=True, timeout=20)
+        self.assertEqual(usage.returncode, 2)
 
     def test_prelude(self):
         cases = [
-            ('list a.b.c d.e | map ext | join ,', 'c,e\n'),
-            ('list a.txt Makefile .gitignore | has-ext | join ,', 'a.txt\n'),
+            ('path-join a b', 'a/b\n'), ('path-join a/ b', 'a/b\n'),
+            ('path-join "" b', 'b\n'), ('path-join a /b', '/b\n'),
+            ('path-join a ""', 'a/\n'), ('path-join / b', '/b\n'),
+            ('path-join a b | path-join c', 'a/b/c\n'),
+            ('path-split a/b/c | join " "', 'a/b c\n'), ('path-split /c | join " "', '/ c\n'),
+            ('path-split c | join " "', '. c\n'), ('path-split a/b/ | join " "', 'a b\n'),
+            ('list a.b.c d.e | map path-ext | join ,', 'c,e\n'),
+            ('list a.txt Makefile .gitignore | path-has-ext | join ,', 'a.txt\n'),
             ('list a b | last', 'b\n'),
             ('text "a\nb\n" | last', 'b\n'),
             ('help | filter "Return the last item" | count', '1\n'),
@@ -533,7 +543,7 @@ class Commands(unittest.TestCase):
             ('list a.c b.h | keep { ends-with .c } | join ,', 'a.c\n'),
             ('text foobar | strip-prefix foo', 'bar\n'),
             ('text foobar | strip-suffix bar', 'foo\n'),
-            ('list dir/a.tar.gz .gitignore Makefile a. | map stem | join ,',
+            ('list dir/a.tar.gz .gitignore Makefile a. | map path-stem | join ,',
              'a.tar,.gitignore,Makefile,a\n'),
             ('text hi | sh-in "tr a-z A-Z"', 'HI\n'),
             ('sh "echo hi"', 'hi\n'),
@@ -585,7 +595,7 @@ class Commands(unittest.TestCase):
         # session. A shadowed command is listed once, at its definition.
         result = self.run_input("def zz { upper }\ndef upper { lower }\nhelp | lines | each { (row) split $row ' ' | head 1 | join '' }\n")
         names = result.stdout.split()
-        self.assertEqual(names[:3], ['help', 'def', 'load'])
+        self.assertEqual(names[:6], ['help', 'def', 'script-file', 'script-dir', 'script-args', 'load'])
         self.assertEqual(names.count('upper'), 1)
         self.assertLess(names.index('run-in'), names.index('first'))
         self.assertEqual(names[names.index('first'):names.index('first') + 2], ['first', 'last'])
@@ -608,7 +618,7 @@ class Commands(unittest.TestCase):
         self.assertRegex(result.stdout, r'(?m)^split TEXT SEPARATOR +Split into a list$')
         # Extension commands precede primitives; their definitions precede the prelude's.
         names = [line.split()[0] for line in result.stdout.splitlines()[:-2]]
-        self.assertEqual(names[3], 'probe')
+        self.assertEqual(names[6], 'probe')
         self.assertLess(names.index('run-in'), names.index('probe-twice'))
         self.assertLess(names.index('probe-twice'), names.index('first'))
         # Extension scripts do not depend on the prelude, which --user replaces.
@@ -828,6 +838,93 @@ class Commands(unittest.TestCase):
         self.run_line('list abc def | map run-in tr a-z A-Z | join ,', 'ABC,DEF\n')
         self.run_line("try { () run false } fallback", 'fallback\n')
         self.run_line("run printf '%s' '$HOME;*.c'", '$HOME;*.c\n')
+
+    def test_push(self):
+        self.run_line('list a b | push c "d e" | join ,', 'a,b,c,d e\n')
+        self.run_line('text "a\nb\n" | push c | join ,', 'a,b,c\n')
+        self.run_line('list | push | count', '0\n')
+        # A list item stays one item, so fold can collect lists.
+        self.run_line('list a | with { (xs) push $xs $xs } | count', '2\n')
+        self.run_line('list | with { (none) list a b | fold $none { (acc x) list $x $x | '
+                      'with { (p) push $acc $p } } } | each { join , } | join ";"', 'a,a;b,b\n')
+        self.run_line('push', error='usage: push LIST_OR_LINES [VALUE ...]')
+
+    def test_run_with(self):
+        def run(options, program):
+            return f'list {options} | with {{ (o) run-with $o {program} }}'
+        with tempfile.TemporaryDirectory() as directory:
+            here = Path(directory).resolve()
+            self.run_line(run(f'dir {quote(here)}', 'pwd') + ' | nth 2', f'{here}\n')
+            (here / 'file').write_text('')
+            self.run_line(run(f'dir {quote(here / "file")}', 'pwd'), error='Not a directory')
+            self.run_line(run(f'dir {quote(here / "missing")}', 'pwd'), error='No such file')
+        self.run_line(run('stdin hello', 'tr a-z A-Z') + ' | nth 2', 'HELLO\n')
+        # A nonzero status is a result, with stderr captured.
+        self.run_line(run('', 'sh -c "echo out; echo err >&2; exit 3"') + ' | join "|"',
+                      '3|out\n|err\n')
+        self.run_line(run('', "sh -c 'kill -9 $$'") + ' | first', '137\n')
+        start = time.monotonic()
+        self.run_line(run('timeout 0.2', 'sleep 5') + ' | first', 'timeout\n')
+        self.assertLess(time.monotonic() - start, 3)
+        # A child that ignores SIGTERM is killed a second later.
+        self.run_line(run('timeout 0.2', "sh -c 'trap \"\" TERM; sleep 5'") + ' | first', 'timeout\n')
+        self.assertLess(time.monotonic() - start, 6)
+        # List arguments are spliced at any depth; an empty list adds none.
+        self.run_line('list --model m | with { (f) list | with { (e) list a $f $e | with { (args) '
+                      'list | with { (o) run-with $o printf "[%s]" $args $e x } } } } | nth 2',
+                      '[a][--model][m][x]\n')
+        self.run_line(run('', 'no-such-program'), error='run-with no-such-program: No such file')
+        for options, message in [('bogus 1', 'unknown option bogus'),
+                                 ('dir', 'NAME VALUE pairs'),
+                                 ('dir . dir .', 'option dir given twice'),
+                                 ('timeout 0', 'timeout must be positive'),
+                                 ('timeout x', 'invalid finite number: x')]:
+            with self.subTest(options=options):
+                self.run_line(run(options, 'pwd'), error=message)
+        self.run_line('run-with a pwd', error='usage: run-with OPTIONS PROGRAM')
+        self.run_line('list | with { (o) run-with $o }', error='usage: run-with')
+        self.run_line('list | with { (o) list | with { (e) run-with $o $e } }', error='usage: run-with')
+
+    def test_script_file(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            (root / 'sub').mkdir()
+            inner = root / 'sub' / 'inner.cmdr'
+            inner.write_text('def where { () script-dir }\ndef which { () script-file }\nscript-dir\n')
+            outer = root / 'outer.cmdr'
+            outer.write_text(f'script-file\nload {quote(inner)}\nscript-dir\nwhere\nwhich\n')
+            # Each resolves where it is written: where and which name inner.cmdr.
+            result = subprocess.run([str(BINARY), str(outer)], capture_output=True,
+                                    text=True, timeout=20, cwd='/')
+            self.assertEqual(result.stdout.splitlines(),
+                             [str(outer), str(root / 'sub'), str(root), str(root / 'sub'), str(inner)],
+                             result.stderr)
+            result = self.run_input(f'load {quote(inner)}\nwhere\nscript-dir\n')
+            self.assertEqual(result.stdout.splitlines(), [str(root / 'sub')] * 2)
+            self.assertIn('script-dir: not in a script file', result.stderr)
+        for name in ['script-file', 'script-dir', 'script-args']:
+            with self.subTest(name=name):
+                self.run_line(name, error=f'{name}: not in a script file')
+                self.run_line(f'{name} x', error=f'usage: {name}')
+
+    def test_script_args(self):
+        with tempfile.TemporaryDirectory() as directory:
+            lib = Path(directory) / 'lib.cmdr'
+            lib.write_text('def lib-args { () script-args }\nscript-args | join ,\n')
+            tool = Path(directory) / 'tool.cmdr'
+            tool.write_text(f'script-args | count\nscript-args | join ,\n'
+                            f'load {quote(lib)} x "y z"\nlib-args | join ,\nscript-args | join ,\n')
+            # Each script sees its own arguments; an empty argument is kept.
+            result = subprocess.run([str(BINARY), str(tool), 'a', 'b c', ''],
+                                    capture_output=True, text=True, timeout=20)
+            self.assertEqual(result.stdout.splitlines(), ['3', 'a,b c,', 'x,y z', 'x,y z', 'a,b c,'],
+                             result.stderr)
+            result = subprocess.run([str(BINARY), str(tool)], capture_output=True,
+                                    text=True, timeout=20)
+            self.assertEqual(result.stdout.splitlines()[0], '0', result.stderr)
+            # A def keeps its script's arguments after the script ends.
+            result = self.run_input(f'load {quote(lib)} q\nlib-args\n')
+            self.assertEqual(result.stdout, 'q\nq\n', result.stderr)
 
     def test_syntax_files(self):
         editors = ROOT / 'editors'
