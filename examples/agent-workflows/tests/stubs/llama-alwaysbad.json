@@ -1,0 +1,10 @@
+{
+  "choices": [
+    {
+      "message": {
+        "role": "assistant",
+        "content": "Let me run the tests.\n\nstats.py\n<<<<<<< SEARCH\n  return sum(xs) / (len(xs) - 1)\n=======\n  return sum(xs) / len(xs)\n>>>>>>> REPLACE"
+      }
+    }
+  ]
+}

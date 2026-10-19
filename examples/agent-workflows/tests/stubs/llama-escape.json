@@ -1,0 +1,10 @@
+{
+  "choices": [
+    {
+      "message": {
+        "role": "assistant",
+        "content": "../escape.txt\n<<<<<<< SEARCH\n=======\nescaped\n>>>>>>> REPLACE"
+      }
+    }
+  ]
+}

@@ -1,0 +1,28 @@
+#!/bin/sh
+# Stands in for curl to llama-server: saves the request body in
+# $AW_RUNS/llama-request.json, appends it to llama-requests.log, and prints
+# the reply llama-WORD.json for the first WORD in the prompt:
+#   ESCAPE GITDIR LINK  an edit to a path outside the project
+#   ALWAYSBAD           an edit whose SEARCH matches nothing
+#   MULTI               edits to two files, one of them new
+#   PARTIAL             one good edit and one bad
+#   INHERIT             a second block without a path line
+#   PROSE               a block with prose where its path belongs
+#   MISSING             an edit to a file that does not exist
+#   NOPATH ORPHAN AMBIG a block without a path whose SEARCH is in one file,
+#                       in none, or in stats.py and its copy
+#   BADFIRST            ALWAYSBAD's reply, then reply once the retry asks
+# Any other prompt gets llama-reply.json.
+dir=$(dirname "$0")
+req="$AW_RUNS/llama-request.json"
+cat > "$req"
+cat "$req" >> "$AW_RUNS/llama-requests.log"
+body=$(cat "$req")
+for w in ESCAPE GITDIR LINK ALWAYSBAD MULTI PARTIAL INHERIT PROSE MISSING NOPATH ORPHAN AMBIG; do
+  case $body in *$w*) cat "$dir/llama-$(echo $w | tr A-Z a-z).json"; exit ;; esac
+done
+case $body in
+  *"were not applied"*) cat "$dir/llama-reply.json" ;;
+  *BADFIRST*) cat "$dir/llama-alwaysbad.json" ;;
+  *) cat "$dir/llama-reply.json" ;;
+esac

@@ -1,0 +1,4 @@
+#!/bin/sh
+# Stands in for bwrap: exits AW_STUB_BWRAP, default 1.
+echo "stub bwrap: no user namespace" >&2
+exit "${AW_STUB_BWRAP:-1}"

@@ -51,6 +51,43 @@ set_tests_properties(example_aw_usage PROPERTIES PASS_REGULAR_EXPRESSION "usage:
 set_tests_properties(example_aw_ask example_aw_fix example_aw_usage PROPERTIES TIMEOUT 60
   WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
   ENVIRONMENT "AW_RUNS=${CMAKE_CURRENT_BINARY_DIR}/agent-runs")
+# The claude adapter's bwrap preflight, with stub bwrap and claude on PATH.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  set(CMDR_AW_STUBS "${PROJECT_SOURCE_DIR}/examples/agent-workflows/tests/stubs")
+  add_test(NAME example_aw_sandbox_blocked COMMAND cmdr "${CMDR_AW}" ask . claude where is it)
+  add_test(NAME example_aw_sandbox_ok COMMAND cmdr "${CMDR_AW}" ask . claude where is it)
+  set_tests_properties(example_aw_sandbox_blocked PROPERTIES
+    PASS_REGULAR_EXPRESSION "sandbox unavailable: stub bwrap" FAIL_REGULAR_EXPRESSION "stub claude ran")
+  set_tests_properties(example_aw_sandbox_ok PROPERTIES PASS_REGULAR_EXPRESSION "stub claude ran")
+  set_tests_properties(example_aw_sandbox_blocked example_aw_sandbox_ok PROPERTIES TIMEOUT 60
+    WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}")
+  set_tests_properties(example_aw_sandbox_blocked PROPERTIES ENVIRONMENT
+    "AW_RUNS=${CMAKE_CURRENT_BINARY_DIR}/agent-runs;PATH=${CMDR_AW_STUBS}:$ENV{PATH}")
+  set_tests_properties(example_aw_sandbox_ok PROPERTIES ENVIRONMENT
+    "AW_RUNS=${CMAKE_CURRENT_BINARY_DIR}/agent-runs;PATH=${CMDR_AW_STUBS}:$ENV{PATH};AW_STUB_BWRAP=0")
+endif()
+# The llama agent, with a stub curl; jq and git are real.
+find_program(CMDR_JQ jq)
+if(CMDR_GIT AND CMDR_JQ)
+  set(CMDR_AW_STUBS "${PROJECT_SOURCE_DIR}/examples/agent-workflows/tests/stubs")
+  add_test(NAME example_agent_llama
+    COMMAND cmdr "${PROJECT_SOURCE_DIR}/examples/agent-workflows/tests/test_llama.cmdr")
+  set_tests_properties(example_agent_llama PROPERTIES TIMEOUT 60 FIXTURES_SETUP aw_llama_project
+    ENVIRONMENT "AW_RUNS=${CMAKE_CURRENT_BINARY_DIR}/agent-llama;CMDR_PATH=${PROJECT_SOURCE_DIR}/examples/agent-workflows;PATH=${CMDR_AW_STUBS}:$ENV{PATH}")
+  # An edit rejected twice fails with the reasons and the reply.
+  add_test(NAME example_aw_llama_rejected
+    COMMAND cmdr "${CMDR_AW}" edit "${CMAKE_CURRENT_BINARY_DIR}/agent-llama/llama-project" llama ALWAYSBAD)
+  set_tests_properties(example_aw_llama_rejected PROPERTIES TIMEOUT 60 FIXTURES_REQUIRED aw_llama_project
+    PASS_REGULAR_EXPRESSION "edits not applied:.*SEARCH must match exactly one place in stats.py.*Reply:"
+    ENVIRONMENT "AW_RUNS=${CMAKE_CURRENT_BINARY_DIR}/agent-llama;PATH=${CMDR_AW_STUBS}:$ENV{PATH}")
+  if(EXISTS "${PROJECT_SOURCE_DIR}/.git")
+    add_test(NAME example_aw_llama_too_large COMMAND cmdr "${CMDR_AW}" ask . llama where is it)
+    set_tests_properties(example_aw_llama_too_large PROPERTIES TIMEOUT 60
+      WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
+      PASS_REGULAR_EXPRESSION "project exceeds AW_LLAMA_MAX_BYTES" FAIL_REGULAR_EXPRESSION "off by one"
+      ENVIRONMENT "AW_RUNS=${CMAKE_CURRENT_BINARY_DIR}/agent-runs;PATH=${CMDR_AW_STUBS}:$ENV{PATH};AW_LLAMA_MAX_BYTES=10")
+  endif()
+endif()
 # Embedding checks; threads exercise the per-thread call depth.
 find_package(Threads REQUIRED)
 set(CMDR_TEST_TARGETS cmdr test_ext_probe test_ext_clash)

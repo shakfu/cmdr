@@ -1,0 +1,10 @@
+{
+  "choices": [
+    {
+      "message": {
+        "role": "assistant",
+        "content": ".git/hooks/pre-commit\n<<<<<<< SEARCH\n=======\necho hooked\n>>>>>>> REPLACE"
+      }
+    }
+  ]
+}
