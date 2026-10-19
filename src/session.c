@@ -41,7 +41,7 @@ typedef struct {
 struct cmdr_session {
     cmdr head;
     cmdr base;
-    cmdr_command builtins[7];
+    cmdr_command builtins[8];
     int effects;
     FILE *out;
     definition *nodes;
@@ -301,8 +301,9 @@ static int regular_file(const char *path)
     return !stat(path, &st) && S_ISREG(st.st_mode);
 }
 
-/* The resolved path of module name, or NULL with *error listing the search. */
-static char *find_module(const cmdr *repl, const char *name, char **error)
+/* The resolved path of module name, or NULL with *error listing the search.
+ * verb, import or from, starts messages. */
+static char *find_module(const cmdr *repl, const char *verb, const char *name, char **error)
 {
     size_t count;
     char **dirs = search_dirs(repl, &count), *found = NULL;
@@ -326,7 +327,7 @@ static char *find_module(const cmdr *repl, const char *name, char **error)
             if (i) strcat(searched, ":");
             strcat(searched, dirs[i]);
         }
-        cmdr_error(error, "import %s: not found in %s", name, searched);
+        cmdr_error(error, "%s %s: not found in %s", verb, name, searched);
         free(searched);
     }
     for (size_t i = 0; i < count; ++i) free(dirs[i]);
@@ -336,10 +337,11 @@ static char *find_module(const cmdr *repl, const char *name, char **error)
 }
 
 /* Run the module at path, record its definitions, and hide its names. */
-static int run_module(cmdr_session *session, module *m, const char *name, char **error)
+static int run_module(cmdr_session *session, module *m, const char *verb, const char *name,
+                      char **error)
 {
     FILE *in = fopen(m->path, "r");
-    if (!in) return cmdr_error(error, "import %s: %s: %s", name, m->path, strerror(errno));
+    if (!in) return cmdr_error(error, "%s %s: %s: %s", verb, name, m->path, strerror(errno));
     const cmdr *before = session->head.parent;
     FILE *out = session->out;
     session->out = NULL; /* As in Python, a module's values are not printed. */
@@ -363,9 +365,20 @@ static int run_module(cmdr_session *session, module *m, const char *name, char *
         m->exports[m->count - 1 - i] = t;
     }
     session->head.parent = before;
-    if (status) cmdr_error(error, "import %s: %s", name, inner);
+    if (status) cmdr_error(error, "%s %s: %s", verb, name, inner);
     free(inner);
     return status;
+}
+
+/* Push an alias layer that calls command as name; usage and name are owned. */
+static void bind(cmdr_session *session, const cmdr_command *command, char *name, char *usage)
+{
+    const char *doc = command->docstring ? command->docstring : "";
+    definition *node = new_node(session);
+    node->commands[0] = (cmdr_command){.name = name, .usage = usage,
+                                       .docstring = cmdr_strndup(doc, strlen(doc)),
+                                       .block = command->block};
+    push_node(session, node, 1);
 }
 
 /* Push ALIAS.NAME for each of the module's definitions. */
@@ -379,12 +392,7 @@ static void bind_module(cmdr_session *session, const module *m, const char *alia
         char *qualified = cmdr_realloc(NULL, n + strlen(usage) + 2, 1);
         sprintf(name, "%s.%s", alias, command->name);
         sprintf(qualified, "%s.%s", alias, usage);
-        const char *doc = command->docstring ? command->docstring : "";
-        definition *node = new_node(session);
-        node->commands[0] = (cmdr_command){.name = name, .usage = qualified,
-                                           .docstring = cmdr_strndup(doc, strlen(doc)),
-                                           .block = command->block};
-        push_node(session, node, 1);
+        bind(session, command, name, qualified);
     }
 }
 
@@ -393,6 +401,42 @@ static void free_module(module *m)
     free(m->path);
     free(m->exports);
     free(m);
+}
+
+/* Find module name for code compiled in repl, running it on first use. */
+static module *load_module(const cmdr *repl, cmdr_session *session, const char *verb,
+                           const char *name, char **error)
+{
+    char *path = find_module(repl, verb, name, error);
+    if (!path) return NULL;
+    module *m = NULL;
+    for (size_t i = 0; i < session->nmodules && !m; ++i)
+        if (!strcmp(session->modules[i]->path, path)) m = session->modules[i];
+    if (m && m->loading) {
+        free(path);
+        cmdr_error(error, "%s %s: circular import", verb, name);
+        return NULL;
+    }
+    if (!m) {
+        m = cmdr_realloc(NULL, 1, sizeof(*m));
+        *m = (module){.path = path, .loading = 1};
+        path = NULL;
+        session->modules = cmdr_realloc(session->modules, session->nmodules + 1,
+                                        sizeof(*session->modules));
+        session->modules[session->nmodules++] = m;
+        if (run_module(session, m, verb, name, error)) {
+            /* Not recorded, so the next import runs the module again. */
+            size_t i = 0;
+            while (session->modules[i] != m) ++i;
+            memmove(&session->modules[i], &session->modules[i + 1],
+                    (--session->nmodules - i) * sizeof(*session->modules));
+            free_module(m);
+            return NULL;
+        }
+        m->loading = 0;
+    }
+    free(path);
+    return m;
 }
 
 static int import_command(const cmdr *repl, void *user, size_t argc, const cmdr_value *argv,
@@ -404,36 +448,83 @@ static int import_command(const cmdr *repl, void *user, size_t argc, const cmdr_
     const char *name = argv[0].text, *alias = argv[argc - 1].text;
     if (!module_name(name)) return cmdr_error(error, "import: invalid module name '%s'", name);
     if (!module_name(alias)) return cmdr_error(error, "import: invalid alias '%s'", alias);
-    char *path = find_module(repl, name, error);
-    if (!path) return 1;
-    module *m = NULL;
-    for (size_t i = 0; i < session->nmodules && !m; ++i)
-        if (!strcmp(session->modules[i]->path, path)) m = session->modules[i];
-    if (m && m->loading) {
-        free(path);
-        return cmdr_error(error, "import %s: circular import", name);
-    }
-    if (!m) {
-        m = cmdr_realloc(NULL, 1, sizeof(*m));
-        *m = (module){.path = path, .loading = 1};
-        path = NULL;
-        session->modules = cmdr_realloc(session->modules, session->nmodules + 1,
-                                        sizeof(*session->modules));
-        session->modules[session->nmodules++] = m;
-        if (run_module(session, m, name, error)) {
-            /* Not recorded, so the next import runs the module again. */
-            size_t i = 0;
-            while (session->modules[i] != m) ++i;
-            memmove(&session->modules[i], &session->modules[i + 1],
-                    (--session->nmodules - i) * sizeof(*session->modules));
-            free_module(m);
-            return 1;
-        }
-        m->loading = 0;
-    }
-    free(path);
+    module *m = load_module(repl, session, "import", name, error);
+    if (!m) return 1;
     bind_module(session, m, alias);
     return 0;
+}
+
+/* from NAME import DEF [as ALIAS] ...: bind each DEF unqualified, or as
+ * ALIAS. Every name is checked before any is bound, and a name that already
+ * resolves to another command is an error, since shadowing it would change
+ * what later lines call without warning. */
+static int from_command(const cmdr *repl, void *user, size_t argc, const cmdr_value *argv,
+                        cmdr_value *result, char **error)
+{
+    cmdr_session *session = user;
+    static const char usage[] = "usage: from NAME import DEF [as ALIAS] ...";
+    if (argc < 3 || strcmp(argv[1].text, "import")) return cmdr_error(error, usage);
+    const char *name = argv[0].text;
+    if (!module_name(name)) return cmdr_error(error, "from: invalid module name '%s'", name);
+    /* Pairs of DEF and the name it is bound as. */
+    const char **pairs = cmdr_realloc(NULL, 2 * argc, sizeof(*pairs));
+    size_t n = 0;
+    int status = 0;
+    for (size_t i = 2; i < argc && !status; ++n) {
+        const char *def = argv[i].text, *alias = def;
+        if (!strcmp(def, "as")) status = cmdr_error(error, usage);
+        else if (i + 1 < argc && !strcmp(argv[i + 1].text, "as")) {
+            if (i + 2 >= argc) status = cmdr_error(error, usage);
+            else alias = argv[i + 2].text;
+            i += 3;
+        } else {
+            ++i;
+        }
+        if (!status && !module_name(alias))
+            status = cmdr_error(error, "from %s: invalid name '%s'", name, alias);
+        pairs[2 * n] = def, pairs[2 * n + 1] = alias;
+    }
+    module *m = status ? NULL : load_module(repl, session, "from", name, error);
+    if (!m) {
+        free(pairs);
+        return 1;
+    }
+    const cmdr_command **found = cmdr_realloc(NULL, n, sizeof(*found));
+    const cmdr *names = cmdr_session_commands(session);
+    for (size_t k = 0; k < n && !status; ++k) {
+        const char *def = pairs[2 * k], *alias = pairs[2 * k + 1];
+        found[k] = NULL;
+        for (size_t i = 0; i < m->count && !found[k]; ++i)
+            if (!strcmp(m->exports[i]->name, def)) found[k] = m->exports[i];
+        const cmdr_command *existing = cmdr_find(names, alias);
+        if (!found[k]) {
+            status = cmdr_error(error, "from %s import %s: %s has no definition %s", name, def,
+                                name, def);
+        } else if (existing && existing->block != found[k]->block) {
+            status = cmdr_error(error, "from %s import %s: %s already exists; bind it with as",
+                                name, def, alias);
+        }
+        for (size_t j = 0; j < k && !status; ++j)
+            if (!strcmp(pairs[2 * j + 1], alias))
+                status = cmdr_error(error, "from %s import %s: %s is bound twice", name, def,
+                                    alias);
+    }
+    for (size_t k = 0; k < n && !status; ++k) {
+        const char *alias = pairs[2 * k + 1];
+        const cmdr_command *existing = cmdr_find(names, alias);
+        if (existing) continue; /* Already bound to this definition. */
+        /* Usage begins with the definition's name; swap in the alias. */
+        const cmdr_command *command = found[k];
+        const char *u = command->usage ? command->usage : command->name;
+        size_t len = strlen(command->name);
+        const char *rest = !strncmp(u, command->name, len) ? u + len : "";
+        char *bound_usage = cmdr_realloc(NULL, strlen(alias) + strlen(rest) + 1, 1);
+        sprintf(bound_usage, "%s%s", alias, rest);
+        bind(session, command, cmdr_strndup(alias, strlen(alias)), bound_usage);
+    }
+    free(found);
+    free(pairs);
+    return status;
 }
 
 cmdr_session *cmdr_session_open(const cmdr *commands, int effects, FILE *out)
@@ -459,12 +550,15 @@ cmdr_session *cmdr_session_open(const cmdr *commands, int effects, FILE *out)
             {.name = "import", .usage = "import NAME [as ALIAS]",
              .docstring = "Run module NAME once; bind its definitions as NAME.DEF",
              .run = import_command, .user = s, .text = 1},
+            {.name = "from", .usage = "from NAME import DEF [as ALIAS] ...",
+             .docstring = "Run module NAME once; bind each DEF unqualified, if the name is new",
+             .run = from_command, .user = s, .text = 1},
         },
         .effects = effects,
         .out = out,
     };
-    /* load and import are last, so a session without effects omits them. */
-    s->base = (cmdr){s->builtins, effects ? 7 : 5, commands};
+    /* load, import, and from are last, so a session without effects omits them. */
+    s->base = (cmdr){s->builtins, effects ? 8 : 5, commands};
     s->head.parent = &s->base;
     return s;
 }

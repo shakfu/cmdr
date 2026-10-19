@@ -36,6 +36,8 @@
 
 ### Added
 
+- **`from NAME import DEF [as ALIAS] ...`** binds the DEFs listed from a module without the prefix. The module runs once, shared with `import`. A name that already exists fails the whole statement unless it is the same definition, because shadowing a primitive or prelude name changes what later lines call without warning. `from snd import trim` fails, since `trim` is a primitive, while `from snd import trim as cut` works. Python's `from` shadows silently. There is no `*`, because modules have no export list. See [docs/dev/import.md](docs/dev/import.md).
+
 - **`import NAME [as ALIAS]`** runs a module once per session and binds its definitions as `NAME.DEF`, as Python's `import` does. It searches the importing file's directory, `CMDR_PATH`, `~/.cmdr/lib`, and `share/cmdr/lib`; a package `NAME/__init__.cmdr` wins over `NAME.cmdr`. The module's other names stay inside it. Qualified names over a required `NAME-` prefix, because moving every module and importer to qualified names later would cost more with each module written. See [docs/dev/import.md](docs/dev/import.md).
 
 - **`run-with OPTIONS PROGRAM [ARG ...]`** runs a program with `dir`, `stdin`, and `timeout` options. It returns `STATUS STDOUT STDERR`, where `run` fails on a nonzero status. List arguments are flattened, so an optional flag is an empty or two-item list. One command with options over a `run` variant per option, since the options combine. See [docs/dev/run-with-script-push.md](docs/dev/run-with-script-push.md).

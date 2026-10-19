@@ -16,6 +16,7 @@ Decision record, 2026-10-19. `script-dir | path-join workflows.cmdr | load` work
 - **Bind qualified names.** The importer gets `NAME.DEF` for each definition the module made, or `ALIAS.DEF` with `as`. When a module defines a name twice, the later definition is bound.
 - **Hide the rest.** The module's own names, including its imports, are visible only inside it. Its definitions resolve names where they were written, so they keep working after the import.
 - **Errors.** No module: `import NAME: not found in DIR:DIR:...`. A module that imports itself, directly or through others: `import NAME: circular import`. An error inside the module: `import NAME: PATH:LINE: ...`.
+- **`from NAME import DEF [as ALIAS] ...`** finds and runs the module as `import` does, then binds each DEF unqualified, or as ALIAS. It checks every DEF before binding any. Each must be one of the module's definitions, and each bound name must be new to the session or already bound to that definition. Errors: `from NAME import DEF: NAME has no definition DEF`, `...: ALIAS already exists; bind it with as`, and `...: ALIAS is bound twice`.
 - `load` is unchanged: it runs a file every time, and its definitions enter the session unqualified.
 
 ## Departures from Python
@@ -25,7 +26,8 @@ Decision record, 2026-10-19. `script-dir | path-join workflows.cmdr | load` work
 | `sys.path[0]` is the main script's directory | The importing file's directory | Each file finds the modules next to it. This matches `script-file`, which resolves to the file in which it is written |
 | A circular import yields a partly initialized module | An error | cmdr has no module object to fill in |
 | `import a.b` loads a submodule | A dot in NAME is an error | Nothing needs submodules yet; adding them later breaks no import that works now |
-| `from M import f` | Absent | `import M as m` keeps names short; `from` would bring back unqualified collisions |
+| `from M import f` shadows any earlier `f` | `from M import f` fails if `f` exists, unless it is the same definition | A shadowed name changes what later lines call without warning, as the extension rules prevent at startup. `as` renames instead |
+| `from M import *` | Absent | cmdr exports every definition, with no `__all__` or `_` convention, so `*` would also bind a module's helpers |
 
 ## Alternatives
 

@@ -44,6 +44,16 @@ cmdr> snd.in chord.wav | snd.stats-field "Pk lev dB"
 | Splitting | `split-at CHAIN POINTS PATH`, `split-silence CHAIN DB SECONDS PATH`, `split-channels CHAIN PATH` |
 | Presets | `telephone`, `tape-stop` |
 
+`from snd import in rate reverb out` binds those names without the prefix:
+
+```text
+cmdr> from snd import in rate reverb out
+cmdr> in a.wav | rate 48000 | reverb 50 | out b.wav
+b.wav
+```
+
+`snd`'s `trim` and `join` collide with primitives, so bind them with `as`: `from snd import trim as cut join as join-files`.
+
 `help` gives each definition's arguments. SPEC, OPTIONS, and POINTS are text, split into words. The named effects have fixed arguments, since a `def` has fixed parameters; `effect` takes any of the 63 effects, with sox's own arguments. `varispeed FROM TO`, not in sox, changes speed linearly over the output, as a tape does; `tape-stop` is `varispeed 1 0.1` with a short fade. `fade IN OUT` is sox's `fade IN -0 OUT`. Like sox, `fade` with an end position fails after an effect that makes the length unknown, such as `chorus`, so put it first.
 
 `combine` and its forms take a list of paths. `scaled` makes an item with sox's `-v`; as in sox, `mix` scales each input by 1/N only if no input is scaled.

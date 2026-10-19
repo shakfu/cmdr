@@ -26,7 +26,7 @@ The REPL edits lines with a vendored copy of linenoise, in [thirdparty/linenoise
 
 - `load PATH [ARG ...]` runs a script in the current session, so its definitions remain. The script sees ARGs through `script-args`.
 
-- `import NAME [as ALIAS]` runs a module once per session and binds its definitions as `NAME.DEF`. See [Modules](#modules).
+- `import NAME [as ALIAS]` runs a module once per session and binds its definitions as `NAME.DEF`. `from NAME import DEF ...` binds the DEFs listed without the prefix. See [Modules](#modules).
 
 - `script-file` returns the absolute path of the script file in which it is written, like `realpath(__file__)` in Python. `script-dir` returns that file's directory, and `script-args` the arguments it was run or loaded with, like `sys.argv[1:]`. A `def` in `lib/x.cmdr` whose body uses `script-dir` returns `lib`, even when a script elsewhere calls it. In the REPL, `-c`, and embedded scripts all three are errors.
 
@@ -107,6 +107,7 @@ These are the primitives, in [src/primitives.c](src/primitives.c). Extensions ad
 | `run-with OPTIONS PROGRAM [ARG ...]` | Run a program with options, returning `STATUS STDOUT STDERR` |
 | `load PATH [ARG ...]` | Run a script in this session |
 | `import NAME [as ALIAS]` | Run a module once; bind its definitions as `NAME.DEF` |
+| `from NAME import DEF [as ALIAS] ...` | Run a module once; bind each DEF unqualified, if the name is new |
 
 ```text
 cmdr> text "pear,apple,pear" | split , | sort | uniq | join ", "
@@ -185,6 +186,16 @@ In each directory, a package `NAME/__init__.cmdr` wins over `NAME.cmdr`. The mod
 ```text
 cmdr> import aw
 cmdr> read bug.md | aw.target-bug ~/src/app | aw.fix
+```
+
+`from NAME import DEF [as ALIAS] ...` imports the module the same way, then binds only the DEFs listed, as `DEF` or `ALIAS`. A name that already exists is an error, and then the statement binds nothing. That includes a primitive, an extension command, a prelude definition, or an earlier `def`. Binding over it would change what later lines call without warning. `as` gives the definition another name. Binding the same definition to the same name again is allowed, and a later `def` may still shadow it. There is no `from NAME import *`.
+
+```text
+cmdr> from snd import in rate out trim
+cmdr: from snd import trim: trim already exists; bind it with as
+cmdr> from snd import in rate out trim as cut
+cmdr> in a.wav | rate 48000 | cut 0 1 | out b.wav
+b.wav
 ```
 
 A package finds its own files with `script-dir`. Design and departures from Python: [docs/dev/import.md](docs/dev/import.md).

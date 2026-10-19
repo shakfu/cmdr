@@ -595,8 +595,8 @@ class Commands(unittest.TestCase):
         # session. A shadowed command is listed once, at its definition.
         result = self.run_input("def zz { upper }\ndef upper { lower }\nhelp | lines | each { (row) split $row ' ' | head 1 | join '' }\n")
         names = result.stdout.split()
-        self.assertEqual(names[:7], ['help', 'def', 'script-file', 'script-dir', 'script-args',
-                                     'load', 'import'])
+        self.assertEqual(names[:8], ['help', 'def', 'script-file', 'script-dir', 'script-args',
+                                     'load', 'import', 'from'])
         self.assertEqual(names.count('upper'), 1)
         self.assertLess(names.index('run-in'), names.index('first'))
         self.assertEqual(names[names.index('first'):names.index('first') + 2], ['first', 'last'])
@@ -617,9 +617,10 @@ class Commands(unittest.TestCase):
         self.assertRegex(result.stdout, r'(?m)^probe +ext/probe: Return probed$')
         self.assertRegex(result.stdout, r'(?m)^probe-twice +Return probed twice$')
         self.assertRegex(result.stdout, r'(?m)^split TEXT SEPARATOR +Split into a list$')
-        # Extension commands precede primitives; their definitions precede the prelude's.
+        # Extension commands follow the built-ins, ending with from, and precede
+        # primitives; their definitions precede the prelude's.
         names = [line.split()[0] for line in result.stdout.splitlines()[:-2]]
-        self.assertEqual(names[7], 'probe')
+        self.assertEqual(names[names.index('from') + 1], 'probe')
         self.assertLess(names.index('run-in'), names.index('probe-twice'))
         self.assertLess(names.index('probe-twice'), names.index('first'))
         # Extension scripts do not depend on the prelude, which --user replaces.
@@ -975,6 +976,54 @@ class Commands(unittest.TestCase):
                                 ('import a b', 'usage: import NAME [as ALIAS]')]:
             with self.subTest(source=source):
                 self.run_line(source, error=message)
+
+    def test_from_import(self):
+        with tempfile.TemporaryDirectory() as directory:
+            app = Path(directory).resolve()
+            log = app / 'ran.log'
+            (app / 'util.cmdr').write_text(
+                f'def helper {{ upper }}\ndef shout {{ helper | text ! }}\n'
+                f'def pair {{ (a b) text $a $b }}\ndef trim {{ (s) text trimmed $s }}\n'
+                f'append x {quote(log)}\n')
+            def run(source):
+                (app / 'main.cmdr').write_text(source)
+                return subprocess.run([str(BINARY), str(app / 'main.cmdr')], capture_output=True,
+                                      text=True, timeout=20, cwd='/')
+            # Names bind unqualified, or as ALIAS; the module runs once, shared with import.
+            result = run('import util\nfrom util import shout pair as p\nfrom util import shout\n'
+                         'shout hi\np a b\nutil.shout yo\n')
+            self.assertEqual(result.stdout.splitlines(), ['HI !', 'a b', 'YO !'], result.stderr)
+            self.assertEqual(log.read_text(), 'x')
+            # Only the names listed bind; help shows each under its bound name.
+            result = run('from util import pair as p\nshout x\n')
+            self.assertIn('unknown command: shout', result.stderr)
+            result = run('from util import pair as p\nhelp | filter def:\n')
+            self.assertRegex(result.stdout, r'(?m)^p A B +def: \(a b\) text \$a \$b$')
+            # An existing name is an error, and nothing in the statement binds;
+            # as resolves it, and a later def may still shadow.
+            # Piped stdin continues after an error, so shout x runs.
+            result = subprocess.run([str(BINARY)], input='from util import shout trim\nshout x\n',
+                                    capture_output=True, text=True, timeout=20, cwd=app)
+            self.assertIn('from util import trim: trim already exists; bind it with as', result.stderr)
+            self.assertIn('unknown command: shout', result.stderr)
+            result = run('from util import trim as tr\ntr x\ntrim "  y  "\n')
+            self.assertEqual(result.stdout.splitlines(), ['trimmed x', 'y'], result.stderr)
+            result = run('def shout { lower }\nfrom util import shout\n')
+            self.assertIn('shout already exists', result.stderr)
+            result = run('from util import shout\ndef shout { lower }\nshout X\n')
+            self.assertEqual(result.stdout, 'x\n', result.stderr)
+            for source, message in [('from util import nope', 'from util import nope: util has no definition nope'),
+                                    ('from util import shout shout', 'shout is bound twice'),
+                                    ('from util import shout as s pair as s', 's is bound twice'),
+                                    ('from nosuch import x', 'from nosuch: not found in'),
+                                    ('from util import shout as a.b', "from util: invalid name 'a.b'")]:
+                with self.subTest(source=source):
+                    self.assertIn(message, run(source).stderr)
+        for source in ['from a', 'from a b c', 'from a import', 'from a import x as',
+                       'from a import as']:
+            with self.subTest(source=source):
+                self.run_line(source, error='usage: from NAME import DEF [as ALIAS] ...')
+        self.run_line('from a.b import c', error="from: invalid module name 'a.b'")
 
     def test_syntax_files(self):
         editors = ROOT / 'editors'

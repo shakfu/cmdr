@@ -23,7 +23,7 @@ tmp a.wav | snd.in | snd.speed 2 | snd.pad 0.5 0 | write-to c.wav | snd.info-fie
 tmp a.wav | snd.in | snd.tempo 0.5 | write-to c.wav | snd.info-field seconds | between 1.99 2.01
 tmp a.wav | snd.in | snd.varispeed 1 0.5 | write-to c.wav | snd.info-field frames | equals 58800
 tmp a.wav | snd.in | snd.pitch 1200 | snd.lowpass 2000 | snd.highpass 100 | snd.norm -1 | snd.stats-field "Pk lev dB" | equals -1.00
-tmp a.wav | snd.in | snd.repeat 2 | snd.reverb | snd.swap | write-to c.wav | snd.info-field seconds | equals 3
+tmp a.wav | snd.in | snd.repeat 2 | snd.reverb 50 | snd.swap | write-to c.wav | snd.info-field seconds | equals 3
 tmp a.wav | snd.in | with { (c) tmp c.wav | with { (o) snd.out-as $c "-b 16 -r 22050" $o } } | snd.info | filter bits | join "" | equals "bits 16"
 tmp c.wav | snd.info-field rate | equals 22050
 snd.effects | count | equals 63
