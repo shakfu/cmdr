@@ -478,6 +478,8 @@ static char *find_module(const cmdr *repl, const char *verb, const char *name, c
 }
 
 /* Run the module at path, record its definitions, and hide its names. */
+static definition *push_script(cmdr_session *session, const definition *user);
+
 /* Run a module's file, or source when the host provides it. */
 static int run_module(cmdr_session *session, module *m, const char *source, const char *verb,
                       const char *name, char **error)
@@ -486,6 +488,9 @@ static int run_module(cmdr_session *session, module *m, const char *source, cons
     if (!source && !in)
         return cmdr_error(error, "%s %s: %s: %s", verb, name, m->path, strerror(errno));
     const cmdr *before = session->head.parent;
+    /* A module built into the host has no file, so its script-file,
+     * script-dir, and script-args fail, rather than see the importer's. */
+    if (source) push_script(session, NULL);
     FILE *out = session->out;
     session->out = NULL; /* As in Python, a module's values are not printed. */
     char *inner;

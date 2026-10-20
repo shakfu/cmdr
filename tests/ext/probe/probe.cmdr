@@ -4,3 +4,5 @@ from _probe import probe
 def twice { () probe | with { (p) text $p $p } } "Return probed twice"
 def first { upper }
 def take { upper }
+# A built-in module has no file, so this fails, wherever it is imported from.
+def where { () script-dir }

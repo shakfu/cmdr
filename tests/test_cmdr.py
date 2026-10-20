@@ -825,6 +825,14 @@ class Commands(unittest.TestCase):
                          (0, 'probed probed\nprobe.probe\nReturn probed\n'), result.stderr)
         result = run('-c', 'probe')
         self.assertIn('unknown command: probe', result.stderr)
+        # A built-in module has no file: script-dir fails in it, even when a
+        # script imports it, rather than return the script's directory.
+        with tempfile.TemporaryDirectory() as directory:
+            script = Path(directory) / 's.cmdr'
+            script.write_text('import probe\nprobe.where\n')
+            result = run(str(script))
+            self.assertEqual(result.returncode, 1)
+            self.assertIn('probe.where: script-dir: not in a script file', result.stderr)
         result = run('-c', 'help')
         self.assertNotRegex(result.stdout, r'(?m)^probe')
         # Extension modules use only primitives, so --user's prelude does not matter.

@@ -134,5 +134,3 @@ Every agent that runs commands does so in its own sandbox, so agents without one
 Each adapter builds an argument list and calls `launch`, which runs it with `run-with` in DIR under `AW_TIMEOUT`. No shell is involved, so a prompt with quotes or `$` is passed unchanged. `opt FLAG VALUE` gives an empty list for an empty VALUE, which `run-with` drops. Add an agent with one `def agent-NAME` and its name in `agents`.
 
 The action declares the mode, not the step, so a `review` cannot get write access.
-
-Design decisions and open questions: [docs/dev/design.md](docs/dev/design.md).

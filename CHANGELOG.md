@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Fixed
+
+- In a module built into the executable, such as an extension's, `script-file`, `script-dir`, and `script-args` returned the importing script's, since the module's definitions compiled where the importer's script was in scope. They now fail, as in the REPL: the module has no file.
+
 ## [0.2.0]
 
 ### Changed

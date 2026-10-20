@@ -70,5 +70,3 @@ cmdr> repeat 4 { () midi.scale C4 | midi.walk 4 } | each { (ks) midi.seq $ks 0.2
 `play` blocks until the score ends, trailing rests included, and Ctrl-C stops it, releasing any notes still sounding. With no PORT it uses the first output port that `ports` lists. macOS has no output port until a synthesizer or DAW makes one, or the IAC Driver is enabled in Audio MIDI Setup. A score's `tempo` at beat 0 overrides BPM.
 
 `from midi import rest` collides with the prelude's `rest`, so bind it with `as`: `from midi import rest as pause`.
-
-Design decisions: [docs/dev/design.md](docs/dev/design.md).

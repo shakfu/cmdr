@@ -78,5 +78,3 @@ cmdr> files in | keep { ends-with .wav } | each { (f) snd.in $f | lofi | with { 
 ```
 
 `snd.play CHAIN` plays on the default audio device and Ctrl-C stops it. `snd.record 5 take.wav` records five seconds. What `snd.run` covers of sox, and what it does not, is in [ext/snd](ext/snd/README.md).
-
-Design decisions: [docs/dev/design.md](docs/dev/design.md).
