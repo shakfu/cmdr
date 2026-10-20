@@ -2,7 +2,6 @@
 
 #include <ctype.h>
 #include <stdarg.h>
-#include <stdatomic.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -15,20 +14,6 @@ enum { MAX_CALL_DEPTH = 128, MAX_VALUE_DEPTH = 1024 };
 
 static void (*out_of_memory)(void *data, size_t size);
 static void *out_of_memory_data;
-
-/* Atomic, not volatile sig_atomic_t: a signal handler sets it, and every
- * thread's cmdr_call reads it. */
-static atomic_int interrupted;
-
-void cmdr_interrupt(int on)
-{
-    interrupted = on != 0;
-}
-
-int cmdr_interrupted(void)
-{
-    return interrupted;
-}
 
 void cmdr_set_out_of_memory(void (*handler)(void *data, size_t size), void *data)
 {
@@ -879,7 +864,7 @@ int cmdr_call(const cmdr *repl, const char *name, size_t argc,
     static _Thread_local unsigned depth;
     *result = (cmdr_value){0};
     *error = NULL;
-    if (interrupted) return cmdr_error(error, "interrupted");
+    if (cmdr_interrupted()) return cmdr_error(error, "interrupted");
     const cmdr_command *command = cmdr_find(repl, name);
     if (!command) return cmdr_error(error, "unknown command: %s", name);
     for (size_t i = 0; command->text && i < argc; ++i)

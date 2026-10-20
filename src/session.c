@@ -147,11 +147,20 @@ static const void *target_of(const cmdr_command *command)
     return command->run == forward_command ? command->user : (const void *)command;
 }
 
-
 static int script_command(const cmdr_command *command)
 {
     return command->run == script_file_command || command->run == script_dir_command
         || command->run == script_args_command;
+}
+
+/* The script node of the nearest script layer in scope, or NULL. By identity,
+ * not by name: a def or alias may shadow script-file. */
+static const definition *script_in(const cmdr *scope)
+{
+    for (; scope; scope = scope->parent)
+        if (scope->count == 3 && scope->commands[0].run == script_file_command)
+            return scope->commands[0].user;
+    return NULL;
 }
 
 /* A command's usage for the overview. A definition's defaults, which
@@ -414,8 +423,7 @@ static char **search_dirs(const cmdr *repl, size_t *count)
 {
     char **dirs = NULL;
     *count = 0;
-    const cmdr_command *file = cmdr_find(repl, "script-file");
-    const definition *script = file && file->run == script_file_command ? file->user : NULL;
+    const definition *script = script_in(repl);
     if (script && script->path) {
         add_dir(&dirs, count, parent_dir(script->path));
     } else {
@@ -877,7 +885,7 @@ int cmdr_session_load_args(cmdr_session *session, FILE *in, const char *path, si
     char resolved[PATH_MAX];
     if (!realpath(path, resolved)) return run_script(session, in, path, error);
     /* The outer node lives until the session closes. */
-    const definition *outer = cmdr_find(session->head.parent, "script-file")->user;
+    const definition *outer = script_in(session->head.parent);
     definition *node = push_script(session, NULL);
     node->path = cmdr_strndup(resolved, strlen(resolved));
     node->args = (cmdr_value){.kind = CMDR_LIST};

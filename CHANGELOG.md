@@ -20,6 +20,12 @@
 
 - In a module built into the executable, such as an extension's, `script-file`, `script-dir`, and `script-args` returned the importing script's, since the module's definitions compiled where the importer's script was in scope. They now fail, as in the REPL: the module has no file.
 
+- Shadowing `script-file` broke `load` and `import`. `load` read the shadowing command's user data as the outer script's context, so after an inner file the outer `script-dir` and `script-args` failed, or with an alias such as `from env import get as script-file`, read invalid memory. `import` searched the current directory instead of the script's. Both now find the script layer by its command rather than its name.
+
+- `cmdr_interrupt(1)` from another thread did not stop a `run`, `run-in`, or `run-with` without a timeout until the program exited, since the wait blocked in `waitpid` and only a signal to that thread woke it. A wait now blocks on the child's exit and on a pipe that `cmdr_interrupt` writes: kqueue on macOS and the BSDs, a pidfd on Linux. Other platforms poll every 10 ms. The event-based wait was chosen over polling everywhere to avoid waking 100 times a second during long programs.
+
+- `str.repeat ''` with a huge count ran one empty copy per count, ignoring Ctrl-C: the size limit skipped empty text.
+
 ## [0.2.0]
 
 ### Changed

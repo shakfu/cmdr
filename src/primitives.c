@@ -1,8 +1,7 @@
 #define _POSIX_C_SOURCE 200809L
-#ifdef CMDR_HAVE_ADDCHDIR_NP
-#define _DEFAULT_SOURCE /* glibc and musl declare it as an extension. */
+/* Extensions: posix_spawn_file_actions_addchdir_np, syscall, and kqueue's types. */
+#define _DEFAULT_SOURCE
 #define _DARWIN_C_SOURCE
-#endif
 #include "cmdr.h"
 
 #include <ctype.h>
@@ -13,6 +12,7 @@
 #include <regex.h>
 #include <signal.h>
 #include <spawn.h>
+#include <stdatomic.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -20,6 +20,17 @@
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
+#if defined(__APPLE__) || defined(__FreeBSD__) || defined(__NetBSD__) || defined(__OpenBSD__) \
+    || defined(__DragonFly__)
+#include <sys/event.h>
+#define CMDR_KQUEUE
+#elif defined(__linux__)
+#include <poll.h>
+#include <sys/syscall.h>
+#ifdef SYS_pidfd_open
+#define CMDR_PIDFD
+#endif
+#endif
 
 extern char **environ;
 
@@ -279,18 +290,139 @@ static double now(void)
     return (double)t.tv_sec + (double)t.tv_nsec / 1e9;
 }
 
-/* Poll until child exits, limit seconds pass, or, if interruptible, an
- * interrupt arrives; return the pid or 0 if it is still running. */
+/* Atomic, not volatile sig_atomic_t: a signal handler sets it, and every
+ * thread's cmdr_call reads it. */
+static atomic_int interrupted;
+/* A pipe that holds a byte while interrupted is set, so a thread waiting for
+ * a child wakes on an interrupt from any thread. Read end in the high 32 bits,
+ * write end in the low; -1 until the first wait makes it, since a signal
+ * handler cannot. */
+static atomic_llong wake_pipe = -1;
+
+static void drain(long long fds)
+{
+    char bytes[16];
+    while (read((int)(fds >> 32), bytes, sizeof(bytes)) > 0) continue;
+}
+
+void cmdr_interrupt(int on)
+{
+    int saved = errno;
+    if (on && !atomic_exchange(&interrupted, 1)) {
+        /* After the flag: a wait that makes the pipe meanwhile sees the flag. */
+        long long fds = atomic_load(&wake_pipe);
+        if (fds >= 0) (void)!write((int)(fds & 0xffffffff), "", 1);
+    } else if (!on && atomic_load(&interrupted)) {
+        /* Drain before clearing, so a handler that sets the flag meanwhile
+         * writes nothing to drain, or writes after. */
+        long long fds = atomic_load(&wake_pipe);
+        if (fds >= 0) drain(fds);
+        atomic_store(&interrupted, 0);
+    }
+    errno = saved;
+}
+
+int cmdr_interrupted(void)
+{
+    return interrupted;
+}
+
+/* The wake pipe, made on first use; -1 if it cannot be. */
+static long long wake_fds(void)
+{
+    long long fds = atomic_load(&wake_pipe), none = -1;
+    int p[2];
+    if (fds >= 0 || pipe(p)) return fds;
+    /* Not pipe2: macOS lacks it, so a spawn in another thread meanwhile may
+     * inherit the pipe. */
+    for (int i = 0; i < 2; ++i) {
+        fcntl(p[i], F_SETFD, FD_CLOEXEC);
+        fcntl(p[i], F_SETFL, O_NONBLOCK);
+    }
+    fds = (long long)p[0] << 32 | (unsigned)p[1];
+    if (atomic_compare_exchange_strong(&wake_pipe, &none, fds)) return fds;
+    close(p[0]);
+    close(p[1]);
+    return none;
+}
+
+/* A descriptor that is ready when child exits or, if wake >= 0, wake is
+ * readable; -1 where the platform has none. */
+static int watch_exit(pid_t child, int wake)
+{
+#if defined(CMDR_KQUEUE)
+    int kq = kqueue();
+    if (kq < 0) return -1;
+    struct kevent change;
+    EV_SET(&change, child, EVFILT_PROC, EV_ADD, NOTE_EXIT, 0, NULL);
+    int failed = kevent(kq, &change, 1, NULL, 0, NULL);
+    EV_SET(&change, wake, EVFILT_READ, EV_ADD, 0, 0, NULL);
+    if (!failed && wake >= 0) failed = kevent(kq, &change, 1, NULL, 0, NULL);
+    if (failed) {
+        close(kq);
+        return -1;
+    }
+    return kq;
+#elif defined(CMDR_PIDFD)
+    return (int)syscall(SYS_pidfd_open, child, 0); /* Close-on-exec always. */
+#else
+    return -1;
+#endif
+}
+
+/* Block on watch, and on Linux wake, for at most seconds; without watch,
+ * sleep a 10 ms tick. Returns early on a signal. */
+static void block(int watch, int wake, double seconds)
+{
+    if (seconds > 3600) seconds = 3600; /* Callers loop; this bounds the conversions. */
+    if (watch < 0 && seconds > 0.01) seconds = 0.01;
+    struct timespec limit = {(time_t)seconds, (long)((seconds - (time_t)seconds) * 1e9)};
+#if defined(CMDR_KQUEUE)
+    struct kevent event;
+    if (watch >= 0) {
+        kevent(watch, NULL, 0, &event, 1, &limit);
+        return;
+    }
+#elif defined(CMDR_PIDFD)
+    struct pollfd fds[2] = {{.fd = watch, .events = POLLIN}, {.fd = wake, .events = POLLIN}};
+    if (watch >= 0) {
+        poll(fds, wake >= 0 ? 2 : 1, (int)ceil(seconds * 1000));
+        return;
+    }
+#endif
+    nanosleep(&limit, NULL);
+}
+
+/* Wait until child exits, limit seconds pass, or, if interruptible, an
+ * interrupt arrives; return the pid or 0 if it is still running. Blocks on
+ * the child's exit and the wake pipe where the platform allows; else polls. */
 static pid_t wait_until(pid_t child, int *wait_status, double limit, int interruptible)
 {
-    struct timespec tick = {0, 10 * 1000 * 1000};
+    long long fds = interruptible ? wake_fds() : -1;
+    int wake = fds >= 0 ? (int)(fds >> 32) : -1;
+    /* Polls rather than miss an interrupt it has no pipe for. */
+    int watch = interruptible && wake < 0 ? -1 : watch_exit(child, wake);
     double deadline = now() + limit;
+    pid_t waited;
     for (;;) {
-        pid_t waited = waitpid(child, wait_status, WNOHANG);
-        if (waited > 0 || (waited < 0 && errno != EINTR)) return waited;
-        if (now() >= deadline || (interruptible && cmdr_interrupted())) return 0;
-        nanosleep(&tick, NULL);
+        waited = waitpid(child, wait_status, WNOHANG);
+        if (waited > 0 || (waited < 0 && errno != EINTR)) break;
+        if (now() >= deadline || (interruptible && cmdr_interrupted())) {
+            waited = 0;
+            break;
+        }
+        block(watch, wake, deadline - now());
+        /* A byte without the flag, from a set racing a clear in another
+         * thread, would make every wait spin. */
+        if (wake >= 0 && !cmdr_interrupted()) {
+            drain(fds);
+            if (cmdr_interrupted()) (void)!write((int)(fds & 0xffffffff), "", 1);
+        }
     }
+    int saved = errno;
+    if (watch >= 0) close(watch);
+    errno = saved;
+    return waited;
 }
 
 /* Wait for child. Past the timeout, or on an interrupt, send SIGTERM, then
@@ -298,12 +430,7 @@ static pid_t wait_until(pid_t child, int *wait_status, double limit, int interru
  * outlive cmdr. */
 static pid_t wait_child(pid_t child, double timeout, int *wait_status, int *timed_out)
 {
-    pid_t waited;
-    if (timeout > 0)
-        waited = wait_until(child, wait_status, timeout, 1);
-    else
-        do waited = waitpid(child, wait_status, 0);
-        while (waited < 0 && errno == EINTR && !cmdr_interrupted());
+    pid_t waited = wait_until(child, wait_status, timeout > 0 ? timeout : INFINITY, 1);
     if (waited > 0 || (waited < 0 && errno != EINTR)) return waited;
     *timed_out = !cmdr_interrupted();
     kill(child, SIGTERM);

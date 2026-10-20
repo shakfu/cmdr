@@ -348,6 +348,43 @@ static void interrupts(void)
     cmdr_session_close(session);
 }
 
+static void *interrupt_soon(void *arg)
+{
+    struct timespec pause = {0, 100 * 1000 * 1000};
+    nanosleep(&pause, NULL);
+    cmdr_interrupt(1);
+    return NULL;
+}
+
+static double seconds(void)
+{
+    struct timespec t;
+    clock_gettime(CLOCK_MONOTONIC, &t);
+    return (double)t.tv_sec + (double)t.tv_nsec / 1e9;
+}
+
+/* An interrupt from another thread, with no signal to the waiting thread,
+ * stops the program it waits for, with or without a timeout, and reaps it. */
+static void interrupt_waits(void)
+{
+    cmdr_session *session = cmdr_session_open(&cmdr_primitives, 1, NULL);
+    const char *lines[] = {"run sleep 30", "run-in / sleep 30",
+                           "list timeout 60 | run-with sleep 30"};
+    for (size_t i = 0; i < sizeof(lines) / sizeof(*lines); ++i) {
+        pthread_t t;
+        double start = seconds();
+        CHECK(!pthread_create(&t, NULL, interrupt_soon, NULL));
+        expect_error(session, lines[i], 1, "sleep: interrupted");
+        CHECK(!pthread_join(t, NULL));
+        CHECK(seconds() - start < 5);
+        CHECK(waitpid(-1, NULL, WNOHANG) < 0 && errno == ECHILD);
+        cmdr_interrupt(0);
+    }
+    /* Cleared, the pipe no longer wakes a wait. */
+    expect(session, "run sh -c 'sleep 0.2; echo done'", "done\n");
+    cmdr_session_close(session);
+}
+
 /* Return the block argument, so the test can call it through the API. */
 static int keep_block(const cmdr *repl, void *user, size_t argc, const cmdr_value *argv,
                       cmdr_value *result, char **error)
@@ -438,6 +475,7 @@ int main(void)
     lists();
     threads();
     interrupts();
+    interrupt_waits();
     scanning();
     puts("test_api: ok");
     return 0;

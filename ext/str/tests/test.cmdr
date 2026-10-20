@@ -8,6 +8,7 @@ not hello { str.index z }
 str.repeat ab 3 | equals ababab
 str.repeat ab 0 | equals ''
 str.repeat '' 1000000000 | equals ''
+str.repeat '' 18446744073709551615 | equals ''
 str.pad-left 7 3 0 | equals 007
 str.pad-right ab 4 . | equals ab..
 str.pad-left abcd 2 | equals abcd

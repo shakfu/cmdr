@@ -39,6 +39,8 @@ COMMAND(repeat_command)
     if (argc != 2) return cmdr_error(error, "usage: str.repeat TEXT N");
     size_t n = strlen(argv[0].text), count;
     if (cmdr_natural(&argv[1], &count, error)) return 1;
+    /* Any count of empty text is empty; the loop below would still run count times. */
+    if (!n) count = 0;
     /* Compare by division, so n * count cannot overflow. */
     if (n && count > SIZE_LIMIT / n) return limit("str.repeat", SIZE_LIMIT + 1, error);
     char *text = cmdr_realloc(NULL, n * count + 1, 1);

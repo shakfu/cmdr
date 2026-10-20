@@ -1144,6 +1144,31 @@ class Commands(unittest.TestCase):
                 self.run_line(name, error=f'{name}: not in a script file')
                 self.run_line(f'{name} x', error=f'usage: {name}')
 
+    def test_script_file_shadowed(self):
+        # Shadowing script-file hides neither the script context nor the
+        # import search; an alias's user is a C command, not a script node.
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            (root / 'sub').mkdir()
+            good, bad = root / 'sub' / 'good.cmdr', root / 'sub' / 'bad.cmdr'
+            good.write_text('script-dir\n')
+            bad.write_text('bogus\n')
+            (root / 'shadowmod.cmdr').write_text('def shadowmod-ok { () text ok }\n')
+            for shadow in ['def script-file { () text shadow }', 'text shadow | as script-file',
+                           'from env import get as script-file']:
+                for inner, guard in [(good, ''), (bad, 'try { () ')]:
+                    with self.subTest(shadow=shadow, inner=inner.name):
+                        load = f'load {quote(inner)}'
+                        outer = root / 'outer.cmdr'
+                        outer.write_text(f'{shadow}\n{guard}{load}{" } x" if guard else ""}\n'
+                                         'script-dir\nscript-args | join ,\n'
+                                         'import shadowmod\nshadowmod.shadowmod-ok\n')
+                        result = subprocess.run([str(BINARY), str(outer), 'a', 'b'],
+                                                capture_output=True, text=True, timeout=20, cwd='/')
+                        self.assertEqual(result.returncode, 0, result.stderr)
+                        lines = result.stdout.splitlines()
+                        self.assertEqual(lines[-3:], [str(root), 'a,b', 'ok'], result.stderr)
+
     def test_script_args(self):
         with tempfile.TemporaryDirectory() as directory:
             lib = Path(directory) / 'lib.cmdr'
