@@ -71,21 +71,33 @@ static char **add_extensions(cmdr_session *session)
     return names;
 }
 
-/* Where -c's current line ends: the first newline outside quotes and blocks,
- * so a quoted newline stays in its pipeline, as it did when -c took one. */
+typedef struct {
+    const char *text;
+    size_t depth; /* Open blocks and sub-pipelines. */
+    size_t end;   /* Past the last token outside them. */
+    int split;    /* A newline outside them precedes the current token. */
+} splitter;
+
+static int split_line(const cmdr_token *t, void *data)
+{
+    splitter *sp = data;
+    if (!sp->depth && memchr(sp->text + sp->end, '\n', t->start - sp->end)) return sp->split = 1;
+    if (t->kind == CMDR_TOKEN_BLOCK_OPEN || t->kind == CMDR_TOKEN_SUB_OPEN) ++sp->depth;
+    else if (t->kind == CMDR_TOKEN_BLOCK_CLOSE || t->kind == CMDR_TOKEN_SUB_CLOSE) --sp->depth;
+    if (!sp->depth) sp->end = t->end;
+    return 0;
+}
+
+/* Where -c's current line ends: the first newline outside quotes, blocks, and
+ * sub-pipelines, so a quoted newline stays in its pipeline, as it did when -c
+ * took one. */
 static size_t line_length(const char *text)
 {
-    char quote = 0;
-    size_t depth = 0, i = 0;
-    for (; text[i] && (quote || depth || text[i] != '\n'); ++i) {
-        char c = text[i];
-        if (c == '\\' && quote != '\'' && text[i + 1]) ++i;
-        else if (quote) quote = c == quote ? 0 : quote;
-        else if (c == '\'' || c == '"') quote = c;
-        else if (c == '{') ++depth;
-        else if (c == '}' && depth) --depth;
-    }
-    return i;
+    splitter sp = {text, 0, 0, 0};
+    cmdr_scan(text, strlen(text), NULL, split_line, &sp);
+    if (sp.depth && !sp.split) return strlen(text); /* An unclosed block runs to the end. */
+    const char *newline = strchr(text + sp.end, '\n');
+    return newline ? (size_t)(newline - text) : strlen(text);
 }
 
 /* Evaluate -c's lines in turn, as a script's, stopping at the first failure. */

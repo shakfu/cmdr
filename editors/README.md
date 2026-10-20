@@ -24,8 +24,13 @@ The grammars match the lexer in `src/cmdr.c`. They color a command by its positi
 
 After changing `grammar.js`, run `tree-sitter generate` and `tree-sitter test` in `tree-sitter-cmdr/`. `test/corpus/` holds expected parse trees, and `test/highlight/` holds highlight assertions.
 
-The grammar marks what `src/cmdr.c` rejects as an `ERROR` or `MISSING` node: a sub-pipeline as a command, arguments after a lone reference, a trailing `|` at the end of the file, unclosed quotes and braces. It does not check what the compiler checks, such as unknown commands, unused parameters, or `expected a space after '}'`.
+The grammar marks most of what the parser in `src/cmdr.c` rejects as an `ERROR` or `MISSING` node: unclosed quotes, blocks, and sub-pipelines; a misplaced `|`; a sub-pipeline or block as a command; arguments after a lone reference. It accepts two kinds of line the parser rejects, since its tokens cannot require a following space:
+
+- a block or sub-pipeline followed directly by text: `text {a}b`
+- a reference ending in or doubling `.`: `$a.`, `$a..b`
+
+It does not check what the compiler checks, such as unknown commands or unused parameters.
 
 ## Checks
 
-`tests/test_cmdr.py` checks the Vim grammar's groups in headless Vim, and checks that the other files parse; the Sublime check needs PyYAML. With the `tree-sitter` CLI installed, it also checks that `src/` matches `grammar.js`, runs `tree-sitter test`, parses every `.cmdr` file in the repository, and compiles the three highlight queries.
+`tests/test_cmdr.py` checks the Vim grammar's groups in headless Vim, and checks that the other files parse; the Sublime check needs PyYAML. With the `tree-sitter` CLI installed, it also checks that `src/` matches `grammar.js`, runs `tree-sitter test`, parses every `.cmdr` file in the repository, checks that it rejects lines the C parser rejects, except the two kinds above, and compiles the three highlight queries.

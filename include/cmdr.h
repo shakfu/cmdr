@@ -121,6 +121,29 @@ int cmdr_print(const cmdr_value *value, FILE *out);
  * blank or a comment inside a continuation and was skipped. */
 int cmdr_join(char **pipeline, size_t *used, const char *line, size_t n);
 
+/* A token of cmdr source, as cmdr_scan reports it. A parameter's default is
+ * a WORD that starts at its '='. */
+typedef enum {
+    CMDR_TOKEN_WORD, CMDR_TOKEN_REFERENCE, CMDR_TOKEN_PIPE, CMDR_TOKEN_COMMENT,
+    CMDR_TOKEN_BLOCK_OPEN, CMDR_TOKEN_BLOCK_CLOSE, CMDR_TOKEN_PARAMS_OPEN, CMDR_TOKEN_PARAM,
+    CMDR_TOKEN_PARAMS_CLOSE, CMDR_TOKEN_SUB_OPEN, CMDR_TOKEN_SUB_CLOSE
+} cmdr_token_kind;
+
+typedef struct {
+    cmdr_token_kind kind;
+    size_t start, end; /* Byte offsets into the scanned text. */
+    int command;       /* A word or reference that starts a stage. */
+    int plain;         /* A word without quotes or escapes, so its text is itself. */
+} cmdr_token;
+
+/* Split text[0, n) into tokens with the parser's rules, for highlighting and
+ * completion. Unfinished input is not an error: an unclosed block, quote, or
+ * sub-pipeline runs to the end. Calls visit per token in order, with a block's
+ * tokens between its brackets; a nonzero return stops the scan. When quoted is
+ * non-NULL, sets quoted[i] to 1 for each byte in quotes or escapes, else 0. */
+void cmdr_scan(const char *text, size_t n, unsigned char *quoted,
+               int (*visit)(const cmdr_token *, void *), void *data);
+
 /* help, def, and load in front of a host's command table. A session is used
  * by one thread at a time; sessions on different threads are independent. */
 typedef struct cmdr_session cmdr_session;

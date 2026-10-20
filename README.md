@@ -562,6 +562,8 @@ if (cmdr_session_prelude(session, &error)
 
 - For a console without file or process access, pass 0 and end the host's table in `&cmdr_pure`, which omits `read`, `write`, `append`, `files`, `run`, and `run-in`.
 
+- `cmdr_scan` splits source into tokens with the parser's rules, tolerating unfinished input, for a host's highlighting or completion. The REPL highlights with it.
+
 - `cmdr_session_add_module` makes a C table importable as a module, and `cmdr_session_add_source` makes a script's source one. They are found before files. Extensions are part of the executable, not `libcmdr`, so a host adds its own this way.
 
 - [src/main.c](src/main.c) is the cmdr executable, built on this API.
@@ -577,10 +579,6 @@ if (cmdr_session_prelude(session, &error)
 ### The standard prelude
 
 Move a definition into [src/prelude.cmdr](src/prelude.cmdr) when every session should have it, or into [src/prelude-effects.cmdr](src/prelude-effects.cmdr) if it reads files or runs programs. The build embeds both files, and cmdr runs them at startup; an error there stops cmdr with `prelude.cmdr:LINE:`.
-
-### Tools
-
-`scripts/flatten_with.py FILE ...` rewrites `A | with { (v) BODY }` as BODY with A in v's place, where that keeps the meaning: as a pipe when `$v` starts BODY, else as `$(A)`. It prints the changes; `--write` applies them, and `--skip FILE:LINE` keeps a line. A guard such as `check` moved into an argument still runs but reads as a value, so review the output. Its docstring lists the rules.
 
 ## Install
 

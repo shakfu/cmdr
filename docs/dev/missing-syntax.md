@@ -142,7 +142,7 @@ The repository's `.cmdr` files hold 430 `with { (x) ... }` blocks. In 372 of the
 - `$(PIPELINE)` runs once, where it is written, and takes no arguments. It is an immediately applied lambda with no parameters, Python's `(lambda: sum(xs))()`. It sees the enclosing names, as a closure does.
 - `A | with { (v) BODY }` is a lambda applied to A: `(lambda v: BODY)(A)`, a `let`. Replacing it with BODY, with `$(A)` in place of `$v`, inlines a let-bound value.
 
-Inlining keeps the meaning only if A is computed once, at the same point. So `scripts/flatten_with.py` skips a `with` when:
+Inlining keeps the meaning only if A is computed once, at the same point. So the conversion skipped a `with` when the following held. `scripts/flatten_with.py` automated it until it was removed after 0.2.0; see that tag.
 
 - `$v` occurs more than once: each `$(A)` runs A again.
 - `$v` occurs inside a nested block: the block may run many times, and A with it.

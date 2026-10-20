@@ -270,96 +270,120 @@ static size_t identifier(const char *p)
     return n;
 }
 
-/* Read a block at *p. Braces nest; quotes and escapes hide them as in lex. */
-static int lex_block(const char **p, word *out, char **error)
+/* Lexemes: a word, a $name, a block, or a sub-pipeline. parse reads them
+ * strictly and cmdr_scan tolerantly, so the parser, the REPL's highlighting,
+ * and line splitting agree on where each one ends. */
+typedef enum { LEX_WORD, LEX_REF, LEX_BLOCK, LEX_SUB } lexeme_kind;
+
+typedef struct {
+    lexeme_kind kind;
+    size_t end;          /* Past the lexeme; n when a block or quote is unclosed. */
+    size_t close;        /* A block's '}' or a sub-pipeline's ')', or n. */
+    int plain;           /* A word without quotes or escapes. */
+    int deep;            /* Brackets nest past MAX_CALL_DEPTH. */
+    const char *problem; /* Why parse rejects it, or NULL. */
+} lexeme;
+
+/* Index of the bracket that closes the one before s[i], or n. Brackets of the
+ * same kind nest; quotes and escapes hide them. Sets *deep past MAX_CALL_DEPTH. */
+static size_t closing(const char *s, size_t i, size_t n, char open, char close, int *deep)
 {
-    const char *s = *p + 1;
     char quote = 0;
-    size_t depth = 1;
-    for (; *s; ++s) {
-        if (*s == '\\' && quote != '\'') { if (!*++s) break; }
-        else if (quote) { if (*s == quote) quote = 0; }
-        else if (*s == '\'' || *s == '"') quote = *s;
-        else if (*s == '{' && ++depth > MAX_CALL_DEPTH) return cmdr_error(error, "blocks nested too deeply");
-        else if (*s == '}' && !--depth) break;
+    for (size_t depth = 1; i < n; ++i) {
+        char c = s[i];
+        if (c == '\\' && quote != '\'') { if (++i == n) break; }
+        else if (quote) { if (c == quote) quote = 0; }
+        else if (c == '\'' || c == '"') quote = c;
+        else if (c == open && ++depth > MAX_CALL_DEPTH) { *deep = 1; return n; }
+        else if (c == close && !--depth) return i;
     }
-    if (!*s) return cmdr_error(error, "unclosed '{'");
-    if (s[1] && !isspace((unsigned char)s[1]) && s[1] != '|')
-        return cmdr_error(error, "expected a space after '}'");
-    *out = (word){.text = cmdr_strndup(*p + 1, (size_t)(s - *p - 1)), .block = 1};
-    *p = s + 1;
-    return 0;
+    return n;
 }
 
-/* Read a sub-pipeline $( ... ) at *p. Unquoted parentheses balance, as
- * braces do in a block, so $(text (a)) keeps its literal parentheses; quotes
- * and escapes hide them. */
-static int lex_sub(const char **p, word *out, char **error)
+/* Read the lexeme at s[i], i < n, not whitespace or '|'. Decode a word into
+ * *text when text is non-NULL, and mark its quoted and escaped bytes in quoted
+ * when quoted is non-NULL. */
+static lexeme read_lexeme(const char *s, size_t i, size_t n, char **text, unsigned char *quoted)
 {
-    const char *s = *p + 2;
-    char quote = 0;
-    size_t depth = 1;
-    for (; *s; ++s) {
-        if (*s == '\\' && quote != '\'') { if (!*++s) break; }
-        else if (quote) { if (*s == quote) quote = 0; }
-        else if (*s == '\'' || *s == '"') quote = *s;
-        else if (*s == '(' && ++depth > MAX_CALL_DEPTH) return cmdr_error(error, "sub-pipelines nested too deeply");
-        else if (*s == ')' && !--depth) break;
+    lexeme lx = {LEX_WORD, i, n, 1, 0, NULL};
+    int sub = s[i] == '$' && i + 1 < n && s[i + 1] == '(';
+    if (s[i] == '{' || sub) {
+        lx.kind = sub ? LEX_SUB : LEX_BLOCK;
+        lx.close = sub ? closing(s, i + 2, n, '(', ')', &lx.deep)
+                       : closing(s, i + 1, n, '{', '}', &lx.deep);
+        lx.end = lx.close < n ? lx.close + 1 : n;
+        if (lx.deep) lx.problem = sub ? "sub-pipelines nested too deeply" : "blocks nested too deeply";
+        else if (lx.close == n) lx.problem = sub ? "unclosed '$('" : "unclosed '{'";
+        else if (lx.end < n && !isspace((unsigned char)s[lx.end]) && s[lx.end] != '|')
+            lx.problem = sub ? "expected a space after ')'" : "expected a space after '}'";
+        return lx;
     }
-    if (!*s) return cmdr_error(error, "unclosed '$('");
-    if (s[1] && !isspace((unsigned char)s[1]) && s[1] != '|')
-        return cmdr_error(error, "expected a space after ')'");
-    *out = (word){.text = cmdr_strndup(*p + 2, (size_t)(s - *p - 2)), .sub = 1};
-    *p = s + 1;
-    return 0;
-}
-
-/* Read one word at *p: quotes group, backslash escapes, unquoted $name
- * refers, $( opens a sub-pipeline, and { opens a block. */
-static int lex(const char **p, word *out, char **error)
-{
-    const char *s = *p;
-    if (*s == '{') return lex_block(p, out, error);
-    if (s[0] == '$' && s[1] == '(') return lex_sub(p, out, error);
-    if (*s == '$') {
-        while (*s && !isspace((unsigned char)*s) && *s != '|') ++s;
-        size_t n = (size_t)(s - *p - 1);
-        if (n == 1 && (*p)[1] == '_')
-            return cmdr_error(error, "invalid reference '$_': nothing is bound to _");
-        /* A reference may name a module's binding, so '.' joins identifiers. */
-        size_t k = 0;
-        for (size_t m; (m = identifier(*p + 1 + k)) && (k += m) < n && (*p)[1 + k] == '.';) ++k;
-        if (!n || k != n || (*p)[n] == '.')
-            return cmdr_error(error, "invalid reference '%.*s': use $name, declared as "
-                              "{ (name) ... } or bound by as; quote '$' for literal text", (int)(s - *p), *p);
-        *out = (word){.text = cmdr_strndup(*p + 1, n), .ref = 1};
-        *p = s;
-        return 0;
+    if (s[i] == '$') {
+        lx.kind = LEX_REF;
+        while (lx.end < n && !isspace((unsigned char)s[lx.end]) && s[lx.end] != '|') ++lx.end;
+        return lx;
     }
-    char *text = NULL, quote = 0;
     size_t used = 0, capacity = 0;
-    while (*s && (quote || (!isspace((unsigned char)*s) && *s != '|'))) {
-        char c = *s++;
+    char quote = 0;
+    while (lx.end < n && (quote || (!isspace((unsigned char)s[lx.end]) && s[lx.end] != '|'))) {
+        size_t at = lx.end;
+        char c = s[lx.end++];
+        int literal = 1; /* c is part of the word's text, not a quote mark. */
         if (c == '\\' && quote != '\'') {
-            if (!*s) { free(text); return cmdr_error(error, "unfinished escape"); }
-            c = *s++;
+            lx.plain = 0;
+            if (lx.end == n) { lx.problem = "unfinished escape"; break; }
+            c = s[lx.end++];
             if (quote == '"' && c == 'n') c = '\n';
             else if (quote == '"' && c == 't') c = '\t';
         } else if (quote && c == quote) {
             quote = 0;
-            continue;
+            literal = 0;
         } else if (!quote && (c == '\'' || c == '"')) {
             quote = c;
-            continue;
+            literal = 0;
+            lx.plain = 0;
         }
-        if (used + 1 >= capacity) text = cmdr_realloc(text, capacity = capacity * 2 + 16, 1);
-        text[used++] = c;
+        if (quoted && (quote || !literal || lx.end - at == 2)) memset(quoted + at, 1, lx.end - at);
+        if (text && literal) {
+            if (used + 1 >= capacity) *text = cmdr_realloc(*text, capacity = capacity * 2 + 16, 1);
+            (*text)[used++] = c;
+        }
     }
-    if (quote) { free(text); return cmdr_error(error, "unclosed quote"); }
-    if (!text) text = cmdr_realloc(NULL, 1, 1);
-    text[used] = '\0';
-    *out = (word){.text = text};
-    *p = s;
+    if (!lx.problem && quote) lx.problem = "unclosed quote";
+    if (text) {
+        if (!*text) *text = cmdr_realloc(NULL, 1, 1);
+        (*text)[used] = '\0';
+    }
+    return lx;
+}
+
+/* Whether p ends a parameter: whitespace, ')', or the end of the text. */
+static int param_end(const char *p)
+{
+    return !*p || isspace((unsigned char)*p) || *p == ')';
+}
+
+/* Skip whitespace, then a comment: '#' where a pipeline starts, to the end of
+ * its line. */
+static size_t skip_comment(const char *s, size_t i, size_t n, size_t *comment)
+{
+    while (i < n && isspace((unsigned char)s[i])) ++i;
+    *comment = i;
+    if (i < n && s[i] == '#')
+        while (i < n && s[i] != '\n') ++i;
+    return i;
+}
+
+/* Check the reference at s[0, n), "$name" or "$MODULE.NAME". */
+static int check_reference(const char *s, size_t n, char **error)
+{
+    if (n == 2 && s[1] == '_') return cmdr_error(error, "invalid reference '$_': nothing is bound to _");
+    /* A reference may name a module's binding, so '.' joins identifiers. */
+    size_t k = 0;
+    for (size_t m; (m = identifier(s + 1 + k)) && 1 + (k += m) < n && s[1 + k] == '.';) ++k;
+    if (n == 1 || 1 + k != n || s[n - 1] == '.')
+        return cmdr_error(error, "invalid reference '%.*s': use $name, declared as "
+                          "{ (name) ... } or bound by as; quote '$' for literal text", (int)n, s);
     return 0;
 }
 
@@ -368,24 +392,44 @@ static int parse(const char *line, program *pg, char **error)
 {
     *pg = (program){.stages = cmdr_realloc(NULL, 1, sizeof(stage)), .count = 1};
     pg->stages[0] = (stage){0};
-    const char *p = line;
-    while (isspace((unsigned char)*p)) ++p;
-    if (*p == '#') p += strlen(p); /* A comment. */
-    while (*p) {
+    size_t n = strlen(line), comment, i = skip_comment(line, 0, n, &comment);
+    while (i < n) {
         stage *s = &pg->stages[pg->count - 1];
-        if (isspace((unsigned char)*p)) {
-            ++p;
-        } else if (*p == '|') {
+        if (isspace((unsigned char)line[i])) {
+            ++i;
+            continue;
+        }
+        if (line[i] == '|') {
             if (!s->count) { cmdr_error(error, "expected a command before '|'"); goto fail; }
             pg->stages = cmdr_realloc(pg->stages, pg->count + 1, sizeof(stage));
             pg->stages[pg->count++] = (stage){0};
-            ++p;
-        } else {
-            word w;
-            if (lex(&p, &w, error)) goto fail;
-            s->words = cmdr_realloc(s->words, s->count + 1, sizeof(word));
-            s->words[s->count++] = w;
+            ++i;
+            continue;
         }
+        char *text = NULL;
+        lexeme lx = read_lexeme(line, i, n, &text, NULL);
+        word w = {0};
+        if (lx.problem) {
+            free(text);
+            cmdr_error(error, "%s", lx.problem);
+            goto fail;
+        }
+        if (lx.kind == LEX_WORD) {
+            w.text = text;
+        } else {
+            free(text);
+            if (lx.kind == LEX_REF) {
+                if (check_reference(line + i, lx.end - i, error)) goto fail;
+                w = (word){.text = cmdr_strndup(line + i + 1, lx.end - i - 1), .ref = 1};
+            } else {
+                size_t open = lx.kind == LEX_SUB ? 2 : 1;
+                w = (word){.text = cmdr_strndup(line + i + open, lx.close - i - open),
+                           .block = lx.kind == LEX_BLOCK, .sub = lx.kind == LEX_SUB};
+            }
+        }
+        s->words = cmdr_realloc(s->words, s->count + 1, sizeof(word));
+        s->words[s->count++] = w;
+        i = lx.end;
     }
     if (pg->count > 1 && !pg->stages[pg->count - 1].count) {
         cmdr_error(error, "expected a command after '|'");
@@ -395,6 +439,82 @@ static int parse(const char *line, program *pg, char **error)
 fail:
     dispose(pg);
     return 1;
+}
+
+typedef int (*visitor)(const cmdr_token *, void *);
+
+static int emit(visitor visit, void *data, cmdr_token_kind kind, size_t start, size_t end,
+                int command, int plain)
+{
+    return visit(&(cmdr_token){kind, start, end, command, plain}, data);
+}
+
+/* Scan a pipeline in s[i, n), as parse reads it; a block's parameters are
+ * read as compile_block reads them. Returns nonzero if visit stopped. */
+static int scan(const char *s, size_t i, size_t n, unsigned char *quoted, visitor visit, void *data)
+{
+    size_t comment;
+    i = skip_comment(s, i, n, &comment);
+    if (i > comment && emit(visit, data, CMDR_TOKEN_COMMENT, comment, i, 0, 0)) return 1;
+    int command = 1;
+    while (i < n) {
+        if (isspace((unsigned char)s[i])) {
+            ++i;
+            continue;
+        }
+        if (s[i] == '|') {
+            if (emit(visit, data, CMDR_TOKEN_PIPE, i, i + 1, 0, 0)) return 1;
+            command = 1;
+            ++i;
+            continue;
+        }
+        lexeme lx = read_lexeme(s, i, n, NULL, quoted);
+        int nested = lx.kind == LEX_BLOCK || lx.kind == LEX_SUB;
+        if (!nested || lx.deep) {
+            cmdr_token_kind kind = lx.kind == LEX_REF ? CMDR_TOKEN_REFERENCE : CMDR_TOKEN_WORD;
+            if (emit(visit, data, kind, i, lx.end, command, lx.plain && !nested)) return 1;
+            command = 0;
+            i = lx.end;
+            continue;
+        }
+        int sub = lx.kind == LEX_SUB;
+        size_t j = i + (sub ? 2 : 1);
+        if (emit(visit, data, sub ? CMDR_TOKEN_SUB_OPEN : CMDR_TOKEN_BLOCK_OPEN, i, j, 0, 0)) return 1;
+        while (!sub && j < lx.close && isspace((unsigned char)s[j])) ++j;
+        if (!sub && j < lx.close && s[j] == '(') {
+            if (emit(visit, data, CMDR_TOKEN_PARAMS_OPEN, j, j + 1, 0, 0)) return 1;
+            for (++j; j < lx.close && s[j] != ')';) {
+                if (isspace((unsigned char)s[j])) { ++j; continue; }
+                size_t start = j;
+                while (j < lx.close && !param_end(s + j) && s[j] != '=') ++j;
+                if (emit(visit, data, CMDR_TOKEN_PARAM, start, j, 0, 1)) return 1;
+                if (j < lx.close && s[j] == '=') { /* A default, an ordinary word. */
+                    start = j;
+                    while (j < lx.close && !param_end(s + j)) ++j;
+                    if (emit(visit, data, CMDR_TOKEN_WORD, start, j, 0, 1)) return 1;
+                }
+            }
+            if (j < lx.close) {
+                if (emit(visit, data, CMDR_TOKEN_PARAMS_CLOSE, j, j + 1, 0, 0)) return 1;
+                ++j;
+            }
+        }
+        if (scan(s, j, lx.close, quoted, visit, data)) return 1;
+        if (lx.close < n
+            && emit(visit, data, sub ? CMDR_TOKEN_SUB_CLOSE : CMDR_TOKEN_BLOCK_CLOSE, lx.close,
+                    lx.close + 1, 0, 0))
+            return 1;
+        command = 0;
+        i = lx.end;
+    }
+    return 0;
+}
+
+void cmdr_scan(const char *text, size_t n, unsigned char *quoted,
+               int (*visit)(const cmdr_token *, void *), void *data)
+{
+    if (quoted) memset(quoted, 0, n);
+    scan(text, 0, n, quoted, visit, data);
 }
 
 const cmdr_command *cmdr_find(const cmdr *repl, const char *name)
@@ -428,12 +548,6 @@ static size_t default_length(const char *p, int *empty)
     size_t n = 0;
     while (p[n] && !isspace((unsigned char)p[n]) && !strchr("'\"\\|${})", p[n])) ++n;
     return n;
-}
-
-/* Whether p ends a parameter: whitespace, ')', or the end of the text. */
-static int param_end(const char *p)
-{
-    return !*p || isspace((unsigned char)*p) || *p == ')';
 }
 
 /* Compile block source: "(a b=1)" parameters, appended to sc while the body

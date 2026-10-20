@@ -382,6 +382,50 @@ static void block_defaults(void)
     cmdr_session_close(session);
 }
 
+typedef struct {
+    char kinds[64]; /* One letter per token. */
+    size_t count, stop;
+} tokens;
+
+static int record(const cmdr_token *t, void *data)
+{
+    tokens *ts = data;
+    static const char letters[] = "wr|#{}(p)$]";
+    ts->kinds[ts->count++] = (char)(t->command && t->kind == CMDR_TOKEN_WORD ? 'c' : letters[t->kind]);
+    return ts->count == ts->stop;
+}
+
+/* Kinds of text's tokens, with c for a word that starts a stage. */
+static const char *kinds(const char *text, unsigned char *quoted, size_t stop)
+{
+    static tokens ts;
+    ts = (tokens){.stop = stop};
+    cmdr_scan(text, strlen(text), quoted, record, &ts);
+    ts.kinds[ts.count] = '\0';
+    return ts.kinds;
+}
+
+/* cmdr_scan reads tokens as the parser does, and tolerates unfinished input. */
+static void scanning(void)
+{
+    CHECK(!strcmp(kinds("# a | b", NULL, 0), "#"));
+    CHECK(!strcmp(kinds("text a#b $x | upper", NULL, 0), "cwr|c"));
+    CHECK(!strcmp(kinds("each { (x y=1) text $x } | join ,", NULL, 0), "c{(ppw)cr}|cw"));
+    CHECK(!strcmp(kinds("text $(upper (a)) b", NULL, 0), "c$cw]w"));
+    CHECK(!strcmp(kinds("each { # note }", NULL, 0), "c{#}"));
+    /* Unclosed: the block and the quote run to the end. */
+    CHECK(!strcmp(kinds("each { (x) upper | text \"a } b", NULL, 0), "c{(p)c|cw"));
+    CHECK(!strcmp(kinds("text $(upper", NULL, 0), "c$c"));
+    /* Escaped and quoted pipes are text. */
+    CHECK(!strcmp(kinds("text a\\|b 'c|d'", NULL, 0), "cww"));
+    CHECK(!strcmp(kinds("a b c", NULL, 2), "cw"));
+    unsigned char quoted[16];
+    const char *line = "x 'a b' c\\d";
+    kinds(line, quoted, 0);
+    const char *want = "00111110011";
+    for (size_t i = 0; i < strlen(line); ++i) CHECK(quoted[i] == want[i] - '0');
+}
+
 int main(void)
 {
     host_commands();
@@ -394,6 +438,7 @@ int main(void)
     lists();
     threads();
     interrupts();
+    scanning();
     puts("test_api: ok");
     return 0;
 }

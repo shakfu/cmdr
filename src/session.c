@@ -828,6 +828,12 @@ int cmdr_print(const cmdr_value *value, FILE *out)
     return fflush(out) != 0;
 }
 
+static int last_token(const cmdr_token *t, void *data)
+{
+    *(cmdr_token *)data = *t;
+    return 0;
+}
+
 static int blank_or_comment(const char *line)
 {
     while (isspace((unsigned char)*line)) ++line;
@@ -840,13 +846,9 @@ int cmdr_join(char **pipeline, size_t *used, const char *line, size_t n)
     *pipeline = cmdr_realloc(*pipeline, *used + n + 1, 1);
     memcpy(*pipeline + *used, line, n);
     (*pipeline)[*used += n] = '\0';
-    size_t end = *used;
-    while (end && isspace((unsigned char)(*pipeline)[end - 1])) --end;
-    if (!end || (*pipeline)[end - 1] != '|' || blank_or_comment(*pipeline)) return 0;
-    /* An even run of backslashes escapes itself, not the '|'. */
-    size_t slashes = 0;
-    while (slashes < end - 1 && (*pipeline)[end - 2 - slashes] == '\\') ++slashes;
-    return slashes % 2 == 0;
+    cmdr_token last = {CMDR_TOKEN_COMMENT, 0, 0, 0, 0};
+    cmdr_scan(*pipeline, *used, NULL, last_token, &last);
+    return last.kind == CMDR_TOKEN_PIPE;
 }
 
 /* Push a layer of the script commands, reading user's path and arguments. */

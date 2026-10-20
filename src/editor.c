@@ -3,7 +3,6 @@
 
 #include "linenoise.h"
 
-#include <ctype.h>
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -26,131 +25,6 @@ struct editor {
     char *next;    /* Its next line to return. */
 };
 
-typedef enum { WORD, REF, BAR, NOTE, OPEN, CLOSE, PARAMS, PARAM, PARAMS_END, SUB_OPEN,
-               SUB_CLOSE } token_kind;
-
-typedef struct {
-    token_kind kind;
-    size_t start, end;
-    int command; /* First word of a stage. */
-    int plain;   /* No quotes or escapes, so the text is the word. */
-} token;
-
-/* Split buf[0, len) as the lexer in cmdr.c does, tolerating an unfinished
- * line, calling visit per token and marking quoted bytes in colors when
- * non-NULL. Inside a block, unquoted braces nest anywhere, as in lex_block;
- * "(a b)" directly after '{' declares parameters. "$(" opens a sub-pipeline,
- * whose first word is a command, and the ')' that balances it closes it. */
-static void scan(const char *buf, size_t len, char *colors,
-                 void (*visit)(const token *, void *), void *data)
-{
-    size_t i = 0, depth = 0;
-    while (i < len && isspace((unsigned char)buf[i])) ++i;
-    if (i < len && buf[i] == '#') {
-        visit(&(token){NOTE, i, len, 0, 0}, data);
-        return;
-    }
-    int command = 1, opened = 0; /* opened: after '{', where "(a b)" may start. */
-    /* Open sub-pipelines, each with the unquoted '(' its words opened. */
-    size_t parens[64], subs = 0;
-    while (i < len) {
-        if (isspace((unsigned char)buf[i])) { ++i; continue; }
-        token t = {WORD, i, i + 1, command, 1};
-        char c = buf[i];
-        if (c == '$' && i + 1 < len && buf[i + 1] == '(' && subs < 64) {
-            t.kind = SUB_OPEN;
-            t.end = i += 2;
-            parens[subs++] = 0;
-            command = 1;
-            opened = 0;
-            visit(&t, data);
-            continue;
-        }
-        if (c == ')' && subs && !parens[subs - 1]) {
-            t.kind = SUB_CLOSE;
-            --subs;
-            ++i;
-            command = 0;
-            visit(&t, data);
-            continue;
-        }
-        if (c == '|' || c == '{' || (c == '}' && depth)) {
-            t.kind = c == '|' ? BAR : c == '{' ? OPEN : CLOSE;
-            depth = c == '{' ? depth + 1 : c == '}' ? depth - 1 : depth;
-            command = c != '}';
-            opened = c == '{';
-            ++i;
-            visit(&t, data);
-            continue;
-        }
-        if (c == '(' && opened) {
-            t.kind = PARAMS;
-            visit(&t, data);
-            for (++i; i < len && buf[i] != ')'; ) {
-                if (isspace((unsigned char)buf[i])) { ++i; continue; }
-                token p = {PARAM, i, i, 0, 1};
-                while (i < len && !isspace((unsigned char)buf[i]) && buf[i] != ')' && buf[i] != '=')
-                    ++i;
-                p.end = i;
-                visit(&p, data);
-                if (i < len && buf[i] == '=') { /* A default: an ordinary word. */
-                    token v = {WORD, i, i, 0, 1};
-                    while (i < len && !isspace((unsigned char)buf[i]) && buf[i] != ')') ++i;
-                    v.end = i;
-                    visit(&v, data);
-                }
-            }
-            if (i < len) visit(&(token){PARAMS_END, i, i + 1, 0, 0}, data), ++i;
-            opened = 0;
-            continue;
-        }
-        opened = 0;
-        if (c == '$') {
-            t.kind = REF;
-            while (i < len && !isspace((unsigned char)buf[i]) && buf[i] != '|'
-                   && !(depth && buf[i] == '}') && !(subs && buf[i] == ')')) ++i;
-            t.end = i;
-            command = 0;
-            visit(&t, data);
-            continue;
-        }
-        char quote = 0;
-        size_t nested = 0; /* Braces opened inside this word, within a block. */
-        while (i < len && (quote || (!isspace((unsigned char)buf[i]) && buf[i] != '|'))) {
-            c = buf[i];
-            size_t width = 1;
-            if (!quote && depth && c == '}') {
-                if (!nested) break; /* Closes the block. */
-                --nested;
-            }
-            if (!quote && depth && c == '{') ++nested;
-            if (!quote && subs && c == '(') ++parens[subs - 1];
-            if (!quote && subs && c == ')') {
-                if (!parens[subs - 1]) break; /* Closes the sub-pipeline. */
-                --parens[subs - 1];
-            }
-            if (c == '\\' && quote != '\'') {
-                width = i + 1 < len ? 2 : 1;
-                t.plain = 0;
-            } else if (quote && c == quote) {
-                quote = 0;
-            } else if (!quote && (c == '\'' || c == '"')) {
-                quote = c;
-                t.plain = 0;
-            } else if (!quote) {
-                i += width;
-                continue;
-            }
-            if (colors && (quote || c == '\'' || c == '"' || c == '\\'))
-                memset(colors + i, STRING, width);
-            i += width;
-        }
-        t.end = i;
-        command = 0;
-        visit(&t, data);
-    }
-}
-
 /* The active command that buf[0, n) names, or NULL. */
 static const cmdr_command *known(const cmdr *repl, const char *name, size_t n)
 {
@@ -171,29 +45,29 @@ typedef struct {
     int args;    /* Arguments seen in the current stage. */
 } paint;
 
-static void paint_token(const token *t, void *data)
+static int paint_token(const cmdr_token *t, void *data)
 {
     paint *p = data;
     size_t n = t->end - t->start;
     char *at = p->colors + t->start;
-    if (t->kind == NOTE) memset(at, COMMENT, n);
-    else if (t->kind == REF || t->kind == PARAM) memset(at, REFERENCE, n);
-    else if (t->kind != WORD) memset(at, PUNCTUATION, n);
+    cmdr_token_kind kind = t->kind;
+    if (kind == CMDR_TOKEN_COMMENT) memset(at, COMMENT, n);
+    else if (kind == CMDR_TOKEN_REFERENCE || kind == CMDR_TOKEN_PARAM) memset(at, REFERENCE, n);
+    else if (kind != CMDR_TOKEN_WORD) memset(at, PUNCTUATION, n);
     /* A stage after '|', or first in a block without parameters, is piped. */
-    if (t->kind == BAR || t->kind == OPEN) p->piped = 1, p->binding = 0;
-    else if (t->kind == SUB_OPEN) p->piped = 0, p->binding = 0; /* It receives no input. */
-    else if (t->kind == SUB_CLOSE) p->binding = 0;
-    else if (t->kind == PARAMS) p->piped = 0;
-    else if (t->kind == CLOSE) p->binding = 0;
-    if (t->kind != WORD && t->kind != REF) return;
+    if (kind == CMDR_TOKEN_PIPE || kind == CMDR_TOKEN_BLOCK_OPEN) p->piped = 1, p->binding = 0;
+    else if (kind == CMDR_TOKEN_SUB_OPEN) p->piped = 0, p->binding = 0; /* It receives no input. */
+    else if (kind == CMDR_TOKEN_SUB_CLOSE || kind == CMDR_TOKEN_BLOCK_CLOSE) p->binding = 0;
+    else if (kind == CMDR_TOKEN_PARAMS_OPEN) p->piped = 0;
+    if (kind != CMDR_TOKEN_WORD && kind != CMDR_TOKEN_REFERENCE) return 0;
     if (!t->command) {
         /* as's NAME: as VALUE NAME, or NAME alone after a piped VALUE. */
-        if (p->binding && ++p->args == (p->piped ? 1 : 2) && t->kind == WORD && t->plain)
+        if (p->binding && ++p->args == (p->piped ? 1 : 2) && kind == CMDR_TOKEN_WORD && t->plain)
             memset(at, BINDING, n);
-        return;
+        return 0;
     }
     p->binding = 0, p->args = 0;
-    if (t->kind != WORD || !t->plain) return;
+    if (kind != CMDR_TOKEN_WORD || !t->plain) return 0;
     const cmdr_command *command = known(p->ed->repl, p->buf + t->start, n);
     if (command) {
         memset(at, command->value ? BINDING : COMMAND, n);
@@ -204,30 +78,37 @@ static void paint_token(const token *t, void *data)
          * linenoise's "[... N pasted lines ...]", which buf shows for a paste. */
         memset(at, UNKNOWN, n);
     }
+    return 0;
 }
 
 static void highlight(const char *buf, char *colors, size_t len, size_t pos, void *udata)
 {
     paint p = {.ed = udata, .buf = buf, .colors = colors, .pos = pos};
-    scan(buf, len, colors, paint_token, &p);
+    unsigned char *quoted = malloc(len ? len : 1); /* Without it, strings stay plain. */
+    cmdr_scan(buf, len, quoted, paint_token, &p);
+    for (size_t i = 0; quoted && i < len; ++i)
+        if (quoted[i]) colors[i] = STRING;
+    free(quoted);
 }
 
-static void last(const token *t, void *data)
+static int last(const cmdr_token *t, void *data)
 {
-    *(token *)data = *t;
+    *(cmdr_token *)data = *t;
+    return 0;
 }
 
 /* Complete command names where a command may start: at the line start, after
- * '|' or '{', or after a block's parameter list. */
+ * '|', '{', or "$(", or after a block's parameter list. */
 static void complete(const char *buf, size_t pos, linenoise_completions_t *lc, void *udata)
 {
     const editor *ed = udata;
-    token t = {BAR, 0, 0, 0, 0}; /* The line start acts as a stage boundary. */
-    scan(buf, pos, NULL, last, &t);
-    int boundary = t.kind == BAR || t.kind == OPEN || t.kind == PARAMS_END;
+    cmdr_token t = {CMDR_TOKEN_PIPE, 0, 0, 0, 0}; /* The line start acts as a stage boundary. */
+    cmdr_scan(buf, pos, NULL, last, &t);
+    int boundary = t.kind == CMDR_TOKEN_PIPE || t.kind == CMDR_TOKEN_BLOCK_OPEN
+                   || t.kind == CMDR_TOKEN_SUB_OPEN || t.kind == CMDR_TOKEN_PARAMS_CLOSE;
     size_t start = pos;
     if (t.end == pos && !boundary) {
-        if (t.kind != WORD || !t.command || !t.plain) return;
+        if (t.kind != CMDR_TOKEN_WORD || !t.command || !t.plain) return;
         start = t.start;
     } else if (!boundary) {
         return; /* After an argument. */

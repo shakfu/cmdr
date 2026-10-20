@@ -6,7 +6,15 @@
 
 - A tree-sitter grammar, `editors/tree-sitter-cmdr`, with highlight queries. Helix and Zed now highlight cmdr: `editors/helix` builds the grammar, and `editors/zed` is an extension. `make test` runs the grammar's corpus and highlight tests and parses every `.cmdr` file in the repository, if the `tree-sitter` CLI is installed.
 
+- `cmdr_scan` splits source into tokens with the parser's rules, tolerating unfinished input. The REPL's highlighting and completion, `-c` line splitting, and line continuation now use it. Each had its own copy of the quoting rules, and copies drift from the parser.
+
+### Removed
+
+- `scripts/flatten_with.py`. It converted this repository's `with` blocks to `$(...)`, and that conversion is done.
+
 ### Fixed
+
+- `-c` split a line at a newline inside `$(...)`, which it did not do inside a block or quotes.
 
 - The Vim, Sublime Text, and VS Code grammars colored `0x10` as a number, though cmdr reads only decimal numbers.
 
