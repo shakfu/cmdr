@@ -2,7 +2,13 @@
 
 ## Unreleased
 
+### Added
+
+- A tree-sitter grammar, `editors/tree-sitter-cmdr`, with highlight queries. Helix and Zed now highlight cmdr: `editors/helix` builds the grammar, and `editors/zed` is an extension. `make test` runs the grammar's corpus and highlight tests and parses every `.cmdr` file in the repository, if the `tree-sitter` CLI is installed.
+
 ### Fixed
+
+- The Vim, Sublime Text, and VS Code grammars colored `0x10` as a number, though cmdr reads only decimal numbers.
 
 - In a module built into the executable, such as an extension's, `script-file`, `script-dir`, and `script-args` returned the importing script's, since the module's definitions compiled where the importer's script was in scope. They now fail, as in the REPL: the module has no file.
 

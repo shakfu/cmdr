@@ -1,0 +1,19 @@
+{
+  "grammars": [
+    {
+      "name": "cmdr",
+      "camelcase": "Cmdr",
+      "scope": "source.cmdr",
+      "path": ".",
+      "file-types": ["cmdr"],
+      "highlights": ["queries/highlights.scm"]
+    }
+  ],
+  "metadata": {
+    "version": "0.2.0",
+    "license": "MIT",
+    "description": "cmdr grammar for tree-sitter",
+    "authors": [{"name": "Shakeeb Alireza"}],
+    "links": {"repository": "https://github.com/shakfu/cmdr"}
+  }
+}

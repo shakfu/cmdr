@@ -1469,6 +1469,10 @@ class Commands(unittest.TestCase):
         json.loads((editors / 'vscode' / 'language-configuration.json').read_text())
         helix = tomllib.loads((editors / 'helix' / 'languages.toml').read_text())
         self.assertEqual(helix['language'][0]['file-types'], ['cmdr'])
+        self.assertEqual(helix['grammar'][0]['name'], helix['language'][0]['grammar'])
+        zed = tomllib.loads((editors / 'zed' / 'extension.toml').read_text())
+        zed_language = tomllib.loads((editors / 'zed' / 'languages' / 'cmdr' / 'config.toml').read_text())
+        self.assertIn(zed_language['grammar'], zed['grammars'])
         try:
             import yaml
         except ImportError:
@@ -1525,6 +1529,49 @@ class Commands(unittest.TestCase):
                     start = text.index(token, start)
                     self.assertEqual(set(row[start:start + len(token)]), {group})
                     start += len(token)
+
+    @unittest.skipUnless(shutil.which('tree-sitter'), 'tree-sitter not found')
+    def test_tree_sitter(self):
+        editors = ROOT / 'editors'
+        grammar = editors / 'tree-sitter-cmdr'
+        # src/ is generated from grammar.js; Helix and Zed build from it.
+        with tempfile.TemporaryDirectory() as directory:
+            subprocess.run(['tree-sitter', 'generate', '-o', directory], cwd=grammar,
+                           check=True, capture_output=True, timeout=120)
+            for name in ['grammar.json', 'node-types.json']:
+                with self.subTest(file=name):
+                    self.assertEqual((Path(directory) / name).read_text(),
+                                     (grammar / 'src' / name).read_text(),
+                                     'src/ is stale: run tree-sitter generate')
+        result = subprocess.run(['tree-sitter', 'test'], cwd=grammar, capture_output=True,
+                                text=True, timeout=120)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        # Every script in the repository parses without an ERROR or MISSING node.
+        scripts = sorted(str(p) for p in ROOT.glob('**/*.cmdr')
+                         if not {'build', 'thirdparty'} & set(p.relative_to(ROOT).parts))
+        self.assertGreater(len(scripts), 20)
+        result = subprocess.run(['tree-sitter', 'parse', '-p', str(grammar), '--quiet', *scripts],
+                                capture_output=True, text=True, timeout=120)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        # The Helix and Zed copies of the highlight query differ only in their
+        # header and, for Helix, its scope names; each compiles.
+        queries = grammar / 'queries' / 'highlights.scm'
+        body = queries.read_text().split('\n\n', 1)[1]
+        helix_names = [('@function.call', '@function'), ('@number', '@constant.numeric'),
+                       ('@string.escape', '@constant.character.escape')]
+        helix_body = body
+        for a, b in helix_names:
+            helix_body = helix_body.replace(a, b)
+        copies = [(editors / 'helix' / 'runtime' / 'queries' / 'cmdr' / 'highlights.scm', helix_body),
+                  (editors / 'zed' / 'languages' / 'cmdr' / 'highlights.scm', body)]
+        for path, want in copies:
+            with self.subTest(query=str(path.relative_to(ROOT))):
+                self.assertEqual(path.read_text().split('\n\n', 1)[1], want)
+        for path in [queries] + [path for path, _ in copies]:
+            with self.subTest(query=str(path.relative_to(ROOT))):
+                result = subprocess.run(['tree-sitter', 'query', '-p', str(grammar), '--quiet', str(path),
+                                         scripts[0]], capture_output=True, text=True, timeout=120)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_help_and_repl(self):
         result = self.run_line('help')

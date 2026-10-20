@@ -11,18 +11,9 @@
 
 ## Medium
 
-- [ ] **Tree-sitter grammar for cmdr.** Helix and Zed highlight only through tree-sitter, so `editors/` has no highlighting for either.
-  - Write `grammar.js` from the lexer in `src/cmdr.c`: comments, stages, words, quotes, escapes, `$name`, `$(...)` sub-pipelines, and blocks with `(a b)` and `_` parameters.
-
-  - Add `queries/highlights.scm` with the token classes in [editors/README.md](editors/README.md).
-
-  - Helix: add `[[grammar]]` and `highlights.scm` under `runtime/queries/cmdr/` to `editors/helix/`.
-
-  - Zed: add an extension with `extension.toml`, `languages/cmdr/config.toml`, and `highlights.scm`.
-
-  - Neovim could use the grammar through nvim-treesitter in place of `editors/vim/syntax/cmdr.vim`.
-
-  - Test with `tree-sitter test` corpus files covering the lexer cases in `tests/test_cmdr.py`.
+- [ ] **Tree-sitter follow-ups.**
+  - Zed: set `rev` in `editors/zed/extension.toml` once a commit contains `editors/tree-sitter-cmdr`, and install the dev extension. Zed is untested; Helix builds the grammar and finds the queries.
+  - Neovim could use the grammar through nvim-treesitter in place of `editors/vim/syntax/cmdr.vim`. `queries/highlights.scm` already uses its capture names.
 
 - [ ] Extension modules run at their first `import`, after the prelude, which `--user` may replace. So `ext/*/*.cmdr` use only primitives and other modules, not prelude definitions such as `first`; nothing checks this. A check could import every extension module under an empty `--user` prelude in `make test`.
 

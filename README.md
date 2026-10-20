@@ -461,7 +461,7 @@ Put definitions in a file, such as `ext.cmdr`, and run `load ext.cmdr` in a sess
 
 - Line editing uses a vendored [linenoise](thirdparty/linenoise). Configure with `-DCMDR_EDITOR=OFF` to read plain lines instead.
 
-Syntax highlighting for Vim, Sublime Text, and VS Code is in [editors/](editors/README.md).
+Syntax highlighting for Vim, Sublime Text, VS Code, Helix, and Zed is in [editors/](editors/README.md).
 
 ### Command line
 

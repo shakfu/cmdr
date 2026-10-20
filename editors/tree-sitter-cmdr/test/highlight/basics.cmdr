@@ -1,0 +1,22 @@
+def wrap { (x d=- _) text $d $x $d } "Wrap X in D"
+# <- keyword.function
+#   ^ function
+#        ^ punctuation.bracket
+#           ^ variable.parameter
+#               ^ constant
+#                    ^ function.call
+#                         ^ variable
+#                                    ^ string
+list a b | map wrap 2 'q' "a\tb" | join ,
+# <- function.call
+#        ^ operator
+#                   ^ number
+#                     ^ string
+#                           ^ string.escape
+$hz | mul $(count $xs)
+# <- variable
+#         ^ punctuation.special
+#           ^ function.call
+#                 ^ variable
+# a comment
+# <- comment

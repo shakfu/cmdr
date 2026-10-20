@@ -1,9 +1,14 @@
-# Append to ~/.config/helix/languages.toml. Helix highlights only through
-# tree-sitter, so this gives file detection and comment toggling until a
-# cmdr grammar exists; see TODO.md.
+# Append to ~/.config/helix/languages.toml, set the grammar's path, then run
+# `hx --grammar build`. Copy runtime/queries/cmdr/ to
+# ~/.config/helix/runtime/queries/cmdr/.
 [[language]]
 name = "cmdr"
 scope = "source.cmdr"
 file-types = ["cmdr"]
 comment-tokens = ["#"]
 indent = { tab-width = 2, unit = "  " }
+grammar = "cmdr"
+
+[[grammar]]
+name = "cmdr"
+source = { path = "/path/to/cmdr/editors/tree-sitter-cmdr" }

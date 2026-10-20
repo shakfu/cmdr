@@ -84,7 +84,7 @@ contexts:
       push: double-quoted
     - match: '\\.'
       scope: constant.character.escape.cmdr
-    - match: '(?<![^\s])-?(?:0[xX][0-9a-fA-F]+|\d+(?:\.\d+)?(?:[eE][-+]?\d+)?)(?![^\s|})])'
+    - match: '(?<![^\s])-?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?(?![^\s|})])'
       scope: constant.numeric.cmdr
 
   sub:

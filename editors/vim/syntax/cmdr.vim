@@ -29,7 +29,7 @@ syn match cmdrEscape /\\./
 syn region cmdrString start=/'/ end=/'/ oneline
 syn region cmdrString start=/"/ skip=/\\./ end=/"/ oneline contains=cmdrStringEscape
 syn match cmdrStringEscape /\\./ contained
-syn match cmdrNumber /\%(^\|[ \t]\)\@1<=-\=\%(0[xX]\x\+\|\d\+\%(\.\d\+\)\=\%([eE][-+]\=\d\+\)\=\)\ze\%([ \t|})]\|$\)/
+syn match cmdrNumber /\%(^\|[ \t]\)\@1<=-\=\d\+\%(\.\d\+\)\=\%([eE][-+]\=\d\+\)\=\ze\%([ \t|})]\|$\)/
 
 " A comment is a whole line; '#' later in a line is text. Defined last, so it
 " wins over a command at the same position.

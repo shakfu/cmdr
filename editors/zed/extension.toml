@@ -1,0 +1,14 @@
+id = "cmdr"
+name = "cmdr"
+version = "0.2.0"
+schema_version = 1
+authors = ["Shakeeb Alireza"]
+description = "Syntax highlighting for cmdr scripts"
+repository = "https://github.com/shakfu/cmdr"
+
+# Zed fetches the grammar at a commit. Set rev to a commit that contains
+# editors/tree-sitter-cmdr.
+[grammars.cmdr]
+repository = "https://github.com/shakfu/cmdr"
+rev = "COMMIT"
+path = "editors/tree-sitter-cmdr"
