@@ -1,13 +1,14 @@
-#define _POSIX_C_SOURCE 200809L
+#define _XOPEN_SOURCE 700 /* POSIX-2008 with XSI, for realpath. */
 #include "cmdr.h"
 
 #include <ctype.h>
 #include <errno.h>
-#include <libgen.h>
+#include <fcntl.h>
 #include <limits.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <unistd.h>
 
 /* src/prelude.cmdr and src/prelude-effects.cmdr, embedded by the build. */
 extern const char cmdr_prelude_source[], cmdr_prelude_effects_source[];
@@ -83,14 +84,20 @@ static int script_file_command(const cmdr *repl, void *user, size_t argc,
     return 0;
 }
 
+/* PATH's directory, for a path from realpath: absolute, with no trailing '/'.
+ * Not dirname(3), which may return storage shared between threads. */
+static char *parent_dir(const char *path)
+{
+    size_t n = (size_t)(strrchr(path, '/') - path);
+    return cmdr_strndup(path, n ? n : 1);
+}
+
 static int script_dir_command(const cmdr *repl, void *user, size_t argc,
                               const cmdr_value *argv, cmdr_value *result, char **error)
 {
     const definition *node = script_of(user, "script-dir", argc, error);
     if (!node) return 1;
-    char *copy = cmdr_strndup(node->path, strlen(node->path)), *dir = dirname(copy);
-    *result = cmdr_text(dir, strlen(dir));
-    free(copy);
+    *result = (cmdr_value){.kind = CMDR_TEXT, .text = parent_dir(node->path)};
     return 0;
 }
 
@@ -191,10 +198,10 @@ static int help_command(const cmdr *repl, void *user, size_t argc, const cmdr_va
     return 0;
 }
 
-/* A name must be callable as one unquoted word. */
+/* A name must be callable as one unquoted word; a leading '{' starts a block. */
 static int valid_name(const char *name)
 {
-    if (!*name || *name == '$' || *name == '#') return 0;
+    if (!*name || strchr("$#{", *name)) return 0;
     for (const char *p = name; *p; ++p)
         if (isspace((unsigned char)*p) || strchr("|'\"\\", *p)) return 0;
     return 1;
@@ -272,12 +279,27 @@ static int def_command(const cmdr *repl, void *user, size_t argc, const cmdr_val
     return 0;
 }
 
+/* Open a script for reading, closed on exec, so programs it runs do not
+ * inherit it. O_CLOEXEC at open, since another thread may spawn meanwhile. */
+static FILE *open_script(const char *path)
+{
+    int fd = open(path, O_RDONLY | O_CLOEXEC);
+    if (fd < 0) return NULL;
+    FILE *file = fdopen(fd, "r");
+    if (!file) {
+        int saved = errno;
+        close(fd);
+        errno = saved;
+    }
+    return file;
+}
+
 /* Run a script's lines in this session, so its definitions remain. */
 static int load_command(const cmdr *repl, void *user, size_t argc, const cmdr_value *argv,
                         cmdr_value *result, char **error)
 {
     if (!argc) return cmdr_error(error, "usage: load PATH [ARG ...]");
-    FILE *file = fopen(argv[0].text, "r");
+    FILE *file = open_script(argv[0].text);
     if (!file) return cmdr_error(error, "load %s: %s", argv[0].text, strerror(errno));
     const char **args = cmdr_realloc(NULL, argc, sizeof(*args));
     for (size_t i = 1; i < argc; ++i) args[i - 1] = argv[i].text;
@@ -318,9 +340,7 @@ static char **search_dirs(const cmdr *repl, size_t *count)
     const cmdr_command *file = cmdr_find(repl, "script-file");
     const definition *script = file && file->run == script_file_command ? file->user : NULL;
     if (script && script->path) {
-        char *copy = cmdr_strndup(script->path, strlen(script->path)), *dir = dirname(copy);
-        add_dir(&dirs, count, cmdr_strndup(dir, strlen(dir)));
-        free(copy);
+        add_dir(&dirs, count, parent_dir(script->path));
     } else {
         add_dir(&dirs, count, cmdr_strndup(".", 1));
     }
@@ -384,7 +404,7 @@ static char *find_module(const cmdr *repl, const char *verb, const char *name, c
 static int run_module(cmdr_session *session, module *m, const char *verb, const char *name,
                       char **error)
 {
-    FILE *in = fopen(m->path, "r");
+    FILE *in = open_script(m->path);
     if (!in) return cmdr_error(error, "%s %s: %s: %s", verb, name, m->path, strerror(errno));
     const cmdr *before = session->head.parent;
     FILE *out = session->out;
@@ -591,7 +611,7 @@ cmdr_session *cmdr_session_open(const cmdr *commands, int effects, FILE *out)
              .docstring = "Return the arguments of the script file this code is written in",
              .run = script_args_command},
             {.name = "load", .usage = "load PATH [ARG ...]",
-             .docstring = "Run a script in this session, with arguments",
+             .docstring = "Run a script in this session, with arguments; PATH is relative to the cwd",
              .run = load_command, .user = s, .text = 1},
             {.name = "import", .usage = "import NAME [as ALIAS]",
              .docstring = "Run module NAME once; bind its definitions as NAME.DEF",
@@ -664,8 +684,11 @@ int cmdr_join(char **pipeline, size_t *used, const char *line, size_t n)
     (*pipeline)[*used += n] = '\0';
     size_t end = *used;
     while (end && isspace((unsigned char)(*pipeline)[end - 1])) --end;
-    return end && (*pipeline)[end - 1] == '|' && (end < 2 || (*pipeline)[end - 2] != '\\')
-        && !blank_or_comment(*pipeline);
+    if (!end || (*pipeline)[end - 1] != '|' || blank_or_comment(*pipeline)) return 0;
+    /* An even run of backslashes escapes itself, not the '|'. */
+    size_t slashes = 0;
+    while (slashes < end - 1 && (*pipeline)[end - 2 - slashes] == '\\') ++slashes;
+    return slashes % 2 == 0;
 }
 
 /* Push a layer of the script commands, reading user's path and arguments. */

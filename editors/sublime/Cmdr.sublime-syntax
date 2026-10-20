@@ -1,7 +1,7 @@
 %YAML 1.2
 ---
 # Sublime Text syntax for cmdr scripts. Token rules follow the lexer in src/cmdr.c.
-name: cmdr
+name: Cmdr
 scope: source.cmdr
 file_extensions: [cmdr]
 

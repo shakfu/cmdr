@@ -4,6 +4,12 @@
 
 ### Changed
 
+- `path-ext` takes the basename first and mismatches when it has no extension. `Makefile` gave `Makefile`, `.bashrc` gave `bashrc`, and `a.b/c` gave `b/c`. A mismatch over Python's empty text, so `or` supplies a default and `path-ext` agrees with `path-has-ext`.
+
+- Numbers print with the fewest digits, up to 17, that read back as the same double: `div 1 3` gives `0.3333333333333333`, not `0.33333333333333331`.
+
+- Numbers must be decimal. `strtod` also accepted hex such as `0x10` and leading spaces. Hosts must keep `LC_NUMERIC` as `"C"`; documenting this over a per-call `uselocale`, which costs a locale switch per number.
+
 - Path commands share the `path-` prefix: `basename`, `dirname`, `ext`, `has-ext`, and `stem` are now `path-basename`, `path-dirname`, `path-ext`, `path-has-ext`, and `path-stem`. The prefix groups them, as `run-` and `script-` do.
 
 - **Blocks replace string bodies and positional `$N`.** `{ ... }` is a pipeline passed as a value. Its command names and references are checked with the enclosing line, before any stage runs. Blocks declare parameters, which resolve lexically through nested blocks. Lexical scope over per-call `$N`, because per-call scope passed each outer value down at every nesting level and could not return a closure. See [docs/dev/blocks.md](docs/dev/blocks.md).
@@ -108,6 +114,30 @@
 - `def NAME BLOCK [DOC]`: `help` shows DOC, and the usage column shows the block's parameters, such as `exts DIR`.
 
 ### Fixed
+
+- `map`'s help and the README say its COMMAND is looked up when `map` runs, not with the line. `each { COMMAND }` is checked first.
+
+- Text-type errors name the command and the kind received: `sort: expected text, got a list`, not `expected text`. A block passed to a text-only command no longer suggests `map` or `join`, which apply to lists.
+
+- `def` rejects a name starting with `{`. The name could not be called, since `{` there starts a block.
+
+- `script-dir` and `import`'s search no longer call `dirname(3)`. POSIX lets it return static storage, which sessions on separate threads would share.
+
+- `cmdr_realloc` with size 0 allocates, as with count 0. It divided by the size and raised SIGFPE.
+
+- `load` documents that a relative PATH resolves from the current directory. Kept over script-relative resolution, which `import` uses, because that would break scripts that load from the cwd; `script-dir | path-join` gives the script-relative form.
+
+- Ctrl-C while a line runs exits cmdr by SIGINT after stopping the line's program. cmdr died at once from the default SIGINT, so a program that ignored SIGINT kept running, unreaped, after cmdr exited. The program now gets SIGTERM, then SIGKILL a second later, as with `run-with`'s timeout. Exiting by the signal, not with a status, lets a calling shell loop stop. Hosts get the same through `cmdr_interrupt` and `cmdr_interrupted`.
+
+- `shlex-join` uses the `lines` primitive. It called `lines` by name in the caller's scope, so a session `def lines` changed how it split text.
+
+- A value nested too deeply to copy no longer leaks a block's code. The depth check ran after the copy had retained the block's compiled code, and the failure path did not release it.
+
+- A line ending in `\\|` continues. An escaped backslash before the `|` was taken as escaping the `|`. A `\` inside single quotes before a final `|` still stops continuation.
+
+- `src/session.c` declares `realpath`. `_POSIX_C_SOURCE` alone omits it, an XSI function, so builds without `_FORTIFY_SOURCE` called it as an implicit `int` function and truncated its pointer result. The build now fails on any implicit declaration.
+
+- Programs no longer inherit the descriptors of the scripts that run them. `load`, `import`, and `cmdr FILE` opened scripts without close-on-exec, so `run` passed each open script to the child.
 
 - `cmdr_push` doubles a list's allocation when full, tracked in the new field `cmdr_value.capacity`. It reallocated per item, so building N items copied O(N^2) items wherever `realloc` moved the block. 10^7 items timed out under AddressSanitizer. A capacity of 0 means exactly `count`, so a host that allocates a list whole leaves it 0.
 

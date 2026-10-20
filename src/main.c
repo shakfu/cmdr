@@ -3,6 +3,8 @@
 #include "extensions.h"
 
 #include <errno.h>
+#include <fcntl.h>
+#include <signal.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -34,6 +36,7 @@ static int load(cmdr_session *session, const char *path, size_t argc, char **arg
     } else {
         FILE *file = fopen(path, "r");
         if (!file) { fprintf(stderr, "cmdr: %s: %s\n", path, strerror(errno)); return 1; }
+        fcntl(fileno(file), F_SETFD, FD_CLOEXEC); /* Programs it runs do not inherit it. */
         status = cmdr_session_load_args(session, file, path, argc, (const char *const *)argv,
                                         &error);
         fclose(file);
@@ -137,6 +140,14 @@ static int quits(const char *pipeline)
         && (!strcmp(word, "quit") || !strcmp(word, "exit"));
 }
 
+/* Ctrl-C: the running line fails with "interrupted", stopping its program,
+ * and main exits by SIGINT after closing the session. Without SA_RESTART, so
+ * the signal also ends a blocking read or wait. */
+static void interrupt(int signal)
+{
+    cmdr_interrupt(1);
+}
+
 /* Evaluate one pipeline per line from stdin, continuing after failures. */
 static int run(cmdr_session *session, const char *banner)
 {
@@ -156,13 +167,15 @@ static int run(cmdr_session *session, const char *banner)
 #ifdef CMDR_EDITOR
         if (ed) {
             n = editor_read(ed, editor_prompt(ed, used != 0), &line, &capacity);
-            if (n == -2) { used = 0; continue; } /* Ctrl-C drops the pipeline. */
+            /* Ctrl-C at the prompt is a key, which drops the pipeline. */
+            if (n == -2 && !cmdr_interrupted()) { used = 0; continue; }
         } else
 #endif
         {
             if (interactive) { fputs(prompt, stdout); fflush(stdout); }
             n = getline(&line, &capacity, stdin);
         }
+        if (cmdr_interrupted()) break;
         if (n >= 0 && cmdr_join(&pipeline, &used, line, (size_t)n)) continue;
         if (!used) break;
         used = 0;
@@ -171,9 +184,10 @@ static int run(cmdr_session *session, const char *banner)
         if (ed) editor_remember(ed, pipeline);
 #endif
         if (evaluate(session, pipeline)) status = 1;
+        if (cmdr_interrupted()) break;
         if (n < 0) break;
     }
-    if (ferror(stdin)) {
+    if (ferror(stdin) && !cmdr_interrupted()) {
         fprintf(stderr, "cmdr: stdin: %s\n", strerror(errno));
         status = 1;
     }
@@ -207,6 +221,9 @@ int main(int argc, char **argv)
         path = cmdr_realloc(NULL, strlen(home) + sizeof("/.cmdr/prelude.cmdr"), 1);
         sprintf(path, "%s/.cmdr/prelude.cmdr", home);
     }
+    struct sigaction action = {.sa_handler = interrupt};
+    sigemptyset(&action.sa_mask);
+    sigaction(SIGINT, &action, NULL);
     cmdr *layers = chain_extensions();
     cmdr_session *session = cmdr_session_open(layers, 1, stdout);
     const cmdr **ends = NULL;
@@ -229,5 +246,10 @@ int main(int argc, char **argv)
     free_extensions(layers);
     free(ends);
     free(path);
+    if (cmdr_interrupted()) { /* So a calling shell sees the interrupt and stops. */
+        fflush(stdout);
+        signal(SIGINT, SIG_DFL);
+        raise(SIGINT);
+    }
     return status ? 1 : 0;
 }

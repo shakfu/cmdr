@@ -75,9 +75,9 @@ reg-read 0x44 | check { equals 1 } "PLL did not lock"
 
 - Fit: point 4 stops at the first failing step and prints its line. `check` gives the failure a domain message.
 
-- Blocks: numbers are C `double`s, printed with `%.17g`.
+- Blocks: numbers are C `double`s, printed with the fewest digits that read back exactly.
 
-  - Hex input is accepted, but output is decimal: `add 0x10 1` outputs `17`.
+  - Arithmetic is decimal only: `add 0x10 1` fails. Host commands such as `reg-write` parse their own hex.
 
   - Integers above 2^53 lose precision: `add 9007199254740993 0` outputs `9007199254740992`. 64-bit registers are not safe.
 

@@ -220,6 +220,10 @@ static void out_of_memory(void)
     CHECK(exhaust(quit_with_42) == 42);
     CHECK(exhaust(returns) == 1);
     CHECK(exhaust(NULL) == 1);
+    /* A zero size allocates, as a zero count does, instead of dividing by it. */
+    void *p = cmdr_realloc(NULL, 4, 0);
+    CHECK(p != NULL);
+    free(p);
 }
 
 /* cmdr_push grows lists from {0}, from a whole allocation with capacity 0,
@@ -307,6 +311,32 @@ static void threads(void)
     CHECK(a.status == 0 && b.status == 0);
 }
 
+/* Set the interrupt flag, as a SIGINT handler would while a line runs. */
+static int stop(const cmdr *repl, void *user, size_t argc, const cmdr_value *argv,
+                cmdr_value *result, char **error)
+{
+    cmdr_interrupt(1);
+    *result = cmdr_text("", 0);
+    return 0;
+}
+
+/* The flag fails every later call, try does not catch it, and it stays set
+ * until the host clears it. */
+static void interrupts(void)
+{
+    const cmdr_command commands[] = {{.name = "stop", .run = stop}};
+    const cmdr table = {commands, 1, &cmdr_pure};
+    cmdr_session *session = cmdr_session_open(&table, 0, NULL);
+    expect_error(session, "stop | upper", 1, "interrupted");
+    CHECK(cmdr_interrupted());
+    expect_error(session, "text a", 1, "interrupted");
+    cmdr_interrupt(0);
+    expect_error(session, "try { () stop | upper } caught", 1, "interrupted");
+    cmdr_interrupt(0);
+    expect(session, "try { () text a | equals b } caught", "caught\n");
+    cmdr_session_close(session);
+}
+
 /* Return the block argument, so the test can call it through the API. */
 static int keep_block(const cmdr *repl, void *user, size_t argc, const cmdr_value *argv,
                       cmdr_value *result, char **error)
@@ -352,6 +382,7 @@ int main(void)
     out_of_memory();
     lists();
     threads();
+    interrupts();
     puts("test_api: ok");
     return 0;
 }

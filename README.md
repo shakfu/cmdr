@@ -24,7 +24,7 @@ The REPL edits lines with a vendored copy of linenoise, in [thirdparty/linenoise
 
 - Piped stdin runs one pipeline per line and continues after errors.
 
-- `load PATH [ARG ...]` runs a script in the current session, so its definitions remain. The script sees ARGs through `script-args`.
+- `load PATH [ARG ...]` runs a script in the current session, so its definitions remain. The script sees ARGs through `script-args`. A relative PATH resolves from the current directory, not the script's, as in a shell. To load a file next to the script, write `script-dir | path-join lib.cmdr | load`. `import` searches the script's directory first.
 
 - `import NAME [as ALIAS]` runs a module once per session and binds its definitions as `NAME.DEF`. `from NAME import DEF ...` binds the DEFs listed without the prefix. See [Modules](#modules).
 
@@ -36,13 +36,13 @@ The REPL edits lines with a vendored copy of linenoise, in [thirdparty/linenoise
 
 The REPL starts with a line such as `cmdr 0.1.0 (prelude: standard)`, or the prelude's path with `--user`, in bold cyan where the prompt has color.
 
-Errors go to stderr; the exit status is nonzero if any line failed. Lines starting with `#`, including a `#!/usr/bin/env cmdr` shebang, are comments. A line ending in an unescaped `|` continues on the next line; blank and comment lines inside a continuation are skipped. Quotes and blocks cannot span lines otherwise: write a newline as `\n`, and end a line inside a block with `|` to continue it.
+Errors go to stderr; the exit status is nonzero if any line failed. Ctrl-C while a line runs stops it, and cmdr exits by SIGINT, so a calling shell stops too. A running program gets SIGTERM, then SIGKILL a second later, so one that ignores SIGINT does not outlive cmdr. Lines starting with `#`, including a `#!/usr/bin/env cmdr` shebang, are comments. A line ending in an unescaped `|` continues on the next line; blank and comment lines inside a continuation are skipped. Quotes and blocks cannot span lines otherwise: write a newline as `\n`, and end a line inside a block with `|` to continue it.
 
 ## Composition
 
 `a | b x` evaluates `a`, then calls `b` with the returned value followed by `x`. The value stays one argument, even when it contains spaces, newlines, or pipes. A command returns text, a list, or no value; no value cannot feed another command. The REPL prints text as is and list items one per line.
 
-Whitespace separates arguments. Single and double quotes preserve spaces and pipes, including empty arguments (`""`). Backslash escapes the next character outside single quotes; inside double quotes, `\n` and `\t` are a newline and a tab. Syntax and command names are checked for the whole pipeline before any command runs. Effects from earlier stages remain if a later stage fails. There is no variable expansion, globbing, redirection, or implicit shell.
+Whitespace separates arguments. Single and double quotes preserve spaces and pipes, including empty arguments (`""`). Backslash escapes the next character outside single quotes; inside double quotes, `\n` and `\t` are a newline and a tab. Syntax and command names are checked for the whole pipeline before any command runs. `map`'s COMMAND is an argument, so it is looked up only when `map` runs; `each { COMMAND }` is checked first. Effects from earlier stages remain if a later stage fails. There is no variable expansion, globbing, redirection, or implicit shell.
 
 ## Blocks and definitions
 
@@ -115,7 +115,7 @@ These are the primitives, in [src/primitives.c](src/primitives.c). Extensions ad
 | `files [DIR]`, `path-basename PATH`, `path-dirname PATH` | Regular files in DIR, sorted; lexical path parts |
 | `run PROGRAM [ARG ...]`, `run-in TEXT PROGRAM [ARG ...]` | Run a program, returning stdout |
 | `run-with OPTIONS PROGRAM [ARG ...]` | Run a program with options, returning `STATUS STDOUT STDERR` |
-| `load PATH [ARG ...]` | Run a script in this session |
+| `load PATH [ARG ...]` | Run a script in this session; PATH is relative to the cwd |
 | `import NAME [as ALIAS]` | Run a module once; bind its definitions as `NAME.DEF` |
 | `from NAME import DEF [as ALIAS] ...` | Run a module once; bind each DEF unqualified, if the name is new |
 
@@ -149,7 +149,7 @@ cmdr> list | with { (o) list --model opus | with { (m) run-with $o printf '%s ' 
 --model opus x
 ```
 
-Text is bytes in the C locale. Files and program output containing NUL bytes are rejected.
+Text is bytes in the C locale. Files and program output containing NUL bytes are rejected. Numbers are decimal, such as `-1.5e3`; hex and surrounding spaces are rejected. Results print with the fewest digits that read back exactly: `div 1 3` gives `0.3333333333333333`.
 
 ## Growing a prelude
 
@@ -167,7 +167,7 @@ txt
 
 ```text
 def last { nonempty | tail 1 | join "" } "Return the last item"
-def path-ext { split . | last } "Return the text after the last dot"
+def path-ext { path-basename | check { drop 1 | contains . } "no extension" | split . | last } "Return the text after the basename's last dot; mismatch if it has none"
 def path-has-ext { keep { drop 1 | contains . } } "Keep names with a dot after the first byte"
 ```
 
@@ -243,7 +243,11 @@ A session adds `help` and `def`, and frees its definitions on `cmdr_session_clos
 
 The second argument of `cmdr_session_open` allows effects. With it, the session adds `load` and `import`, and `cmdr_session_prelude` also runs [src/prelude-effects.cmdr](src/prelude-effects.cmdr), which defines `cat`, `grep`, `sh`, and `sh-in`. For a console without file or process access, pass 0 and end the host's table in `&cmdr_pure`, which omits `read`, `write`, `append`, `files`, `run`, and `run-in`.
 
+cmdr parses and prints numbers with `.` only while `LC_NUMERIC` is `"C"`, the default. A host that calls `setlocale` must leave that category alone.
+
 Allocation failure exits the process with status 1. `cmdr_set_out_of_memory` installs a handler that runs first, to log or save host state.
+
+`cmdr_interrupt(1)`, from a SIGINT handler, makes every later command call fail with `interrupted`, which `try` does not catch, and stops a program that `run` is waiting for. The flag is process-wide; the host clears it with `cmdr_interrupt(0)`.
 
 ## Extensions
 

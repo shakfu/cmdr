@@ -37,7 +37,7 @@ def strip-prefix { (s x) starts-with $s $x | $x | length | with { (n) drop $s $n
 def strip-suffix { (s x) ends-with $s $x | length | with { (a) $x | length | with { (b) sub $a $b | with { (k) take $s $k } } } } "Remove SUFFIX from TEXT"
 
 # Paths
-def path-ext { split . | last } "Return the text after the last dot"
+def path-ext { path-basename | check { drop 1 | contains . } "no extension" | split . | last } "Return the text after the basename's last dot; mismatch if it has none"
 def path-has-ext { keep { drop 1 | contains . } } "Keep names with a dot after the first byte"
 def path-stem { path-basename | with { (b) or { () drop $b 1 | contains . | $b | split . | init | join . } $b } } "Return the basename without its extension"
 def path-join { (base p) or { () ends-with $base / | take 0 } / | with { (s) or { () empty $base } $s } | with { (s) list $base $s $p | concat } | with { (j) or { () starts-with $p / } $j } } "Join PATH to BASE with one /; an absolute PATH replaces BASE"

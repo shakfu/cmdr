@@ -66,6 +66,13 @@ void *cmdr_realloc(void *p, size_t count, size_t size);
 void cmdr_set_out_of_memory(void (*handler)(void *data, size_t size), void *data);
 char *cmdr_strndup(const char *text, size_t n);
 
+/* Set or clear the interrupt flag. While it is set, cmdr_call fails with
+ * "interrupted", try does not catch it, and run stops its program with
+ * SIGTERM, then SIGKILL a second later. It is process-wide, and safe to call
+ * from a signal handler. The host clears it. */
+void cmdr_interrupt(int on);
+int cmdr_interrupted(void);
+
 cmdr_value cmdr_text(const char *text, size_t n);
 /* Move item into list, doubling its capacity when full. */
 void cmdr_push(cmdr_value *list, cmdr_value item);
@@ -75,9 +82,11 @@ int cmdr_clone(const cmdr_value *value, cmdr_value *out, char **error);
 /* Write text as is and list items each followed by a newline. */
 void cmdr_render(const cmdr_value *value, FILE *out);
 
-/* Parse a finite number, or fail with "invalid finite number: TEXT". */
+/* Parse a finite decimal number, or fail with "invalid finite number: TEXT".
+ * Numbers use '.' only while LC_NUMERIC is "C", so hosts must not change it. */
 int cmdr_number(const char *text, double *value, char **error);
-/* A number as arithmetic results print, with 17 significant digits. */
+/* A number as arithmetic results print: the fewest digits, up to 17, that read
+ * back as the same double. */
 cmdr_value cmdr_number_value(double value);
 /* Parse nonnegative decimal integer text, or fail. */
 int cmdr_natural(const cmdr_value *value, size_t *n, char **error);

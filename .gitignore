@@ -71,3 +71,10 @@ agent-runs/
 
 # examples/sox-dsl output (SND_OUT default)
 snd-out/
+
+# agents
+.claude
+CLAUDE.md
+AGENTS.md
+GEMINI.md
+REVIEW.md

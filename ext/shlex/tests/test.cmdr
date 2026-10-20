@@ -12,3 +12,6 @@ text "a\nb c\n" | shlex-join | equals "a 'b c'"
 text "a\nb c" | shlex-join | equals "a 'b c'"
 text "a b" | shlex-join | equals "'a b'"
 list | shlex-join | equals ""
+# A later def of lines does not change shlex-join, which uses the primitive.
+def lines { (x) count $x }
+text "a b\nc" | shlex-join | equals "'a b' c"

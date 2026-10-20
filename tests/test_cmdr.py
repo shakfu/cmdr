@@ -38,6 +38,9 @@ class Commands(unittest.TestCase):
         cases = [
             ('text "  Hello World  " | trim | lower | replace world C', 'hello C\n'),
             ('add 2 3 | mul 4 | sub 1 | div 2', '9.5\n'),
+            # The fewest digits that read back as the same double.
+            ('div 1 3', '0.3333333333333333\n'), ('add 0.1 0.2', '0.30000000000000004\n'),
+            ('mul 1e300 10', '1e+301\n'), ('add +1 1e2', '101\n'),
             ('text "" | length', '0\n'),
             ('text "hello world" | take 5', 'hello\n'),
             ('text "hello world" | drop 6', 'world\n'),
@@ -207,12 +210,18 @@ class Commands(unittest.TestCase):
             ('take abc ""', 'nonnegative integer'),
             ('take abc 9999999999999999999999999', 'nonnegative integer'),
             ('list a b | upper', 'use map or join'),
+            ('text a | upper { lower }', "command 'upper' expects text, got a block"),
             ('list | map missing', 'unknown command'),
             ('list a b | map upper extra', 'map item 1'),
-            ('list a | map list | join ,', 'expected text'),
+            ('list a | map list | join ,', 'join: expected text, got a list'),
+            ('list a | with { (l) list $l | sort }', 'sort: expected text, got a list'),
             ('run false', 'status 1'),
             ('split x ""', 'nonempty'),
             ('div 1 0', 'division by zero'),
+            ('add 0x10 1', 'invalid finite number: 0x10'),
+            ('add -0X1 1', 'invalid finite number: -0X1'),
+            ('add " 1" 2', 'invalid finite number:  1'),
+            ('add inf 1', 'invalid finite number: inf'),
             ('text x |', 'expected a command'),
             ('text x | | upper', 'expected a command before'),
             ('text "a', 'unclosed quote'),
@@ -363,7 +372,7 @@ class Commands(unittest.TestCase):
             # check replaces a mismatch message, not an error.
             ("text b | check { equals a } 'b is not a'", 'cmdr: b is not a\n'),
             ("text a | check { add 1 } 'never shown'", 'invalid finite number: a'),
-            ("text a | check { equals a } { upper }", 'expected text'),
+            ("text a | check { equals a } { upper }", 'check: expected text, got a block'),
         ]
         for source, error in errors:
             with self.subTest(source=source):
@@ -416,6 +425,7 @@ class Commands(unittest.TestCase):
             ("def 'a b' { upper }", "def: invalid name 'a b'"),
             ("def 'a|b' { upper }", "def: invalid name 'a|b'"),
             ("def '$x' { upper }", "def: invalid name '$x'"),
+            ("def '{x' { upper }", "def: invalid name '{x'"),
             ('def def { upper }', 'def: cannot redefine def'),
             ('def x { bogus }', 'unknown command: bogus'),
             ("def x {}", 'def x: empty block'),
@@ -508,7 +518,9 @@ class Commands(unittest.TestCase):
             ('path-join a b | path-join c', 'a/b/c\n'),
             ('path-split a/b/c | join " "', 'a/b c\n'), ('path-split /c | join " "', '/ c\n'),
             ('path-split c | join " "', '. c\n'), ('path-split a/b/ | join " "', 'a b\n'),
-            ('list a.b.c d.e | map path-ext | join ,', 'c,e\n'),
+            ('list a.b.c d.e dir/x.tar.gz .a.b a. | map path-ext | join ,', 'c,e,gz,b,\n'),
+            # No extension mismatches, as path-has-ext filters, so or gives a default.
+            ('list Makefile .bashrc a.b/c | each { (p) or { () path-ext $p } - } | join ,', '-,-,-\n'),
             ('list a.txt Makefile .gitignore | path-has-ext | join ,', 'a.txt\n'),
             ('list a b | last', 'b\n'),
             ('text "a\nb\n" | last', 'b\n'),
@@ -557,6 +569,7 @@ class Commands(unittest.TestCase):
             ('list | init', 'init []: nonempty: empty list'),
             ('list | first', 'first []: nonempty: empty list'),
             ('list | last', 'last []: nonempty: empty list'),
+            ('path-ext Makefile', 'path-ext Makefile: no extension'),
             ('text "" | last', "last '': nonempty: empty text"),
             ('list 1 2 | any { gt 5 }', 'any [1, 2] { gt 5 }: nonempty: empty list'),
             ('list 1 2 | all { gt 1 }', 'all [1, 2] { gt 1 }: empty: not: [1] satisfies { nonempty }'),
@@ -788,6 +801,8 @@ class Commands(unittest.TestCase):
     def test_limits(self):
         # Values and composed commands nest boundedly instead of overflowing.
         self.run_line('list a' + ' | list' * 1100, error='value is nested too deeply')
+        # A block at the failing depth: its code was retained and leaked (ASan).
+        self.run_line('list { upper }' + ' | list' * 1100, error='value is nested too deeply')
         defs = "def d0 { upper }\n" + "".join(f"def d{i} {{ d{i - 1} }}\n" for i in range(1, 130))
         result = self.run_input(defs + "d129 x\n")
         self.assertEqual(result.returncode, 1)
@@ -818,6 +833,9 @@ class Commands(unittest.TestCase):
             "text d\n")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout, 'A b\nc|\nd\n')
+        # An escaped backslash before '|' leaves the '|' unescaped, so it continues.
+        result = self.run_input("text e\\\\|\n  upper\ntext f\\\\\\|\n")
+        self.assertEqual((result.returncode, result.stdout), (0, 'E\\\nf\\|\n'), result.stderr)
         result = self.run_input("def report { upper |\n  # note\n  lower }\n"
                                 "report X\nhelp | filter report\n")
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -840,6 +858,21 @@ class Commands(unittest.TestCase):
         self.run_line('list abc def | map run-in tr a-z A-Z | join ,', 'ABC,DEF\n')
         self.run_line("try { () run false } fallback", 'fallback\n')
         self.run_line("run printf '%s' '$HOME;*.c'", '$HOME;*.c\n')
+
+    def test_programs_do_not_inherit_scripts(self):
+        # A script, a script it loads, and a module are open while they run.
+        check = ("run sh -c 'for fd in 3 4 5 6 7 8 9; do (: <&$fd) 2>/dev/null && echo $fd; done; true'"
+                 " | equals ''\n")
+        with tempfile.TemporaryDirectory() as directory:
+            here = Path(directory)
+            (here / 'inner.cmdr').write_text(check)
+            (here / 'mod.cmdr').write_text(check)
+            main = here / 'main.cmdr'
+            main.write_text(check + f"load {quote(here / 'inner.cmdr')}\nimport mod\n")
+            result = subprocess.run([str(BINARY), str(main)], capture_output=True, text=True,
+                                    timeout=20)
+            self.assertEqual((result.returncode, result.stderr), (0, ''))
+            self.assertEqual(result.stdout, '\n\n')
 
     def test_push(self):
         self.run_line('list a b | push c "d e" | join ,', 'a,b,c,d e\n')
@@ -1096,7 +1129,7 @@ class Commands(unittest.TestCase):
         except ImportError:
             yaml = None
         if yaml:
-            sublime = yaml.safe_load((editors / 'sublime' / 'cmdr.sublime-syntax').read_text())
+            sublime = yaml.safe_load((editors / 'sublime' / 'Cmdr.sublime-syntax').read_text())
             self.assertEqual(sublime['scope'], 'source.cmdr')
         if not shutil.which('vim'):
             self.skipTest('vim not found')
@@ -1147,11 +1180,12 @@ class Commands(unittest.TestCase):
         self.assertEqual(len({row.start(2) for row in rows}), 1, result.stdout)
         self.assertEqual(rows[0].groups(), ('help [NAME]', "Show commands, or NAME's full usage and documentation"))
         # help NAME gives one command; an unknown name is an error.
-        self.run_line('help map', expected='map LIST_OR_LINES COMMAND [ARG ...]\nApply a command to each item\n')
+        self.run_line('help map', expected='map LIST_OR_LINES COMMAND [ARG ...]\n'
+                      'Apply a command to each item; COMMAND is looked up when map runs\n')
         self.run_line('help nope', error='help: unknown command: nope')
         self.run_line('help a b', error='usage: help [NAME]')
         self.assertIn(('map LIST_OR_LINES COMMAND [ARG ...]',
-                       'Apply a command to each item'), [row.groups() for row in rows])
+                       'Apply a command to each item; COMMAND is looked up when map runs'), [row.groups() for row in rows])
         names = [line.split()[0] for line in lines]
         self.assertEqual(len(names), len(set(names)))
         self.assertTrue({'map', 'files', 'list', 'take', 'append', 'write', 'try', 'def'} <= set(names))
@@ -1180,7 +1214,8 @@ class Commands(unittest.TestCase):
 
     def pty_session(self, chunks, home, term='xterm', args=()):
         """Type each chunk into an interactive cmdr once it waits for input, as
-        a person would; return its exit status and output."""
+        a person would; return its exit status and output. A chunk (MARKER,
+        KEYS) is typed once MARKER is output, while a command runs."""
         import fcntl
         import pty
         import select
@@ -1197,7 +1232,7 @@ class Commands(unittest.TestCase):
         # linenoise enables bracketed paste once raw mode is on, which drops
         # earlier input; plain reads accept typing ahead.
         ready = b"\x1b[?2004h" if editor and term != 'dumb' else b"> "
-        out, sent, deadline = b"", 0, time.time() + 10
+        out, sent, typed, deadline = b"", 0, 0, time.time() + 10
         while True:
             done, status = os.waitpid(pid, os.WNOHANG)
             if done:
@@ -1206,9 +1241,12 @@ class Commands(unittest.TestCase):
                 os.kill(pid, 9)
                 os.waitpid(pid, 0)
                 self.fail(f"REPL did not exit; output: {out!r}")
-            if sent < len(chunks) and out.count(ready) > sent:
-                os.write(fd, chunks[sent])
-                sent += 1
+            if sent < len(chunks):
+                marker, keys = chunks[sent] if isinstance(chunks[sent], tuple) else (None, chunks[sent])
+                if marker in out if marker else out.count(ready) > typed:
+                    os.write(fd, keys)
+                    sent += 1
+                    typed += not marker
             if select.select([fd], [], [], 0.02)[0]:
                 try:
                     out += os.read(fd, 65536)
@@ -1216,6 +1254,63 @@ class Commands(unittest.TestCase):
                     pass
         os.close(fd)
         return os.waitstatus_to_exitcode(status), out
+
+    def assert_gone(self, pid):
+        """Fail, and stop it, if process pid is still running."""
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return
+        os.kill(pid, 9)
+        self.fail(f"process {pid} outlived cmdr")
+
+    # A program that ignores SIGINT, so only cmdr can stop it. It writes its
+    # pid, then a marker split by quotes, so an echoed command line lacks it.
+    STUBBORN = ("run sh -c 'echo $$ > {pid}; echo sta\"\"rted >&2; "
+                "trap \"\" INT; exec sleep 30'")
+
+    def test_interrupt_script(self):
+        # Ctrl-C stops the program, even one ignoring SIGINT, and cmdr exits
+        # by SIGINT, so a calling shell stops too.
+        import signal
+        with tempfile.TemporaryDirectory() as directory:
+            pidfile = Path(directory) / 'pid'
+            script = Path(directory) / 'script.cmdr'
+            script.write_text(self.STUBBORN.format(pid=pidfile) + "\ntext unreachable\n")
+            proc = subprocess.Popen([str(BINARY), str(script)], stdout=subprocess.PIPE,
+                                    stderr=subprocess.PIPE, text=True, start_new_session=True)
+            deadline = time.time() + 10
+            while not pidfile.exists() or not pidfile.read_text().strip():
+                self.assertLess(time.time(), deadline, "program did not start")
+                time.sleep(0.02)
+            os.killpg(proc.pid, signal.SIGINT)
+            out, err = proc.communicate(timeout=10)
+            self.assertEqual(proc.returncode, -signal.SIGINT, err)
+            self.assertIn(f'{script}:1: run sh: interrupted', err)
+            self.assertNotIn('unreachable', out)
+            self.assert_gone(int(pidfile.read_text()))
+
+    def test_interrupt_repl(self):
+        # Ctrl-C while a line runs exits the REPL by SIGINT, stopping its
+        # program, and keeps the history. Inside try, a loop stops the same way.
+        with tempfile.TemporaryDirectory() as home:
+            pidfile = Path(home) / 'pid'
+            run = self.STUBBORN.format(pid=pidfile)
+            code, out = self.pty_session(
+                [b"text before\r", run.encode() + b"\r", (b"started", b"\x03"),
+                 b"text unreachable\r"], home)
+            self.assertEqual(code, -2, out)
+            self.assertIn(b"run sh: interrupted", out)
+            self.assertNotIn(b"\nunreachable", out)
+            self.assert_gone(int(pidfile.read_text()))
+            history = (Path(home) / '.cmdr_history').read_text().splitlines()
+            self.assertEqual(history, ['text before', run])
+            loop = (b"run sh -c 'echo loo\"\"ping >&2' | length | with { (n) try { () "
+                    b"num-seq 1 100000 | each { (i) num-seq $n 1000 | push $i | count } | count } caught }\r")
+            code, out = self.pty_session([loop, (b"looping", b"\x03")], home)
+            self.assertEqual(code, -2, out)
+            self.assertIn(b"interrupted", out)
+            self.assertNotIn(b"\ncaught", out)
 
     def test_quit_and_exit(self):
         # Terminals send \r for Enter; this also checks that Enter does not

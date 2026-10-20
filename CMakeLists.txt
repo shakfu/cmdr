@@ -7,6 +7,9 @@ set(CMAKE_C_EXTENSIONS OFF)
 
 # Commands share one callback signature, so most ignore some parameters.
 add_compile_options(-Wall -Wextra -Wpedantic -Wno-unused-parameter)
+# An undeclared POSIX function, such as realpath without _XOPEN_SOURCE, would
+# return int and truncate a pointer. -O2 can hide this through _FORTIFY_SOURCE.
+add_compile_options(-Werror=implicit-function-declaration)
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 include(CmdrExtensions)

@@ -106,7 +106,8 @@ COMMAND(join_command)
 {
     if (argc != 1 || argv[0].kind == CMDR_BLOCK) return cmdr_error(error, "usage: shlex-join LIST_OR_LINES");
     cmdr_value lines = {0};
-    if (argv[0].kind == CMDR_TEXT && cmdr_call(repl, "lines", 1, argv, &lines, error)) return 1;
+    /* The primitive itself: repl is the caller's scope, where lines may be redefined. */
+    if (argv[0].kind == CMDR_TEXT && cmdr_call(&cmdr_pure, "lines", 1, argv, &lines, error)) return 1;
     const cmdr_value *list = argv[0].kind == CMDR_TEXT ? &lines : &argv[0];
     buffer b = {0};
     int status = 0;

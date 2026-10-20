@@ -382,7 +382,7 @@ syn match cmdrDefault /=[^ \t)]*/ contained
 hi def link cmdrDefault Constant
 ```
 
-Sublime, `editors/sublime/cmdr.sublime-syntax`, first in `params`:
+Sublime, `editors/sublime/Cmdr.sublime-syntax`, first in `params`:
 
 ```yaml
     - match: '(=)([^\s)]*)'

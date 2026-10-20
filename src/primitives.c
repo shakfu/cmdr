@@ -50,14 +50,18 @@ static int finish(buffer *b, cmdr_value *result)
     return 0;
 }
 
-static int require_text(const cmdr_value *v, char **error)
+/* NAME is the command reporting the error, or NULL. */
+static int require_text(const char *name, const cmdr_value *v, char **error)
 {
-    return v->kind == CMDR_TEXT ? 0 : cmdr_error(error, "expected text");
+    if (v->kind == CMDR_TEXT) return 0;
+    const char *kind = v->kind == CMDR_LIST ? "a list" : "a block";
+    return name ? cmdr_error(error, "%s: expected text, got %s", name, kind)
+                : cmdr_error(error, "expected text, got %s", kind);
 }
 
 int cmdr_natural(const cmdr_value *v, size_t *value, char **error)
 {
-    if (require_text(v, error)) return 1;
+    if (require_text(NULL, v, error)) return 1;
     const char *p = v->text;
     size_t n = 0;
     for (; *p; ++p) {
@@ -70,10 +74,10 @@ int cmdr_natural(const cmdr_value *v, size_t *value, char **error)
 }
 
 /* Lists pass through; text splits into lines, a final newline ending the last. */
-static int as_list(const cmdr_value *v, cmdr_value *out, char **error)
+static int as_list(const char *name, const cmdr_value *v, cmdr_value *out, char **error)
 {
     if (v->kind == CMDR_LIST) return cmdr_clone(v, out, error);
-    if (require_text(v, error)) return 1;
+    if (require_text(name, v, error)) return 1;
     *out = (cmdr_value){.kind = CMDR_LIST};
     for (const char *p = v->text; *p;) {
         const char *end = strchr(p, '\n');
@@ -148,17 +152,25 @@ COMMAND(replace_command)
 
 cmdr_value cmdr_number_value(double value)
 {
+    /* The fewest digits that read back as VALUE: 0.1 + 0.2 needs 17, 1.0 / 3 needs 16. */
     char text[64];
-    snprintf(text, sizeof(text), "%.17g", value);
+    for (int digits = 15; digits <= 17; ++digits) {
+        snprintf(text, sizeof(text), "%.*g", digits, value);
+        if (strtod(text, NULL) == value) break;
+    }
     return cmdr_text(text, strlen(text));
 }
 
 int cmdr_number(const char *text, double *value, char **error)
 {
+    /* Decimal only: strtod also skips leading space and reads hex. */
+    const char *digits = text + (*text == '+' || *text == '-');
+    int decimal = !isspace((unsigned char)*text)
+        && !(digits[0] == '0' && (digits[1] == 'x' || digits[1] == 'X'));
     char *end;
     errno = 0;
     *value = strtod(text, &end);
-    if (end == text || *end || errno == ERANGE || !isfinite(*value))
+    if (!decimal || end == text || *end || errno == ERANGE || !isfinite(*value))
         return cmdr_error(error, "invalid finite number: %s", text);
     return 0;
 }
@@ -267,29 +279,35 @@ static double now(void)
     return (double)t.tv_sec + (double)t.tv_nsec / 1e9;
 }
 
-/* Poll until child exits or limit seconds pass; return the pid or 0 if it is
- * still running. */
-static pid_t wait_until(pid_t child, int *wait_status, double limit)
+/* Poll until child exits, limit seconds pass, or, if interruptible, an
+ * interrupt arrives; return the pid or 0 if it is still running. */
+static pid_t wait_until(pid_t child, int *wait_status, double limit, int interruptible)
 {
     struct timespec tick = {0, 10 * 1000 * 1000};
     double deadline = now() + limit;
     for (;;) {
         pid_t waited = waitpid(child, wait_status, WNOHANG);
         if (waited > 0 || (waited < 0 && errno != EINTR)) return waited;
-        if (now() >= deadline) return 0;
+        if (now() >= deadline || (interruptible && cmdr_interrupted())) return 0;
         nanosleep(&tick, NULL);
     }
 }
 
-/* Wait for child; past the timeout, send SIGTERM, then SIGKILL after a second. */
+/* Wait for child. Past the timeout, or on an interrupt, send SIGTERM, then
+ * SIGKILL after a second, and reap it: a child that ignores SIGINT must not
+ * outlive cmdr. */
 static pid_t wait_child(pid_t child, double timeout, int *wait_status, int *timed_out)
 {
-    pid_t waited = 0;
-    if (timeout > 0 && !(waited = wait_until(child, wait_status, timeout))) {
-        *timed_out = 1;
-        kill(child, SIGTERM);
-        if (!(waited = wait_until(child, wait_status, 1))) kill(child, SIGKILL);
-    }
+    pid_t waited;
+    if (timeout > 0)
+        waited = wait_until(child, wait_status, timeout, 1);
+    else
+        do waited = waitpid(child, wait_status, 0);
+        while (waited < 0 && errno == EINTR && !cmdr_interrupted());
+    if (waited > 0 || (waited < 0 && errno != EINTR)) return waited;
+    *timed_out = !cmdr_interrupted();
+    kill(child, SIGTERM);
+    if (!(waited = wait_until(child, wait_status, 1, 0))) kill(child, SIGKILL);
     if (!waited)
         do waited = waitpid(child, wait_status, 0); while (waited < 0 && errno == EINTR);
     return waited;
@@ -348,6 +366,10 @@ static int execute(const process *p, char **args, cmdr_value *result, char **err
         cmdr_error(error, "%s %s: wait: %s", p->name, program, strerror(errno));
         goto done;
     }
+    if (cmdr_interrupted()) { /* Not a status: run-with would return it as data. */
+        cmdr_error(error, "%s %s: interrupted", p->name, program);
+        goto done;
+    }
     if (fseek(out, 0, SEEK_SET) || (err && fseek(err, 0, SEEK_SET))) {
         cmdr_error(error, "%s: reading output: %s", p->name, strerror(errno));
         goto done;
@@ -403,16 +425,17 @@ COMMAND(run_in_command)
 }
 
 /* Append value's text to args, flattening lists; 1 for a block. */
-static int add_args(const cmdr_value *value, char ***args, size_t *count, char **error)
+static int add_args(const char *name, const cmdr_value *value, char ***args, size_t *count,
+                    char **error)
 {
     if (value->kind != CMDR_LIST) {
-        if (require_text(value, error)) return 1;
+        if (require_text(name, value, error)) return 1;
         *args = cmdr_realloc(*args, *count + 2, sizeof(**args));
         (*args)[(*count)++] = value->text;
         return 0;
     }
     for (size_t i = 0; i < value->count; ++i)
-        if (add_args(&value->items[i], args, count, error)) return 1;
+        if (add_args(name, &value->items[i], args, count, error)) return 1;
     return 0;
 }
 
@@ -429,7 +452,7 @@ COMMAND(run_with_command)
     static const char *names[] = {"dir", "stdin", "timeout"};
     for (size_t i = 0; i < options->count; i += 2) {
         const cmdr_value *name = &options->items[i], *value = &options->items[i + 1];
-        if (require_text(name, error) || require_text(value, error)) return 1;
+        if (require_text("run-with", name, error) || require_text("run-with", value, error)) return 1;
         size_t k = 0;
         while (k < 3 && strcmp(name->text, names[k])) ++k;
         if (k == 3) return cmdr_error(error, "run-with: unknown option %s", name->text);
@@ -442,7 +465,7 @@ COMMAND(run_with_command)
     char **args = NULL;
     size_t count = 0;
     for (size_t i = 1; i < argc; ++i)
-        if (add_args(&argv[i], &args, &count, error)) { free(args); return 1; }
+        if (add_args(p.name, &argv[i], &args, &count, error)) { free(args); return 1; }
     if (!count) return cmdr_error(error, usage);
     args[count] = NULL;
     int status = execute(&p, args, result, error);
@@ -617,7 +640,7 @@ COMMAND(list_command)
 COMMAND(push_command)
 {
     if (!argc) return cmdr_error(error, "usage: push LIST_OR_LINES [VALUE ...]");
-    if (as_list(&argv[0], result, error)) return 1;
+    if (as_list("push", &argv[0], result, error)) return 1;
     for (size_t i = 1; i < argc; ++i) {
         cmdr_value item;
         if (cmdr_clone(&argv[i], &item, error)) { cmdr_free(result); return 1; }
@@ -629,18 +652,18 @@ COMMAND(push_command)
 COMMAND(lines_command)
 {
     if (argc != 1) return cmdr_error(error, "usage: lines LIST_OR_LINES");
-    return as_list(&argv[0], result, error);
+    return as_list("lines", &argv[0], result, error);
 }
 
 COMMAND(join_command)
 {
     if (argc != 2) return cmdr_error(error, "usage: join LIST_OR_LINES SEPARATOR");
     cmdr_value list;
-    if (require_text(&argv[1], error) || as_list(&argv[0], &list, error)) return 1;
+    if (require_text("join", &argv[1], error) || as_list("join", &argv[0], &list, error)) return 1;
     buffer b = {0};
     int status = 0;
     for (size_t i = 0; i < list.count && !status; ++i) {
-        if ((status = require_text(&list.items[i], error))) break;
+        if ((status = require_text("join", &list.items[i], error))) break;
         if (i) put(&b, argv[1].text, strlen(argv[1].text));
         put(&b, list.items[i].text, strlen(list.items[i].text));
     }
@@ -674,9 +697,9 @@ static int collection(enum operation op, size_t argc, const cmdr_value *argv,
                           op == FILTER ? " SUBSTRING" : extra ? " N" : "");
     size_t limit = 0;
     if ((op == HEAD || op == TAIL) && cmdr_natural(&argv[1], &limit, error)) return 1;
-    if (op == FILTER && require_text(&argv[1], error)) return 1;
+    if (op == FILTER && require_text(names[op], &argv[1], error)) return 1;
     cmdr_value list;
-    if (as_list(&argv[0], &list, error)) return 1;
+    if (as_list(names[op], &argv[0], &list, error)) return 1;
     if (op == COUNT) {
         size_result(list.count, result);
         cmdr_free(&list);
@@ -684,7 +707,7 @@ static int collection(enum operation op, size_t argc, const cmdr_value *argv,
     }
     double unused;
     for (size_t i = 0; op != HEAD && op != TAIL && i < list.count; ++i)
-        if (require_text(&list.items[i], error)
+        if (require_text(names[op], &list.items[i], error)
             || (op == SORT_N && cmdr_number(list.items[i].text, &unused, error))) {
             cmdr_free(&list);
             return 1;
@@ -716,11 +739,11 @@ COMMAND(count_command) { return collection(COUNT, argc, argv, result, error); }
 COMMAND(map_command)
 {
     if (argc < 2) return cmdr_error(error, "usage: map LIST_OR_LINES COMMAND [ARG ...]");
-    if (require_text(&argv[1], error)) return 1;
+    if (require_text("map", &argv[1], error)) return 1;
     const char *name = argv[1].text;
     if (!cmdr_find(repl, name)) return cmdr_error(error, "unknown command: %s", name);
     cmdr_value list;
-    if (as_list(&argv[0], &list, error)) return 1;
+    if (as_list("map", &argv[0], &list, error)) return 1;
     cmdr_value *args = cmdr_realloc(NULL, argc - 1, sizeof(*args));
     for (size_t i = 2; i < argc; ++i) args[i - 1] = argv[i];
     *result = (cmdr_value){.kind = CMDR_LIST};
@@ -772,7 +795,7 @@ static int per_item(int keep, size_t argc, const cmdr_value *argv,
     const char *name = keep ? "keep" : "each";
     if (argc < 2) return cmdr_error(error, "usage: %s LIST_OR_LINES BLOCK [ARG ...]", name);
     cmdr_value list;
-    if (check_body(name, &argv[1], argc - 1, error) || as_list(&argv[0], &list, error))
+    if (check_body(name, &argv[1], argc - 1, error) || as_list(name, &argv[0], &list, error))
         return 1;
     *result = (cmdr_value){.kind = CMDR_LIST};
     int status = 0;
@@ -833,7 +856,7 @@ COMMAND(fold_command)
 {
     if (argc < 3) return cmdr_error(error, "usage: fold LIST_OR_LINES INIT BLOCK [ARG ...]");
     cmdr_value list;
-    if (check_body("fold", &argv[2], argc - 1, error) || as_list(&argv[0], &list, error))
+    if (check_body("fold", &argv[2], argc - 1, error) || as_list("fold", &argv[0], &list, error))
         return 1;
     if (cmdr_clone(&argv[1], result, error)) { cmdr_free(&list); return 1; }
     /* The block takes the accumulator, the item, then argv[3..]. */
@@ -867,6 +890,11 @@ COMMAND(try_command)
     if (check_body("try", body, argc - 2, error)) return 1;
     char *detail;
     int failed = cmdr_run(body, argc - 2, argv, result, &detail);
+    /* An interrupt stops the line; a fallback would let it continue. */
+    if (failed && cmdr_interrupted()) {
+        *error = detail;
+        return 1;
+    }
     free(detail);
     return failed ? cmdr_clone(&argv[argc - 1], result, error) : 0;
 }
@@ -889,7 +917,7 @@ COMMAND(check_command)
 {
     if (argc != 2 && argc != 3) return cmdr_error(error, "usage: check [INPUT] BLOCK MESSAGE");
     const cmdr_value *body = &argv[argc - 2];
-    if (check_body("check", body, argc - 2, error) || require_text(&argv[argc - 1], error))
+    if (check_body("check", body, argc - 2, error) || require_text("check", &argv[argc - 1], error))
         return 1;
     int failed = cmdr_run(body, argc - 2, argv, result, error);
     if (failed != CMDR_MISMATCH) return failed;
@@ -901,7 +929,7 @@ static int save(const char *mode, const char *name, size_t argc, const cmdr_valu
                 cmdr_value *result, char **error)
 {
     if (argc != 2) return cmdr_error(error, "usage: %s VALUE PATH", name);
-    if (require_text(&argv[1], error) || cmdr_clone(&argv[0], result, error)) return 1;
+    if (require_text(name, &argv[1], error) || cmdr_clone(&argv[0], result, error)) return 1;
     FILE *file = fopen(argv[1].text, mode);
     if (!file) return cmdr_error(error, "%s %s: %s", name, argv[1].text, strerror(errno));
     cmdr_render(&argv[0], file);
@@ -947,7 +975,7 @@ static const cmdr_command pure[] = {
     VALUE("tail", "tail LIST_OR_LINES N", "Keep the last N items", tail_command),
     VALUE("filter", "filter LIST_OR_LINES TEXT", "Keep text items containing TEXT", filter_command),
     VALUE("count", "count LIST_OR_LINES", "Count items", count_command),
-    VALUE("map", "map LIST_OR_LINES COMMAND [ARG ...]", "Apply a command to each item", map_command),
+    VALUE("map", "map LIST_OR_LINES COMMAND [ARG ...]", "Apply a command to each item; COMMAND is looked up when map runs", map_command),
     VALUE("each", "each LIST_OR_LINES BLOCK [ARG ...]", "Call a block per item", each_command),
     VALUE("keep", "keep LIST_OR_LINES BLOCK [ARG ...]", "Keep items whose block succeeds", keep_command),
     VALUE("not", "not VALUE BLOCK [ARG ...]", "Return VALUE if the block mismatches", not_command),

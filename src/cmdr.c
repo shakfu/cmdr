@@ -2,6 +2,7 @@
 
 #include <ctype.h>
 #include <stdarg.h>
+#include <stdatomic.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -15,6 +16,20 @@ enum { MAX_CALL_DEPTH = 128, MAX_VALUE_DEPTH = 1024 };
 static void (*out_of_memory)(void *data, size_t size);
 static void *out_of_memory_data;
 
+/* Atomic, not volatile sig_atomic_t: a signal handler sets it, and every
+ * thread's cmdr_call reads it. */
+static atomic_int interrupted;
+
+void cmdr_interrupt(int on)
+{
+    interrupted = on != 0;
+}
+
+int cmdr_interrupted(void)
+{
+    return interrupted;
+}
+
 void cmdr_set_out_of_memory(void (*handler)(void *data, size_t size), void *data)
 {
     out_of_memory = handler;
@@ -23,7 +38,9 @@ void cmdr_set_out_of_memory(void (*handler)(void *data, size_t size), void *data
 
 void *cmdr_realloc(void *p, size_t count, size_t size)
 {
+    /* Never a zero-byte request, whose realloc result may be NULL. */
     if (!count) count = 1;
+    if (!size) size = 1;
     int fits = count <= SIZE_MAX / size;
     if (fits && (p = realloc(p, count * size))) return p;
     if (out_of_memory) out_of_memory(out_of_memory_data, fits ? count * size : SIZE_MAX);
@@ -69,8 +86,12 @@ void cmdr_free(cmdr_value *value)
 
 static int clone(const cmdr_value *value, cmdr_value *out, unsigned depth, char **error)
 {
+    /* Check before retaining code, so a failure leaves nothing to release. */
+    if (depth > MAX_VALUE_DEPTH) {
+        *out = (cmdr_value){0};
+        return cmdr_error(error, "value is nested too deeply");
+    }
     *out = (cmdr_value){.kind = value->kind, .code = value->code ? retain(value->code) : NULL};
-    if (depth > MAX_VALUE_DEPTH) return cmdr_error(error, "value is nested too deeply");
     if (value->text) out->text = cmdr_strndup(value->text, strlen(value->text));
     for (size_t i = 0; i < value->count; ++i) {
         cmdr_value item;
@@ -645,11 +666,14 @@ int cmdr_call(const cmdr *repl, const char *name, size_t argc,
     static _Thread_local unsigned depth;
     *result = (cmdr_value){0};
     *error = NULL;
+    if (interrupted) return cmdr_error(error, "interrupted");
     const cmdr_command *command = cmdr_find(repl, name);
     if (!command) return cmdr_error(error, "unknown command: %s", name);
     for (size_t i = 0; command->text && i < argc; ++i)
-        if (argv[i].kind != CMDR_TEXT)
+        if (argv[i].kind == CMDR_LIST)
             return cmdr_error(error, "command '%s' expects text; use map or join for lists", name);
+        else if (argv[i].kind != CMDR_TEXT)
+            return cmdr_error(error, "command '%s' expects text, got a block", name);
     if (depth >= MAX_CALL_DEPTH)
         return cmdr_error(error, "command '%s' is nested too deeply "
                           "(possible cycle in composed commands)", name);
