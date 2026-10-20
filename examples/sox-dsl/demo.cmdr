@@ -38,9 +38,9 @@ stereo | snd.in | snd.telephone | write-to telephone.wav | report
 chord | snd.in | snd.tape-stop | write-to tape-stop.wav | snd.info-field seconds
 
 # 5. Split: at times, at silences, and by channel.
-at cut.wav | with { (o) a440 | snd.in | snd.split-at "0.5 1" $o } | report
+a440 | snd.in | snd.split-at "0.5 1" $(at cut.wav) | report
 at note.wav | with { (o) e330 | snd.in | snd.trim 0 0.4 | snd.pad 0 0.6 | snd.repeat 2 | snd.split-silence -40 0.3 $o } | report
-at voice.wav | with { (o) stereo | snd.in | snd.split-channels $o } | report
+stereo | snd.in | snd.split-channels $(at voice.wav) | report
 
 # 6. sox's stats for any chain, with no file written.
 chord | snd.in | snd.stats | lines | head 4

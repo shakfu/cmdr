@@ -51,7 +51,15 @@ cmdr> text notes.txt has $(read notes.txt | lines | count) lines and $(read note
 notes.txt has 3 lines and 14 bytes
 ```
 
-Without it, each computed argument needs a `with` to name it first, one level per value. Use `with` or `as` when a value is needed twice, since each `$(...)` runs again. Keep the main flow of data as stages, and keep effects out of arguments. Unquoted parentheses inside it balance, so `$(text (a))` keeps its parentheses. A sub-pipeline cannot be a command name. See [docs/dev/missing-syntax.md](docs/dev/missing-syntax.md).
+Without it, each computed argument needs a `with` to name it first, one level per value. Use `with` or `as` when a value is needed twice, since each `$(...)` runs again. Here `as` reads the file once:
+
+```text
+cmdr> read notes.txt | as notes
+cmdr> text notes.txt has $(lines $notes | count) lines and $(length $notes) bytes
+notes.txt has 3 lines and 14 bytes
+```
+
+Keep the main flow of data as stages, and keep effects out of arguments. Unquoted parentheses inside it balance, so `$(text (a))` keeps its parentheses. A sub-pipeline cannot be a command name. See [docs/dev/missing-syntax.md](docs/dev/missing-syntax.md).
 
 ## Blocks and definitions
 
@@ -322,6 +330,8 @@ An extension adds C commands to the `cmdr` executable without editing `src/main.
 - `tests/`: at least one `*.cmdr` or `*.c` file; configure fails without one. `make test` runs each `.cmdr` file with `cmdr`, in `tests/`, and fails at its first failing line. Each `.c` file is a program linked with the extension's sources and `libcmdr.a`, for checks a script cannot make, such as error messages. Configuring with `-DCMDR_BUILD_TESTS=OFF` skips both.
 
 `scripts/mk_ext.py NAME` creates `ext/NAME/` with these files and a command `NAME.echo TEXT`, which returns TEXT. The skeleton builds and passes its tests, so edit from there. `--c-test` also creates `tests/test_NAME.c`. It refuses an existing directory. `make test` builds a fresh skeleton, so a template change that breaks it fails there.
+
+`scripts/flatten_with.py FILE ...` rewrites `A | with { (v) BODY }` as BODY with A in v's place, where that keeps the meaning: as a pipe when `$v` starts BODY, else as `$(A)`. It prints the changes; `--write` applies them, and `--skip FILE:LINE` keeps a line. A guard such as `check` moved into an argument still runs but reads as a value, so review the output. Its docstring lists the rules.
 
 [ext/env](ext/env/README.md) is an example:
 

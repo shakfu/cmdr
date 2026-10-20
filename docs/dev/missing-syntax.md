@@ -136,6 +136,18 @@ The repository's `.cmdr` files hold 430 `with { (x) ... }` blocks. In 372 of the
 
 `$(` is an invalid reference today, so no script changes meaning. Plain `(...)` was rejected: `text (a)` prints `(a)` today, and would change. Shell has the same form, `$(...)`.
 
+### Relation to blocks and with
+
+- A block is a lambda: `{ (x) upper $x }` is a value that runs later, when `each`, `if`, or `with` calls it, as often as they call it.
+- `$(PIPELINE)` runs once, where it is written, and takes no arguments. It is an immediately applied lambda with no parameters, Python's `(lambda: sum(xs))()`. It sees the enclosing names, as a closure does.
+- `A | with { (v) BODY }` is a lambda applied to A: `(lambda v: BODY)(A)`, a `let`. Replacing it with BODY, with `$(A)` in place of `$v`, inlines a let-bound value.
+
+Inlining keeps the meaning only if A is computed once, at the same point. So `scripts/flatten_with.py` skips a `with` when:
+
+- `$v` occurs more than once: each `$(A)` runs A again.
+- `$v` occurs inside a nested block: the block may run many times, and A with it.
+- A has effects or random draws, or takes the pipeline's input: moving it changes their order, or cuts it off from the input.
+
 ### Use it
 
 Each before is a line from this repository; the after is equivalent.

@@ -768,6 +768,42 @@ class Commands(unittest.TestCase):
             result = run('--user', '-c', 'import probe\nprobe.twice', env={**os.environ, 'HOME': home})
             self.assertEqual((result.returncode, result.stdout), (0, 'probed probed\n'), result.stderr)
 
+    def test_flatten_with(self):
+        script = ROOT / 'scripts' / 'flatten_with.py'
+        cases = [
+            # $(A) in v's place, at any depth of with.
+            ('def mean { (xs) sum $xs | with { (s) count $xs | with { (n) div $s $n } } }',
+             'def mean { (xs) sum $xs | div $(count $xs) }'),
+            # v first in BODY: A stays the head, as a pipe.
+            ('text a | with { (t) upper $t }', 'text a | upper'),
+            ('text a | with { (t) $t | upper }', 'text a | upper'),
+            # $x | f is written f $x inside $(...).
+            ('def f { (x y) $x | length | with { (n) take $y $n } }', 'def f { (x y) take $y $(length $x) }'),
+            # Unchanged: v twice; v in a nested block; A has an effect; A takes
+            # the block's input; more than one parameter.
+            ('text a | with { (t) text $t $t }', None),
+            ('text a | with { (t) list x | each { (y) text $y $t } }', None),
+            ('text a | write f | with { (p) text x $p }', None),
+            ('list a | each { trim | with { (t) text x $t } }', None),
+            ('text a | with { (t u) text $t $u } b', None),
+        ]
+        with tempfile.TemporaryDirectory() as root:
+            path = Path(root) / 'a.cmdr'
+            path.write_text('\n'.join(source for source, _ in cases) + '\n')
+            # A dry run prints the changes and writes nothing.
+            result = subprocess.run([sys.executable, str(script), str(path)],
+                                    capture_output=True, text=True, timeout=20)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn(f'{path}:2\n  - text a | with {{ (t) upper $t }}\n  + text a | upper\n', result.stdout)
+            self.assertEqual(path.read_text(), '\n'.join(source for source, _ in cases) + '\n')
+            result = subprocess.run([sys.executable, str(script), '--write', '--skip', f'{path}:3',
+                                     str(path)], capture_output=True, text=True, timeout=20)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            lines = path.read_text().splitlines()
+            for n, (source, want) in enumerate(cases):
+                with self.subTest(source=source):
+                    self.assertEqual(lines[n], source if n == 2 else want or source)
+
     def test_mk_ext(self):
         # CMake also builds a fresh skeleton with --c-test and runs its tests:
         # ext_mk-ext-skeleton_test and ext_mk-ext-skeleton_test_mk-ext-skeleton.

@@ -15,8 +15,8 @@ import str
 
 env.or MIDI_OUT midi-out | fs.mkdir | as out-dir "The output directory"
 def at { (p) out-dir | path-join $p } "Path P in the output directory"
-def report { (s) midi.end $s | with { (e) count $s | with { (n) list $n items, $e beats | unwords } } } "One line: the item count and length of score S"
-def write-to { (score p bpm) at $p | with { (f) midi.write $score $f $bpm } } "Write SCORE to P in the output directory at BPM; return the path"
+def report { (s) count $s | list items, $(midi.end $s) beats | unwords } "One line: the item count and length of score S"
+def write-to { (score p bpm) midi.write $score $(at $p) $bpm } "Write SCORE to P in the output directory at BPM; return the path"
 
 # The same seed gives the same piece, as in Python.
 random.seed 2026
@@ -32,7 +32,7 @@ bass | report
 pads | report
 
 # 3. Drums on channel 10: Bjorklund's patterns for kick and hat, a fixed snare.
-midi.euclid 3 8 C2 | midi.seq 0.5 110 10 | with { (k) midi.seq ". . D2 . . . D2 ." 0.5 100 10 | midi.stack $k } | with { (ks) midi.euclid 5 8 F#2 2 | midi.seq 0.5 60 10 | midi.stack $ks } | as drums "One bar of kick, snare, and closed hat"
+midi.euclid 3 8 C2 | midi.seq 0.5 110 10 | midi.stack $(midi.seq ". . D2 . . . D2 ." 0.5 100 10) | midi.stack $(midi.euclid 5 8 F#2 2 | midi.seq 0.5 60 10) | as drums "One bar of kick, snare, and closed hat"
 drums | report
 
 # 4. A melody by random walk over two octaves of pentatonic, with rests drawn
@@ -49,7 +49,7 @@ repeat 4 { () midi.scale A4 minor-pentatonic | midi.walk 4 } | each { (ks) midi.
 drums | midi.loop 4 | midi.stack $(melody | midi.loop 2) | midi.stack $bass | midi.stack $pads | midi.stack $(midi.tempo 80 | midi.shift 12) | midi.humanize 0.02 12 | write-to song.mid 96 | midi.read | report
 
 # 6. Trailing rests are kept: a bar of silence follows the arpeggio.
-midi.scale A3 minor-pentatonic 2 | with { (up) str.reverse $up | rest | with { (down) list $up $down } } | each { (ks) midi.seq $ks 0.25 } | with { (parts) midi.rest 4 | with { (r) push $parts $r } } | midi.sequence | write-to arp.mid 120 | as arp
+midi.scale A3 minor-pentatonic 2 | with { (up) list $up $(str.reverse $up | rest) } | each { (ks) midi.seq $ks 0.25 } | push $(midi.rest 4) | midi.sequence | write-to arp.mid 120 | as arp
 arp | midi.read | report
 
 # 7. Files read back as scores, so they can be changed and saved again.

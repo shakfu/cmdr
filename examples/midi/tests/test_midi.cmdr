@@ -40,10 +40,10 @@ try { () midi.seq "C4 H4" } failed | equals failed
 
 # Rests count toward the end, so then, sequence, and loop keep them.
 midi.seq "C4 . ." | midi.end | equals 3
-midi.seq "C4 ." | with { (b) midi.note D4 | midi.then $b } | midi.end | equals 3
-midi.seq "C4 ." | with { (a) midi.note D4 | with { (b) list $a $b } } | midi.sequence | join , | equals "note 0 1 60 100 1,rest 1 1,note 2 1 62 100 1"
+midi.note D4 | midi.then $(midi.seq "C4 .") | midi.end | equals 3
+midi.seq "C4 ." | list $(midi.note D4) | midi.sequence | join , | equals "note 0 1 60 100 1,rest 1 1,note 2 1 62 100 1"
 midi.seq "C4 ." | midi.loop 2 | join , | equals "note 0 1 60 100 1,rest 1 1,note 2 1 60 100 1,rest 3 1"
-midi.rest 2 | with { (r) midi.note C4 | midi.then $r } | midi.end | equals 3
+midi.note C4 | midi.then $(midi.rest 2) | midi.end | equals 3
 
 # Pitch sets.
 midi.scale C4 | join , | equals 60,62,64,65,67,69,71
@@ -65,10 +65,10 @@ list | midi.rotate 3 | empty
 midi.seq "C4 D4" | midi.transpose -12 | join , | equals "note 0 1 48 100 1,note 1 1 50 100 1"
 midi.seq "C4 . D4" | midi.shift 2 | midi.stretch 0.5 | join , | equals "note 1 0.5 60 100 1,rest 1.5 0.5,note 2 0.5 62 100 1"
 midi.seq "C4 D4" | midi.velocity 30 | midi.channel 10 | join , | equals "note 0 1 60 30 10,note 1 1 62 30 10"
-midi.program 33 | with { (p) midi.cc 7 100 | midi.stack $p } | with { (s) midi.tempo 90 | midi.stack $s } | midi.channel 3 | midi.transpose 5 | join , | equals "tempo 0 90,cc 0 7 100 3,program 0 33 3"
+midi.cc 7 100 | midi.stack $(midi.program 33) | with { (s) midi.tempo 90 | midi.stack $s } | midi.channel 3 | midi.transpose 5 | join , | equals "tempo 0 90,cc 0 7 100 3,program 0 33 3"
 midi.chord "C4 E4" 3 | midi.end | equals 3
 list | midi.end | equals 0
-midi.note C4 | with { (a) midi.note D4 | midi.stack $a } | join , | equals "note 0 1 62 100 1,note 0 1 60 100 1"
+midi.note D4 | midi.stack $(midi.note C4) | join , | equals "note 0 1 62 100 1,note 0 1 60 100 1"
 
 # Chance: these match Python's random after the same seed.
 random.seed 1
@@ -84,8 +84,8 @@ midi.seq "C4 D4" | midi.humanize 0.1 10 | join , | equals "note 0 1 60 93 1,note
 random.seed 5
 repeat 4 { () midi.scale C4 | midi.walk 4 } | each { (ks) midi.seq $ks 0.25 } | midi.sequence | each { (n) midi.field $n 4 } | join , | equals 60,60,62,64,60,62,64,65,60,60,60,62,60,60,62,60
 # chance keeps the length; other kinds pass through.
-midi.seq "C4 D4" | with { (s) midi.cc 7 1 | midi.stack $s } | midi.chance 0 | join , | equals "cc 0 7 1 1,rest 0 1,rest 1 1"
+midi.cc 7 1 | midi.stack $(midi.seq "C4 D4") | midi.chance 0 | join , | equals "cc 0 7 1 1,rest 0 1,rest 1 1"
 midi.seq "C4 D4" | midi.chance 1 | join , | equals "note 0 1 60 100 1,note 1 1 62 100 1"
 
 # Files keep every kind and the trailing rest.
-midi.program 5 | with { (p) midi.seq "C4 ." 0.5 | midi.stack $p } | with { (s) tmp a.mid | with { (f) midi.write $s $f 100 } } | midi.read | join , | equals "tempo 0 100,program 0 5 1,note 0 0.5 60 100 1,rest 0.5 0.5"
+midi.seq "C4 ." 0.5 | midi.stack $(midi.program 5) | midi.write $(tmp a.mid) 100 | midi.read | join , | equals "tempo 0 100,program 0 5 1,note 0 0.5 60 100 1,rest 0.5 0.5"

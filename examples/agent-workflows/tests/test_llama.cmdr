@@ -9,45 +9,45 @@ aw.runs-dir | fs.mkdir | path-join llama-project | as project "A git copy of sam
 def git-in { (d args) list dir $d | with { (o) list git -c user.name=t -c user.email=t@example.invalid $args | with { (a) run-with $o $a } } | aw.agent-out }
 def request { () aw.runs-dir | path-join llama-request.json | read } "The last request body"
 def requests { () aw.runs-dir | path-join llama-requests.log | try { read | lines | count } 0 } "Requests sent so far"
-def reset { () project | with { (d) list "checkout -q -- ." "clean -fdq" | each { (c) shlex.split $c | with { (a) git-in $d $a } } } } "Undo edits to the copy"
+def reset { () project | with { (d) list "checkout -q -- ." "clean -fdq" | each { (c) git-in $d $(shlex.split $c) } } } "Undo edits to the copy"
 def stats { () project | path-join stats.py | read }
 def edit-fails { (q) project | aw.target-path | try { (t) aw.edit $t llama $q } rejected | check { equals rejected } "a bad edit was accepted" } "Fail unless edit Q is rejected"
 def stages { () aw.runs-dir | fs.dirs | keep { matches 'llama-stage-' } | count } "Staging copies left in AW_RUNS"
 def absent { (p) try { () fs.exists $p | $p } absent | check { equals absent } "a file was written outside the project" }
 
-project | with { (d) run rm -rf $d | $d | with { (x) script-dir | path-join ../sample | with { (s) run cp -R $s $x } } }
-project | with { (d) list "init -q" "add -A" "commit -q -m sample" | each { (c) shlex.split $c | with { (a) git-in $d $a } } }
+project | with { (d) run rm -rf $d | $d | with { (x) run cp -R $(script-dir | path-join ../sample) $x } }
+project | with { (d) list "init -q" "add -A" "commit -q -m sample" | each { (c) git-in $d $(shlex.split $c) } }
 
 # ask sends every tracked file and returns the reply without applying it.
-project | aw.target-path | with { (t) aw.ask $t llama "Where is mean?" } | check { contains "off by one" } "ask did not return the reply"
+project | aw.target-path | aw.ask llama "Where is mean?" | check { contains "off by one" } "ask did not return the reply"
 request | check { contains "def mean" } "the request lacked the project files"
 request | check { contains "You cannot run commands." } "the request did not say llama cannot run commands"
 stats | check { contains "(len(xs) - 1)" } "ask changed a file"
 
 # edit applies the reply's edit block, sends MODEL, and deletes its staging copy.
-stages | with { (n) project | aw.target-path | with { (t) aw.edit $t llama:qwen "Fix mean." } | check { contains "off by one" } "edit did not return the reply" | $n | with { (k) stages | sub $k } | check { equals 0 } "a staging copy was left after its edits applied" }
+stages | with { (n) project | aw.target-path | aw.edit llama:qwen "Fix mean." | check { contains "off by one" } "edit did not return the reply" | $n | with { (k) stages | sub $k } | check { equals 0 } "a staging copy was left after its edits applied" }
 request | check { contains '"model":"qwen"' } "the request lacked the model"
 request | check { contains "<<<<<<< SEARCH" } "the request did not describe edit blocks"
 stats | check { contains "return sum(xs) / len(xs)\n" } "edit did not apply the block"
 
 # Blocks apply in order, may create files, and may mark paths up as Markdown.
 reset
-project | aw.target-path | with { (t) aw.edit $t llama "MULTI" }
+project | aw.target-path | aw.edit llama "MULTI"
 stats | check { contains "return sum(xs) / float(len(xs))\n" } "a second block on a file did not see the first"
 project | path-join tests/test_mean.py | read | check { equals "from stats import mean\n" } "an empty SEARCH did not create the file"
 
 # A block without a path line edits the previous block's file.
 reset
-project | aw.target-path | with { (t) aw.edit $t llama "INHERIT" }
+project | aw.target-path | aw.edit llama "INHERIT"
 stats | check { contains "\"\"\"Return the mean of xs.\"\"\"\n    return sum(xs) / len(xs)\n" } "a block without a path did not edit the previous file"
 
 # A block without a path edits the one tracked file holding its SEARCH lines.
 # Prose where the path belongs is not read as a path.
 reset
-project | aw.target-path | with { (t) aw.edit $t llama "NOPATH" }
+project | aw.target-path | aw.edit llama "NOPATH"
 project | path-join test_stats.py | read | check { contains "from stats import mean, median\n" } "a block without a path did not edit the file holding SEARCH"
 reset
-project | aw.target-path | with { (t) aw.edit $t llama "PROSE" }
+project | aw.target-path | aw.edit llama "PROSE"
 stats | check { contains "return sum(xs) / len(xs)\n" } "prose was read as a path"
 reset
 edit-fails ORPHAN
@@ -59,7 +59,7 @@ request | check { contains "no such file: stats_test.py" } "a missing file was n
 
 # A block whose SEARCH matches nothing is retried once, with the reason.
 reset
-project | aw.target-path | with { (t) aw.edit $t llama "BADFIRST" } | check { contains "off by one" } "the retry's reply was not returned"
+project | aw.target-path | aw.edit llama "BADFIRST" | check { contains "off by one" } "the retry's reply was not returned"
 request | check { contains "SEARCH must match exactly one place in stats.py" } "the retry lacked the reason"
 stats | check { contains "return sum(xs) / len(xs)\n" } "the retry's block was not applied"
 
@@ -78,14 +78,14 @@ edit-fails ESCAPE
 aw.runs-dir | path-join escape.txt | absent
 edit-fails GITDIR
 project | path-join .git/hooks/pre-commit | absent
-project | with { (d) path-join $d link | with { (l) aw.runs-dir | with { (r) run ln -s $r $l } } }
+project | with { (d) run ln -s $(aw.runs-dir) $(path-join $d link) }
 edit-fails LINK
 aw.runs-dir | path-join escape.txt | absent
-project | path-join link | with { (l) run rm $l }
+run rm $(project | path-join link)
 
 # A block without a path whose SEARCH is in two files edits neither. Last,
 # since it commits a copy of stats.py.
-project | with { (d) path-join $d stats.py | read | with { (x) path-join $d stats_copy.py | with { (c) write $x $c } } | $d | with { (y) list "add -A" "commit -q -m copy" | each { (c) shlex.split $c | with { (a) git-in $y $a } } } }
+project | with { (d) path-join $d stats.py | read | write $(path-join $d stats_copy.py) | $d | with { (y) list "add -A" "commit -q -m copy" | each { (c) git-in $y $(shlex.split $c) } } }
 edit-fails AMBIG
 request | check { contains "no file path before SEARCH" } "an ambiguous block was not explained"
 stats | check { contains "(len(xs) - 1)" } "an ambiguous block changed stats.py"

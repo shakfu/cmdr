@@ -7,7 +7,7 @@ import fs
 
 env.get SND_OUT | fs.mkdir | as out-dir "The test directory"
 def tmp { (p) out-dir | path-join $p } "Path P in the test directory"
-def write-to { (chain p) tmp $p | with { (o) snd.out $chain $o } } "Run CHAIN into P in the test directory"
+def write-to { (chain p) snd.out $chain $(tmp $p) } "Run CHAIN into P in the test directory"
 
 # Building a chain only adds words; nothing runs until out.
 snd.in a.wav | snd.rate 8000 | snd.gain -3 | snd.reverse | unwords | equals "a.wav rate 8000 gain -3 reverse"
@@ -32,7 +32,7 @@ tmp a.wav | snd.in | snd.tempo 0.5 | write-to c.wav | snd.info-field seconds | b
 tmp a.wav | snd.in | snd.varispeed 1 0.5 | write-to c.wav | snd.info-field frames | equals 58800
 tmp a.wav | snd.in | snd.pitch 1200 | snd.lowpass 2000 | snd.highpass 100 | snd.norm -1 | snd.stats-field "Pk lev dB" | equals -1.00
 tmp a.wav | snd.in | snd.repeat 2 | snd.reverb 50 | snd.swap | write-to c.wav | snd.info-field seconds | equals 3
-tmp a.wav | snd.in | with { (c) tmp c.wav | with { (o) snd.out-as $c "-b 16 -r 22050" $o } } | snd.info | filter bits | join "" | equals "bits 16"
+tmp a.wav | snd.in | snd.out-as "-b 16 -r 22050" $(tmp c.wav) | snd.info | filter bits | join "" | equals "bits 16"
 tmp c.wav | snd.info-field rate | equals 22050
 snd.effects | count | equals 63
 snd.usage fade | starts-with "fade "
@@ -42,15 +42,15 @@ list a.wav b.wav | each { tmp } | snd.join | snd.stats-field "Length s" | equals
 list a.wav b.wav | each { tmp } | snd.merge | write-to m.wav | snd.info-field channels | equals 2
 list a.wav b.wav | each { tmp } | snd.mix | snd.stats-field "Pk lev dB" | equals -7.11
 list a.wav b.wav | each { tmp } | snd.mix-power | snd.stats-field "Pk lev dB" | equals -4.10
-tmp b.wav | snd.scaled 0.1 | with { (s) tmp a.wav | with { (a) list $a $s } } | snd.mix | snd.stats-field "Pk lev dB" | equals -5.40
+tmp a.wav | list $(tmp b.wav | snd.scaled 0.1) | snd.mix | snd.stats-field "Pk lev dB" | equals -5.40
 list a.wav a.wav | each { tmp } | snd.multiply | snd.stats-field "Pk lev dB" | equals -12.00
 
 # Splitting writes numbered files and returns their paths.
-tmp s.wav | with { (o) tmp a.wav | snd.in | snd.split-at "0.25 0.5" $o } | map path-basename | join , | equals s001.wav,s002.wav,s003.wav
+tmp a.wav | snd.in | snd.split-at "0.25 0.5" $(tmp s.wav) | map path-basename | join , | equals s001.wav,s002.wav,s003.wav
 tmp s003.wav | snd.info-field seconds | equals 0.5
 tmp s000.wav | not { fs.exists }
 tmp p.wav | with { (o) tmp a.wav | snd.in | snd.pad 0 0.5 | snd.repeat 2 | snd.split-silence -40 0.3 $o } | count | equals 3
-tmp ch.wav | with { (o) tmp m.wav | snd.in | snd.split-channels $o } | each { (p) snd.info-field $p channels } | join , | equals 1,1
+tmp m.wav | snd.in | snd.split-channels $(tmp ch.wav) | each { (p) snd.info-field $p channels } | join , | equals 1,1
 tmp ch002.wav | snd.in | snd.stats-field "Length s" | equals 2.000
 snd.numbered out/take.wav 7 | equals out/take007.wav
 snd.numbered take.wav 12 | equals take012.wav

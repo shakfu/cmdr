@@ -7,7 +7,7 @@ import midi
 
 env.get MIDI_OUT | fs.mkdir | as out-dir "The test directory"
 def tmp { (p) out-dir | path-join $p } "Path P in the test directory"
-def round-trip { (s p) tmp $p | with { (f) midi.write $s $f 120 } | midi.read } "Write score S to P in the test directory and read it back"
+def round-trip { (s p) midi.write $s $(tmp $p) 120 | midi.read } "Write score S to P in the test directory and read it back"
 
 # Keys are numbers or names, in a score as well as alone.
 midi.key F#3 | equals 54

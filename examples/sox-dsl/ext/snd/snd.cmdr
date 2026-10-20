@@ -16,7 +16,7 @@ list -n | as null "Start a chain from silence without end, for synth"
 list -d | as device "Start a chain that records from the default audio device"
 def tone { (seconds hz) list -r 44100 -n synth $seconds sine $hz gain -6 } "Start a chain of a SECONDS sine at HZ, at -6 dBFS"
 def scaled { (path factor) list -v $factor $path } "PATH, with its samples multiplied by FACTOR, for combine and its forms"
-def combine { (method paths) list --combine $method | with { (h) fold $paths $h { (c p) push $c $p } } } "Start a chain that combines PATHS by METHOD, as sox --combine"
+def combine { (method paths) fold $paths $(list --combine $method) { (c p) push $c $p } } "Start a chain that combines PATHS by METHOD, as sox --combine"
 def join { (paths) combine concatenate $paths } "Start a chain of PATHS one after another"
 def mix { (paths) combine mix $paths } "Start a chain that sums PATHS, each scaled by 1/N unless scaled"
 def mix-power { (paths) combine mix-power $paths } "Start a chain that sums PATHS, each scaled by 1/sqrt(N) unless scaled"
@@ -48,7 +48,7 @@ def swap { (chain) push $chain swap } "Swap pairs of channels"
 
 # Running. A device is -d; a file's extension selects its type.
 def out { (chain path) _snd.run $path $chain } "Run CHAIN, writing PATH; return PATH"
-def out-as { (chain opts path) words $opts | push $path | with { (o) _snd.run $o $chain } } "Run CHAIN, writing PATH with format OPTIONS, such as \"-b 16 -r 48k\"; return PATH"
+def out-as { (chain opts path) words $opts | push $path | _snd.run $chain } "Run CHAIN, writing PATH with format OPTIONS, such as \"-b 16 -r 48k\"; return PATH"
 def play { (chain) _snd.run -d $chain } "Play CHAIN on the default audio device"
 def record { (seconds path) _snd.run $path -d trim 0 $seconds } "Record SECONDS from the default audio device to PATH; return PATH"
 
@@ -61,10 +61,10 @@ def stats-field { (chain name) stats $chain | lines | field $name | words | firs
 # Splitting. Each split runs the chain once into a temporary file, writes
 # each part as PATH numbered from 1, as sox's newfile does: out001.wav, and
 # returns the paths written.
-def numbered { (path i) str.pad-left $i 3 0 | with { (n) path-basename $path | length | with { (k) length $path | sub $k | with { (d) take $path $d } } | with { (dir) path-stem $path | with { (s) path-ext $path | with { (e) list $dir $s $n . $e | concat } } } } } "PATH with I in 3 digits before its extension"
-def render { (chain path) numbered $path 0 | with { (t) out $chain $t } } "Run CHAIN into PATH numbered 0"
-def cut { (whole path cuts) count $cuts | num.range | each { (i) nth $cuts $i | words | with { (e) numbered $path $i | with { (o) _snd.run $o $whole $e } } } | with { (written) fs.remove $whole | $written } } "Apply effect item I of CUTS to WHOLE, writing PATH numbered I; delete WHOLE"
-def split-at { (chain points path) words $points | with { (ps) list 0 | with { (z) fold $ps $z { (c p) push $c $p } } | with { (starts) count $ps | num.range | each { (i) nth $starts $i | with { (s) nth $ps $i | with { (e) list "trim " $s " =" $e | concat } } } | with { (cuts) last $ps | with { (p) list "trim " $p | concat | with { (x) push $cuts $x } } } } } | with { (cuts) render $chain $path | with { (w) cut $w $path $cuts } } } "Split CHAIN's audio at POINTS, seconds in order such as \"1.5 3\""
+def numbered { (path i) path-basename $path | length | with { (k) take $path $(length $path | sub $k) } | list $(path-stem $path) $(str.pad-left $i 3 0) . $(path-ext $path) | concat } "PATH with I in 3 digits before its extension"
+def render { (chain path) out $chain $(numbered $path 0) } "Run CHAIN into PATH numbered 0"
+def cut { (whole path cuts) count $cuts | num.range | each { (i) numbered $path $i | _snd.run $whole $(nth $cuts $i | words) } | with { (written) fs.remove $whole | $written } } "Apply effect item I of CUTS to WHOLE, writing PATH numbered I; delete WHOLE"
+def split-at { (chain points path) words $points | with { (ps) fold $ps $(list 0) { (c p) push $c $p } | with { (starts) count $ps | num.range | each { (i) list "trim " $(nth $starts $i) " =" $(nth $ps $i) | concat } | with { (cuts) last $ps | with { (p) push $cuts $(list "trim " $p | concat) } } } } | with { (cuts) render $chain $path | cut $path $cuts } } "Split CHAIN's audio at POINTS, seconds in order such as \"1.5 3\""
 def split-silence { (chain db seconds path) render $chain $path | with { (w) _snd.segments $w $db $seconds | prefix "trim " | with { (cuts) cut $w $path $cuts } } } "Split CHAIN's audio at each silence at or below DB dBFS lasting SECONDS, dropping the silences"
 def split-channels { (chain path) render $chain $path | with { (w) info-field $w channels | num.range | prefix "remix " | with { (cuts) cut $w $path $cuts } } } "Write each channel of CHAIN's audio to its own file"
 
