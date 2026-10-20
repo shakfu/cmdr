@@ -14,7 +14,7 @@ cmdr> read greeting.txt | lower
 hello world
 ```
 
-Run `help` for the command list; it returns text, so `help | filter map` works. Exit with `quit`, `exit`, or Ctrl-D.
+Run `help` for the command list; it returns text, so `help | filter map` works. `help NAME` shows one command's full usage and documentation. Exit with `quit`, `exit`, or Ctrl-D.
 
 The REPL edits lines with a vendored copy of linenoise, in [thirdparty/linenoise](thirdparty/linenoise). The prompt is light green, except on terminals without escape sequences (`dumb`, `cons25`, `emacs`). It colors commands, references, blocks, and strings, and shows unknown commands in red. Tab completes command names. Up and Down recall history, saved in `~/.cmdr_history`, with a continued pipeline stored as one entry. Ctrl-C drops the current pipeline. Pasted lines run one at a time, each echoed after its prompt. Configure with `-DCMDR_EDITOR=OFF` to read plain lines instead.
 
@@ -62,7 +62,7 @@ a,c
 
 - `{ (a b) ... }` declares parameters, referenced as `$a` and `$b`. A block takes exactly the arguments it declares. `{ ... }` takes one input, received by pipe; `{ () ... }` takes none.
 
-- A parameter after the first may have a default: `{ (chain amount=50) ... }`. A call may omit it, and parameters after it need defaults too. A default is one word without spaces, quotes, or `)`, or `""` for empty text. `help` shows it as `[AMOUNT=50]`. See [docs/dev/defaults.md](docs/dev/defaults.md).
+- A parameter after the first may have a default: `{ (chain amount=50) ... }`. A call may omit it, and parameters after it need defaults too. A default is one word without spaces, quotes, or `)`, or `""` for empty text. The `help` overview shows a definition's defaulted parameters as `...`, and `help NAME` shows each as `[AMOUNT=50]`. See [docs/dev/defaults.md](docs/dev/defaults.md).
 
   ```text
   cmdr> def greet { (name greeting=hello) text $greeting $name }

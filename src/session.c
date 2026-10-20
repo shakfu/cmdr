@@ -107,11 +107,40 @@ static int script_command(const cmdr_command *command)
         || command->run == script_args_command;
 }
 
+/* A command's usage for the overview. A definition's defaults, which
+ * usage_of writes last as "[NAME=VALUE]", show as "...", so long parameter
+ * names do not widen every row; `help NAME` shows them. */
+static char *overview_usage(const cmdr_command *command)
+{
+    const char *usage = command->usage ? command->usage : command->name;
+    const char *cut = command->block ? strstr(usage, " [") : NULL;
+    size_t n = cut ? (size_t)(cut - usage) : strlen(usage);
+    char *text = cmdr_realloc(NULL, n + sizeof(" ..."), 1);
+    memcpy(text, usage, n);
+    strcpy(text + n, cut ? " ..." : "");
+    return text;
+}
+
+/* help NAME: the command's full usage, then its documentation. */
+static int help_one(const cmdr *repl, const char *name, cmdr_value *result, char **error)
+{
+    const cmdr_command *command = cmdr_find(repl, name);
+    if (!command) return cmdr_error(error, "help: unknown command: %s", name);
+    const char *usage = command->usage ? command->usage : command->name;
+    const char *doc = command->docstring ? command->docstring : "";
+    size_t size = strlen(usage) + strlen(doc) + 3;
+    char *text = cmdr_realloc(NULL, size, 1);
+    snprintf(text, size, "%s\n%s\n", usage, doc);
+    *result = (cmdr_value){.kind = CMDR_TEXT, .text = text};
+    return 0;
+}
+
 /* Return help as text so it composes, e.g. `help | filter list`. */
 static int help_command(const cmdr *repl, void *user, size_t argc, const cmdr_value *argv,
                         cmdr_value *result, char **error)
 {
-    if (argc) return cmdr_error(error, "usage: help");
+    if (argc > 1) return cmdr_error(error, "usage: help [NAME]");
+    if (argc) return help_one(repl, argv[0].text, result, error);
     /* Tables in lookup order, then definitions oldest first, which reverses
      * their lookup order. Each def is a layer of one command with a block. */
     const cmdr **groups = NULL;
@@ -138,8 +167,9 @@ static int help_command(const cmdr *repl, void *user, size_t argc, const cmdr_va
                     continue; /* Shadowed. */
                 active = cmdr_realloc(active, count + 1, sizeof(*active));
                 active[count++] = command;
-                const char *usage = command->usage ? command->usage : command->name;
+                char *usage = overview_usage(command);
                 if ((int)strlen(usage) > width) width = (int)strlen(usage);
+                free(usage);
             }
         }
     free(groups);
@@ -147,12 +177,14 @@ static int help_command(const cmdr *repl, void *user, size_t argc, const cmdr_va
     size_t size = 0;
     FILE *out = open_memstream(&text, &size);
     if (!out) { free(active); return cmdr_error(error, "help: %s", strerror(errno)); }
-    for (size_t i = 0; i < count; ++i)
-        fprintf(out, "%-*s  %s\n", width,
-                active[i]->usage ? active[i]->usage : active[i]->name,
-                active[i]->docstring ? active[i]->docstring : "");
+    for (size_t i = 0; i < count; ++i) {
+        char *usage = overview_usage(active[i]);
+        fprintf(out, "%-*s  %s\n", width, usage, active[i]->docstring ? active[i]->docstring : "");
+        free(usage);
+    }
     fputs("Compose with |; the returned value becomes the next command's first argument.\n"
-          "Quote spaces and pipes; { (a b) ... } is a block taking $a and $b.\n", out);
+          "Quote spaces and pipes; { (a b) ... } is a block taking $a and $b.\n"
+          "... marks parameters with defaults; help NAME shows them.\n", out);
     fclose(out);
     free(active);
     *result = (cmdr_value){.kind = CMDR_TEXT, .text = text};
@@ -544,7 +576,9 @@ cmdr_session *cmdr_session_open(const cmdr *commands, int effects, FILE *out)
     cmdr_session *s = cmdr_realloc(NULL, 1, sizeof(*s));
     *s = (cmdr_session){
         .builtins = {
-            {.name = "help", .usage = "help", .docstring = "Show commands", .run = help_command},
+            {.name = "help", .usage = "help [NAME]",
+             .docstring = "Show commands, or NAME's full usage and documentation",
+             .run = help_command, .text = 1},
             {.name = "def", .usage = "def NAME BLOCK [DOC]",
              .docstring = "Define a command; it may shadow others", .run = def_command, .user = s},
             {.name = "script-file", .usage = "script-file",

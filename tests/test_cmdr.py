@@ -619,7 +619,7 @@ class Commands(unittest.TestCase):
         self.assertRegex(result.stdout, r'(?m)^split TEXT SEPARATOR +Split into a list$')
         # Extension commands follow the built-ins, ending with from, and precede
         # primitives; their definitions precede the prelude's.
-        names = [line.split()[0] for line in result.stdout.splitlines()[:-2]]
+        names = [line.split()[0] for line in result.stdout.splitlines()[:-3]]
         self.assertEqual(names[names.index('from') + 1], 'probe')
         self.assertLess(names.index('run-in'), names.index('probe-twice'))
         self.assertLess(names.index('probe-twice'), names.index('first'))
@@ -1023,15 +1023,17 @@ class Commands(unittest.TestCase):
                 result = self.run_input(source)
                 self.assertIn(message, result.stderr)
                 self.assertEqual(result.stdout, '')
-        # help shows defaults in brackets; from keeps them under the bound name.
-        result = self.run_input('def r { (chain amount=50 tag="") text $chain $amount $tag }\nhelp | filter def:\n')
-        self.assertRegex(result.stdout, r'(?m)^r CHAIN \[AMOUNT=50\] \[TAG=""\] +def:')
+        # The overview shows defaults as ...; help NAME shows them, also under a from alias.
+        result = self.run_input('def r { (chain amount=50 tag="") text $chain $amount $tag }\nhelp | filter def:\nhelp r\n')
+        self.assertRegex(result.stdout, r'(?m)^r CHAIN \.\.\. +def:')
+        self.assertIn('r CHAIN [AMOUNT=50] [TAG=""]\ndef: (chain amount=50 tag="") text $chain $amount $tag\n', result.stdout)
         with tempfile.TemporaryDirectory() as directory:
             (Path(directory) / 'm.cmdr').write_text('def r { (c a=50) text $c $a } "R"\n')
-            result = subprocess.run([str(BINARY)], input='from m import r as rr\nrr x\nhelp | filter R\n',
+            result = subprocess.run([str(BINARY)], input='from m import r as rr\nrr x\nhelp | filter R\nhelp rr\n',
                                     capture_output=True, text=True, timeout=20, cwd=directory)
             self.assertEqual(result.stdout.splitlines()[0], 'x 50', result.stderr)
-            self.assertRegex(result.stdout, r'(?m)^rr C \[A=50\] +R$')
+            self.assertRegex(result.stdout, r'(?m)^rr C \.\.\. +R$')
+            self.assertIn('rr C [A=50]\nR\n', result.stdout)
 
     def test_from_import(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -1139,11 +1141,15 @@ class Commands(unittest.TestCase):
 
     def test_help_and_repl(self):
         result = self.run_line('help')
-        lines = result.stdout.splitlines()[:-2]
+        lines = result.stdout.splitlines()[:-3]
         rows = [re.fullmatch(r'(\S(?:.*?\S)?) {2,}(\S.*)', line) for line in lines]
         self.assertTrue(all(rows), result.stdout)
         self.assertEqual(len({row.start(2) for row in rows}), 1, result.stdout)
-        self.assertEqual(rows[0].groups(), ('help', 'Show commands'))
+        self.assertEqual(rows[0].groups(), ('help [NAME]', "Show commands, or NAME's full usage and documentation"))
+        # help NAME gives one command; an unknown name is an error.
+        self.run_line('help map', expected='map LIST_OR_LINES COMMAND [ARG ...]\nApply a command to each item\n')
+        self.run_line('help nope', error='help: unknown command: nope')
+        self.run_line('help a b', error='usage: help [NAME]')
         self.assertIn(('map LIST_OR_LINES COMMAND [ARG ...]',
                        'Apply a command to each item'), [row.groups() for row in rows])
         names = [line.split()[0] for line in lines]

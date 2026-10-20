@@ -89,7 +89,7 @@ A bare default excludes whitespace, quotes, `\`, `|`, `$`, `{`, `}`, and `)`. Al
 
 ### Help and the API
 
-`help` shows a defaulted parameter in brackets with its value: `snd.reverb CHAIN [AMOUNT=50]`. Aliases from `import` and `from` keep the usage after the name, so they show the same.
+`help NAME` shows a defaulted parameter in brackets with its value: `snd.reverb CHAIN [REVERBERANCE=50] ...`. The `help` overview shows a definition's defaults as `...`, so long parameter names do not widen every row. Aliases from `import` and `from` keep the usage after the name, so they show the same.
 
 `cmdr_block_arity` changes meaning from "takes exactly argc" to "accepts argc". `cmdr_run` fills omitted parameters with their defaults. `cmdr_code` is opaque, so the ABI is unchanged; no existing block declares a default, so no caller sees a difference.
 
@@ -498,6 +498,8 @@ These are optional; none is required.
 - `test_defaults` also covers a negative default, `fold`, and an alias bound with `from`. Each error case also checks that nothing printed.
 - The editor tests check only the prompt's colour, so `scan`'s split at `=` has no test of its own.
 - Running the suite under ASan and UBSan found undefined behaviour outside this change: `examples/sox-dsl/ext/snd` used libsox's `SOX_ROUND_CLIP_COUNT` and `SOX_SAMPLE_MIN`, which shift 1 by 31 bits in an `int`. It now clips with its own function.
+
+- `help` showed defaults in the overview at first. `snd.reverb`'s six sox parameter names made its row about 115 characters wide, and every row was padded to it. The overview now shows `...`, and `help NAME` gives the full signature. The help test above is as first written; the merged one checks both forms.
 
 ### Order of work
 
