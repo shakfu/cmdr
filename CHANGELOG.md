@@ -72,6 +72,8 @@
 
 - `-DCMDR_EXAMPLES=OFF` skips building `cmdr-snd` and `cmdr-midi` and their tests. It defaults to `ON`, so `make test` still runs the examples' tests.
 
+- `_` in a parameter list declares a parameter the block ignores, exempt from the unused-parameter rule: `each { (_) random.random }`. Callers such as `each`, `fold`, and `with` pass arguments a block may not need, and the rule forced it to use them anyway. A name over relaxing the rule, which catches blocks that ignore their input by mistake. `_` may repeat; `$_` is an error, `nothing is bound to _`. See [docs/dev/missing-syntax.md](docs/dev/missing-syntax.md).
+
 - `repeat N BLOCK [ARG ...]` calls a block N times with only ARGs and lists the results. A block must use each parameter it declares, so `num.range 8 | each { (i) random }` was an error, and repeated calls needed a counter. A count over 10,000,000 is an error, as in `num.seq`.
 
 - `as VALUE NAME [DOC]` binds a value to a name for later lines: `snd.out $c a440.wav | as a440`. NAME is a command returning the value, with `def`'s rules: lexical, shadowable, and exported from modules. Like `def` and Python's assignment, `as` returns no value, so a binding prints nothing in a script. The REPL colors bound names bold magenta, a bold form of the reference color, since a binding is a named value. A constant over a variable, so a definition keeps the value it saw. `as` over `let`, because cmdr passes the value first: `as VALUE NAME` reads as Python's `with ... as name`, and `let VALUE NAME` reverses `let`'s usual order.

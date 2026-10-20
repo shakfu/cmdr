@@ -1,6 +1,6 @@
 # Missing syntax
 
-Design exploration, 2026-10-20. Status: proposed; nothing here is implemented.
+Design exploration, 2026-10-20. Status: `_` is implemented; `if` and `$(...)` are proposed.
 
 cmdr is a glue language: pipelines of commands over text and lists. Three gaps cost the most code in this repository's own scripts. Each section states the problem with counts, the proposal, examples rewritten from real files, and when not to use the feature.
 

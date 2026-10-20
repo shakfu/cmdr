@@ -74,6 +74,8 @@ a,c
 
 - Declared parameters appear only where named, and each must be used. Only `{ ... }` pipes its input into its first stage, so a block can start from something else: `{ (w) read app.log | contains $w }`.
 
+- `_` declares a parameter the block ignores: `list a b | each { (_) random.random }`. It may repeat, needs no use, and cannot be referenced or have a default. It still takes its argument, so `{ (_ x) ... }` takes two. As in Python, `_` means "not needed"; use it for an argument the caller passes regardless, not to silence the error about a parameter you meant to use.
+
 - Each later stage receives the previous result first. A stage that is a lone `$name` makes that value the result.
 
 - Names are lexical. A nested block sees the names of enclosing blocks, and an inner name shadows an outer one. A block keeps the values it captured.

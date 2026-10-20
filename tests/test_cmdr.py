@@ -336,6 +336,33 @@ class Commands(unittest.TestCase):
             with self.subTest(source=source):
                 self.run_line(source, error=error)
 
+    def test_ignored_parameter(self):
+        # _ takes an argument the block ignores: exempt from the unused check,
+        # never referenced, and repeatable.
+        cases = [
+            ("list a b | each { (_) text x } | join ,", 'x,x\n'),
+            ("list 1 2 3 | fold 0 { (acc _) add $acc 1 }", '3\n'),
+            ("text a | with { (_ y) text $y } b", 'b\n'),
+            ("text a | with { (_ _ z) text $z } b c", 'c\n'),
+            ("list a b | keep { (_) equals 1 1 } | join ,", 'a,b\n'),
+        ]
+        for source, expected in cases:
+            with self.subTest(source=source):
+                self.run_line(source, expected)
+        errors = [
+            ("list a | each { (_) text $_ }", "invalid reference '$_': nothing is bound to _"),
+            ("list a | each { (_=1) text x }", 'parameter _ cannot have a default'),
+            ("list a | each { (x y=1 _) text $x }", 'parameter _ has no default but follows one that does'),
+            ("list a | each { (_x) text x }", 'invalid parameter list'),
+            # _ still counts toward the block's arity.
+            ("text a | with { (_ y) text $y }", 'with: block takes 2 arguments, got 1'),
+        ]
+        for source, error in errors:
+            with self.subTest(source=source):
+                self.run_line(source, error=error)
+        result = self.run_input("def second { (_ x) text $x }\nhelp second\nsecond a b\n")
+        self.assertEqual(result.stdout, 'second _ X\ndef: (_ x) text $x\nb\n', result.stderr)
+
     def test_with_fold_or(self):
         cases = [
             # with binds a computed value, so it can be any argument.

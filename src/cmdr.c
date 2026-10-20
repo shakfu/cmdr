@@ -293,6 +293,8 @@ static int lex(const char **p, word *out, char **error)
     if (*s == '$') {
         while (*s && !isspace((unsigned char)*s) && *s != '|') ++s;
         size_t n = (size_t)(s - *p - 1);
+        if (n == 1 && (*p)[1] == '_')
+            return cmdr_error(error, "invalid reference '$_': nothing is bound to _");
         /* A reference may name a module's binding, so '.' joins identifiers. */
         size_t k = 0;
         for (size_t m; (m = identifier(*p + 1 + k)) && (k += m) < n && (*p)[1 + k] == '.';) ++k;
@@ -420,6 +422,26 @@ static int compile_block(const cmdr *repl, const char *text, scope *sc, cmdr_cod
         for (++p;;) {
             while (isspace((unsigned char)*p)) ++p;
             if (*p == ')') { ++p; break; }
+            /* _ takes an argument the block ignores: exempt from the unused
+             * check, and never referenced, so it may repeat. */
+            if (*p == '_' && (p[1] == '=' || param_end(p + 1))) {
+                if (p[1] == '=') {
+                    status = cmdr_error(error, "parameter _ cannot have a default");
+                    break;
+                }
+                if (code->required < code->params) {
+                    status = cmdr_error(error, "parameter _ has no default but follows one that does");
+                    break;
+                }
+                sc->names = cmdr_realloc(sc->names, sc->count + 1, sizeof(*sc->names));
+                sc->used = cmdr_realloc(sc->used, sc->count + 1, sizeof(*sc->used));
+                sc->used[sc->count] = 1;
+                sc->names[sc->count++] = cmdr_strndup("_", 1);
+                ++code->required;
+                ++code->params;
+                ++p;
+                continue;
+            }
             size_t n = identifier(p), vn = 0;
             int has_default = n && p[n] == '=', empty = 0;
             if (has_default) vn = default_length(p + n + 1, &empty);
