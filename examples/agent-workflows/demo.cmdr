@@ -26,11 +26,11 @@ demo-dir | aw.target-path | aw.ask $demo-agent "Summarize this project in three 
 
 # 3. Fix the bug in BUG.md: write a failing test, find the cause, patch it,
 #    and review the patch. One agent runs every step.
-list reproduce diagnose patch review | suffix $(list @ $demo-agent | concat) | with { (steps) path-join $demo-dir BUG.md | read | aw.target-bug $demo-dir | aw.workflow bug $steps }
+list reproduce diagnose patch review | suffix $(concat @ $demo-agent) | with { (steps) path-join $demo-dir BUG.md | read | aw.target-bug $demo-dir | aw.workflow bug $steps }
 
 # 4. What changed, and do the tests pass?
 shlex.split "git status --short" | run-in-demo | or { nonempty } "(no changes)"
-list dir $demo-dir | run-with python3 -m unittest -q | nth 1 | with { (s) list "tests: exit status " $s | concat }
+list dir $demo-dir | run-with python3 -m unittest -q | nth 1 | with { (s) concat "tests: exit status " $s }
 
 # 5. The run logs, one per ask or chain, with every prompt and output.
 aw.runs-dir | files | sort | tail 2

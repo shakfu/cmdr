@@ -856,6 +856,152 @@ COMMAND(with_command)
 #define REPEAT_LIMIT 10000000
 
 /* Call the block N times with argv[2..], so it takes no counter it must use. */
+/* Text adds itself and a list its items, so list a b | concat and
+ * concat "### " $f both work. */
+COMMAND(concat_command)
+{
+    buffer b = {0};
+    for (size_t i = 0; i < argc; ++i) {
+        const cmdr_value *v = &argv[i];
+        size_t n = v->kind == CMDR_LIST ? v->count : 1;
+        for (size_t k = 0; k < n; ++k) {
+            const cmdr_value *t = v->kind == CMDR_LIST ? &v->items[k] : v;
+            if (t->kind != CMDR_TEXT) {
+                free(b.data);
+                return cmdr_error(error, "concat: argument %zu %s a %s", i + 1,
+                                  v->kind == CMDR_LIST ? "holds" : "is",
+                                  t->kind == CMDR_LIST ? "list" : "block");
+            }
+            put(&b, t->text, strlen(t->text));
+        }
+    }
+    return finish(&b, result);
+}
+
+/* format TEMPLATE [ARG ...], as Python's str.format without specifications:
+ * {} takes the next argument, {N} argument N from 0, {{ and }} are braces.
+ * Unlike Python, an argument no field uses is an error. */
+COMMAND(format_command)
+{
+    if (argc < 1) return cmdr_error(error, "usage: format TEMPLATE [ARG ...]");
+    for (size_t i = 0; i < argc; ++i)
+        if (argv[i].kind != CMDR_TEXT)
+            return i ? cmdr_error(error, "format: argument %zu is a %s; join it first", i - 1,
+                                  argv[i].kind == CMDR_LIST ? "list" : "block")
+                     : cmdr_error(error, "format: TEMPLATE is not text");
+    const char *t = argv[0].text;
+    size_t args = argc - 1, next = 0;
+    int automatic = 0, manual = 0;
+    /* Arguments are numbered from 0, as {N} counts them. */
+    unsigned char *used = memset(cmdr_realloc(NULL, args ? args : 1, 1), 0, args ? args : 1);
+    buffer b = {0};
+    int status = 0;
+    for (const char *p = t; *p && !status;) {
+        if ((p[0] == '{' && p[1] == '{') || (p[0] == '}' && p[1] == '}')) {
+            put(&b, p, 1);
+            p += 2;
+        } else if (*p == '}') {
+            status = cmdr_error(error, "format: a single '}' in the template; write }} for a brace");
+        } else if (*p == '{') {
+            const char *end = strchr(p, '}');
+            size_t n;
+            if (!end) {
+                status = cmdr_error(error, "format: '{' without '}' in the template; write {{ for a brace");
+                break;
+            }
+            if (end == p + 1) {
+                automatic = 1;
+                n = next++;
+            } else {
+                char *stop;
+                errno = 0;
+                unsigned long k = strtoul(p + 1, &stop, 10);
+                if (stop != end || !isdigit((unsigned char)p[1]) || errno) {
+                    status = cmdr_error(error, "format: invalid field '%.*s'; use {} or {N}",
+                                        (int)(end - p + 1), p);
+                    break;
+                }
+                manual = 1;
+                n = (size_t)k;
+            }
+            if (automatic && manual) {
+                status = cmdr_error(error, "format: cannot mix {} and {N}");
+            } else if (n >= args) {
+                status = cmdr_error(error, "format: field %zu has no argument; %zu given", n, args);
+            } else {
+                used[n] = 1;
+                put(&b, argv[n + 1].text, strlen(argv[n + 1].text));
+                p = end + 1;
+            }
+        } else {
+            const char *q = p;
+            while (*q && *q != '{' && *q != '}') ++q;
+            put(&b, p, (size_t)(q - p));
+            p = q;
+        }
+    }
+    for (size_t i = 0; i < args && !status; ++i)
+        if (!used[i]) status = cmdr_error(error, "format: argument %zu is unused", i);
+    free(used);
+    if (status) {
+        free(b.data);
+        return 1;
+    }
+    return finish(&b, result);
+}
+
+/* retry N [every SECONDS] BLOCK [ARG ...]: call BLOCK until a call succeeds,
+ * at most N times, waiting SECONDS between attempts. */
+COMMAND(retry_command)
+{
+    static const char usage[] = "usage: retry N [every SECONDS] BLOCK [ARG ...]";
+    size_t n, at = 1;
+    double seconds = 0;
+    if (argc < 2) return cmdr_error(error, usage);
+    if (cmdr_natural(&argv[0], &n, error)) return 1;
+    if (!n || n > REPEAT_LIMIT) return cmdr_error(error, "retry: N %zu is not 1 to %d", n, REPEAT_LIMIT);
+    if (argv[1].kind == CMDR_TEXT && !strcmp(argv[1].text, "every")) {
+        if (argc < 4) return cmdr_error(error, usage);
+        if (argv[2].kind != CMDR_TEXT || cmdr_number(argv[2].text, &seconds, error)) {
+            if (!*error) cmdr_error(error, "retry: SECONDS is not a number");
+            return 1;
+        }
+        if (seconds < 0) return cmdr_error(error, "retry: SECONDS %s is below 0", argv[2].text);
+        at = 3;
+    }
+    const cmdr_value *body = &argv[at];
+    size_t nargs = argc - at - 1;
+    if (check_body("retry", body, nargs, error)) return 1;
+    int status = 0;
+    char *detail = NULL;
+    for (size_t i = 0; i < n; ++i) {
+        if (i && seconds > 0) { /* Between attempts, in slices so an interrupt ends it. */
+            for (double left = seconds; left > 0 && !cmdr_interrupted(); left -= 0.05) {
+                double d = left < 0.05 ? left : 0.05;
+                struct timespec slice = {(time_t)d, (long)((d - (double)(time_t)d) * 1e9)};
+                nanosleep(&slice, NULL);
+            }
+        }
+        free(detail);
+        detail = NULL;
+        status = cmdr_run(body, nargs, argv + at + 1, result, &detail);
+        if (!status) {
+            free(detail);
+            return 0;
+        }
+        if (cmdr_interrupted()) break;
+    }
+    if (cmdr_interrupted()) {
+        free(detail);
+        return cmdr_error(error, "interrupted");
+    }
+    /* The last failure, with its status, so a mismatch stays a mismatch. */
+    cmdr_error(error, "retry: %zu attempt%s failed: %s", n, n == 1 ? "" : "s",
+               detail ? detail : "failed");
+    free(detail);
+    return status;
+}
+
 COMMAND(repeat_command)
 {
     if (argc < 2) return cmdr_error(error, "usage: repeat N BLOCK [ARG ...]");
@@ -919,6 +1065,7 @@ COMMAND(try_command)
     if (argc != 2 && argc != 3) return cmdr_error(error, "usage: try [INPUT] BLOCK FALLBACK");
     const cmdr_value *body = &argv[argc - 2];
     if (check_body("try", body, argc - 2, error)) return 1;
+    if (argv[argc - 1].kind == CMDR_BLOCK && check_body("try", &argv[argc - 1], 1, error)) return 1;
     char *detail;
     int failed = cmdr_run(body, argc - 2, argv, result, &detail);
     /* An interrupt stops the line; a fallback would let it continue. */
@@ -926,8 +1073,20 @@ COMMAND(try_command)
         *error = detail;
         return 1;
     }
+    if (!failed) {
+        free(detail);
+        return 0;
+    }
+    if (argv[argc - 1].kind != CMDR_BLOCK) {
+        free(detail);
+        return cmdr_clone(&argv[argc - 1], result, error);
+    }
+    /* A handler block receives the error message, as Python's except E as e. */
+    cmdr_value message = cmdr_text(detail ? detail : "failed", strlen(detail ? detail : "failed"));
     free(detail);
-    return failed ? cmdr_clone(&argv[argc - 1], result, error) : 0;
+    int status = cmdr_run(&argv[argc - 1], 1, &message, result, error);
+    cmdr_free(&message);
+    return status;
 }
 
 /* As try, but only a mismatch selects FALLBACK; errors propagate. */
@@ -1102,8 +1261,11 @@ static const cmdr_command pure[] = {
     VALUE("not", "not VALUE BLOCK [ARG ...]", "Return VALUE if the block mismatches", not_command),
     VALUE("with", "with VALUE BLOCK [ARG ...]", "Call a block with VALUE", with_command),
     VALUE("fold", "fold LIST_OR_LINES INIT BLOCK [ARG ...]", "Combine items, left to right", fold_command),
+    VALUE("format", "format TEMPLATE [ARG ...]", "Fill {} and {N} in TEMPLATE with ARGs, as Python's str.format", format_command),
+    VALUE("concat", "concat [VALUE ...]", "Join text and list items without a separator", concat_command),
+    VALUE("retry", "retry N [every SECONDS] BLOCK [ARG ...]", "Call a block until it succeeds, at most N times", retry_command),
     VALUE("repeat", "repeat N BLOCK [ARG ...]", "Call a block N times with ARGs; list the results", repeat_command),
-    VALUE("try", "try [INPUT] BLOCK FALLBACK", "Return FALLBACK if the block fails", try_command),
+    VALUE("try", "try [INPUT] BLOCK FALLBACK", "Return FALLBACK, or a handler block's result for the error, if the block fails", try_command),
     VALUE("or", "or [INPUT] BLOCK FALLBACK", "Return FALLBACK if the block mismatches", or_command),
     VALUE("if", "if [VALUE] COND THEN [elif COND THEN ...] [else ELSE]",
           "Run THEN for the first COND that holds, else ELSE", if_command),

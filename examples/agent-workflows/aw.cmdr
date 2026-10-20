@@ -15,4 +15,4 @@ def cli-audit { (a) cli-args $a 2 | nth 2 | aw.target-path | with { (t) aw.audit
 def cli-fix { (a) cli-args $a 3 | nth 3 | read | aw.target-bug $(nth $a 2) | with { (t) aw.fix-steps | with { (d) cli-steps $a 3 $d | with { (s) aw.workflow $t bug $s } } } }
 def cli-build { (a) cli-args $a 3 | nth 3 | read | aw.target-feature $(nth $a 2) | with { (t) aw.build-steps | with { (d) cli-steps $a 3 $d | with { (s) aw.workflow $t feature $s } } } }
 
-script-args | with { (a) cli-args $a 1 | first | with { (c) list ask edit chain audit fix build | check { any { equals $c } } $cli-usage | $c | with { (n) list cli- $n | concat } | with { (cmd) list $a | map $cmd | concat } } }
+script-args | with { (a) cli-args $a 1 | first | with { (c) list ask edit chain audit fix build | check { any { equals $c } } $cli-usage | $c | with { (n) concat cli- $n } | with { (cmd) list $a | map $cmd | concat } } }

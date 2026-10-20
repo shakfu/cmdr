@@ -6,7 +6,8 @@ scope: source.cmdr
 file_extensions: [cmdr]
 
 variables:
-  word: '[^\s|{}''"$\\]+'
+  # No command name holds '(' or ')', so $(upper) ends at its ')'.
+  word: '[^\s|{}()''"$\\]+'
   # Line start, or after an unescaped '|' or a '{'.
   stage: '(?:^|(?<=^[|{])|(?<=[^\\][|{]))\s*'
 
@@ -55,7 +56,7 @@ contexts:
       captures:
         1: keyword.operator.assignment.cmdr
         2: constant.other.cmdr
-    - match: '[A-Za-z][A-Za-z0-9_-]*'
+    - match: '[A-Za-z][A-Za-z0-9_-]*|\b_\b'
       scope: variable.parameter.cmdr
 
   after-params:
@@ -69,7 +70,12 @@ contexts:
   argument:
     - match: '\|'
       scope: keyword.operator.pipe.cmdr
-    - match: '\$[A-Za-z][A-Za-z0-9_-]*'
+    # A sub-pipeline: '$(' to the ')' that balances it; its first word is a command.
+    - match: '\$\('
+      scope: punctuation.section.group.begin.cmdr
+      push: [sub, sub-command]
+    # A reference may name a module's binding: $NAME.DEF.
+    - match: '\$[A-Za-z][A-Za-z0-9_-]*(?:\.[A-Za-z][A-Za-z0-9_-]*)*'
       scope: variable.other.cmdr
     - match: "'[^']*'"
       scope: string.quoted.single.cmdr
@@ -78,8 +84,33 @@ contexts:
       push: double-quoted
     - match: '\\.'
       scope: constant.character.escape.cmdr
-    - match: '(?<![^\s])-?(?:0[xX][0-9a-fA-F]+|\d+(?:\.\d+)?(?:[eE][-+]?\d+)?)(?![^\s|}])'
+    - match: '(?<![^\s])-?(?:0[xX][0-9a-fA-F]+|\d+(?:\.\d+)?(?:[eE][-+]?\d+)?)(?![^\s|})])'
       scope: constant.numeric.cmdr
+
+  sub:
+    - meta_scope: meta.group.sub-pipeline.cmdr
+    - match: '\)'
+      scope: punctuation.section.group.end.cmdr
+      pop: true
+    - match: '\('
+      push: paren
+    - include: line
+
+  sub-command:
+    - match: '\s*({{word}})'
+      captures:
+        1: variable.function.cmdr
+      pop: true
+    - match: '(?=\S)|$'
+      pop: true
+
+  # Unquoted parentheses inside a sub-pipeline balance.
+  paren:
+    - match: '\)'
+      pop: true
+    - match: '\('
+      push: paren
+    - include: line
 
   double-quoted:
     - meta_scope: string.quoted.double.cmdr

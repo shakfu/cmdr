@@ -55,7 +55,7 @@ Without it, each computed argument needs a `with` to name it first, one level pe
 
 ```text
 cmdr> read notes.txt | as notes
-cmdr> text notes.txt has $(lines $notes | count) lines and $(length $notes) bytes
+cmdr> text notes.txt has $($notes | lines | count) lines and $($notes | length) bytes
 notes.txt has 3 lines and 14 bytes
 ```
 
@@ -133,6 +133,8 @@ These are the primitives, in [src/primitives.c](src/primitives.c). Extensions ad
 | Commands | Behavior |
 | --- | --- |
 | `text [ARG ...]` | Join arguments with spaces |
+| `concat [VALUE ...]` | Join text, and list items, without a separator |
+| `format TEMPLATE [ARG ...]` | Fill `{}` and `{N}` in TEMPLATE with ARGs, as Python's `str.format` |
 | `upper`, `lower`, `trim`, `length` TEXT | Case, whitespace, byte length |
 | `replace TEXT OLD NEW` | Replace all literal matches; OLD is nonempty |
 | `take TEXT N`, `drop TEXT N` | Keep or drop the first N bytes |
@@ -150,8 +152,9 @@ These are the primitives, in [src/primitives.c](src/primitives.c). Extensions ad
 | `with VALUE BLOCK [ARG ...]` | Call a block with VALUE |
 | `fold VALUE INIT BLOCK [ARG ...]` | Combine items left to right; the block takes the result so far and the item |
 | `repeat N BLOCK [ARG ...]` | Call a block N times with only ARGs; list the results |
+| `retry N [every SECONDS] BLOCK [ARG ...]` | Call a block until it succeeds, at most N times |
 | `if [VALUE] COND THEN [elif COND THEN ...] [else ELSE]` | Run the THEN of the first COND that holds, else ELSE |
-| `try [INPUT] BLOCK FALLBACK` | Return FALLBACK if the block fails |
+| `try [INPUT] BLOCK FALLBACK` | Return FALLBACK if the block fails, or call a FALLBACK block with the error |
 | `or [INPUT] BLOCK FALLBACK` | Return FALLBACK if the block mismatches |
 | `check [INPUT] BLOCK MESSAGE` | Mismatch with MESSAGE if the block mismatches |
 | `nonempty VALUE`, `equals TEXT X`, `contains TEXT X`, `matches TEXT REGEX`, `lt`/`gt`/`le`/`ge NUMBER X` | Predicates; REGEX is POSIX extended |
@@ -178,7 +181,28 @@ List commands accept lists or newline-separated text; in text, a final newline e
 
 **Predicates** return their input when they hold, so they compose mid-pipeline. When they do not hold they fail with a mismatch, which `keep`, `not`, and `try` treat as false. Any other failure is an error, including one inside the block. Empty text and `"0"` are not false.
 
-**`try`** returns the block's result, or FALLBACK if it fails at run time. Its arity is checked first, so a typo or a missing input is an error, not a fallback. `each { try { read } "" }` reads each file or substitutes empty text.
+**`try`** returns the block's result, or FALLBACK if it fails at run time. Its arity is checked first, so a typo or a missing input is an error, not a fallback. `each { try { read } "" }` reads each file or substitutes empty text. A FALLBACK block is a handler: it receives the error message, as Python's `except E as e` binds it, and its result is `try`'s.
+
+```text
+cmdr> try { () read config.txt } { (e) concat "no config: " $e }
+no config: read config.txt: No such file or directory
+```
+
+**`concat`** joins its arguments without a separator: text adds itself and a list its items, so `list a b | concat` and `concat "### " $f "\n"` both work.
+
+**`format`** fills a template, as Python's `str.format` without format specifications. `{}` takes the next argument and `{N}` argument N from 0, so a value can appear twice; `{{` and `}}` are braces. An argument no field uses is an error, where Python ignores it. Use `format` when the result reads as a sentence, or the template is data, as from a file; `concat` when joining parts.
+
+```text
+cmdr> format "{} has {} lines." notes.txt $(read notes.txt | lines | count)
+notes.txt has 3 lines.
+cmdr> read greeting.tmpl | format $user
+```
+
+**`retry`** calls its block until a call succeeds, at most N times, and returns that result; if all fail, it fails with the last failure, a mismatch kept as one. `every SECONDS` waits between attempts, which a block cannot do itself, since its stages pipe into each other. Ctrl-C ends the wait.
+
+```text
+cmdr> retry 30 every 1 { () run curl -sf http://localhost:8080/health }
+```
 
 **`or`** is `try` for predicates: only a mismatch selects FALLBACK, and errors propagate. `with` passes a computed value to any argument position: `length $x | with { (n) drop $s $n }`. `check` replaces a mismatch's message, so a composed predicate can report `b is not a` instead of the commands it is built from.
 

@@ -72,6 +72,16 @@
 
 - `-DCMDR_EXAMPLES=OFF` skips building `cmdr-snd` and `cmdr-midi` and their tests. It defaults to `ON`, so `make test` still runs the examples' tests.
 
+- The Vim, Sublime, and VS Code grammars in `editors/` mark `$(...)`: `$(` and its balancing `)` as punctuation, and the first word inside as a command. They also mark `_` parameters and `$MODULE.NAME` references.
+
+- `concat [VALUE ...]` joins its arguments without a separator, a list contributing its items; it was a prelude definition over one list. Text was built as `list ... | concat` 69 times in the repository's scripts; `concat "### " $f` needs no `list`. Variadic `concat` over a `format` command, which would add a placeholder language. Text input is no longer split into lines first, so its newlines stay.
+
+- `format TEMPLATE [ARG ...]` fills `{}` and `{N}` in TEMPLATE, as Python's `str.format` without format specifications; `{{` and `}}` are braces. `concat` cannot put text directly after a `$(...)`, and its quoted pieces hide a sentence's shape; `format` keeps the template whole, and a template can be read from a file. An argument no field uses is an error, where Python ignores it, as cmdr rejects a parameter no block uses.
+
+- `try`'s FALLBACK, when a block, is called with the error message, as Python's `except E as e`. Before, the reason was lost: `aw`'s edit-stage replaced every parse failure with one message, and now names the part that was missing. Breaking: a block as FALLBACK was returned as a value; `or` still returns one so.
+
+- `retry N [every SECONDS] BLOCK [ARG ...]` calls a block until it succeeds, at most N times, waiting SECONDS between attempts. A `def` cannot recurse and `repeat` runs a fixed count, so polling and retries could not be written. A bounded retry over `while COND`, since cmdr values carry no state between iterations; the wait is part of `retry`, since a block's stages pipe into each other.
+
 - `$(PIPELINE)` is an argument whose value is PIPELINE's result: `text has $(read f | lines | count) lines`. An argument could only be a literal, a `$name`, or a block, so each computed argument needed a `with` to name it first; 372 of the 430 `with` blocks in the repository's scripts existed only for that. It runs before its stage's command, left to right, with no input, and is checked with its line. `$(...)` over `(...)`, which would change the meaning of existing text such as `(a)`. See [docs/dev/missing-syntax.md](docs/dev/missing-syntax.md).
 
 - `if [VALUE] COND THEN [elif COND THEN ...] [else ELSE]` runs the THEN of the first COND that holds, else ELSE, each with VALUE. Only the chosen branch runs. `or`, `try`, and `check` compute their fallback first, so a branch that fails or has effects needed workarounds: `midi.seq` substituted `0` for a rest's key so the unused note would not fail. An error in a COND propagates, unlike `try`. `else` and `elif` are words, as `as` is in `import`, over a positional fourth block, which reads poorly beside three others and allows no third branch. See [docs/dev/missing-syntax.md](docs/dev/missing-syntax.md).

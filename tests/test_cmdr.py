@@ -3,6 +3,7 @@ import json
 import os
 import re
 import shutil
+import signal
 from pathlib import Path
 import subprocess
 import sys
@@ -167,8 +168,9 @@ class Commands(unittest.TestCase):
             ("list a b | try { map upper } fallback | join ,", 'A,B\n'),
             ("list hello world | each { try { upper } fallback } | join ,", 'HELLO,WORLD\n'),
             ("try { () list a } '' | count", '1\n'),
-            # A fallback block is returned as a value, not called.
-            ("text x | try { equals y } { upper }", '{ upper }\n'),
+            # A fallback block is a handler: it receives the error message.
+            ("text x | try { equals y } { upper }", 'EQUALS: X DIFFERS FROM Y\n'),
+            ("try { () read /nonexistent } { (e) concat 'caught: ' $e }", 'caught: read /nonexistent: No such file or directory\n'),
         ]
         for source, expected in cases:
             with self.subTest(source=source):
@@ -383,6 +385,71 @@ class Commands(unittest.TestCase):
                           error='read /nonexistent')
             self.assertEqual(log.read_text(), 'x')
 
+    def test_concat_format_try_retry(self):
+        cases = [
+            # concat: text adds itself, a list its items.
+            ("concat a b c", 'abc\n'),
+            ("list a b | concat", 'ab\n'),
+            ("concat '### ' x $(list y z)", '### xyz\n'),
+            ("concat | length", '0\n'),
+            ('text "a\nb\n" | concat | length', '4\n'),
+            # format: {} in order, {N} by position from 0, {{ and }} are braces.
+            ("format '{} has {} lines.' notes.txt 3", 'notes.txt has 3 lines.\n'),
+            ("format '{0} and {0}, {1}' a b", 'a and a, b\n'),
+            ("format 'braces: {{x}}'", 'braces: {x}\n'),
+            ("text '{} + {}' | format 1 2", '1 + 2\n'),          # A piped template.
+            ("format plain", 'plain\n'),
+            # try's handler block receives the error message.
+            ("text a | try { equals b } { (e) text got $e }", 'got equals: a differs from b\n'),
+            ("try { () text ok } { (e) text $e }", 'ok\n'),
+            # retry: the first success; with every, no wait before it.
+            ("retry 3 every 5 { () text ok }", 'ok\n'),
+            ("retry 2 { (a b) text $a $b } p q", 'p q\n'),
+            ("list a b | keep { (x) retry 2 { () equals $x a } } | join ,", 'a\n'),
+        ]
+        for source, expected in cases:
+            with self.subTest(source=source):
+                self.run_line(source, expected)
+        errors = [
+            ("concat a $(list x | each { (y) list $y })", 'concat: argument 2 holds a list'),
+            ("concat { upper }", 'concat: argument 1 is a block'),
+            ("try { () read /x } { (a b) text $a $b }", 'try: block takes 2 arguments, got 1'),
+            ("format '{}' a b", 'format: argument 1 is unused'),
+            ("format '{} {}' a", 'format: field 1 has no argument; 1 given'),
+            ("format '{} {0}' a", 'format: cannot mix {} and {N}'),
+            ("format 'a } b'", "format: a single '}' in the template; write }} for a brace"),
+            ("format 'a { b'", "format: '{' without '}' in the template; write {{ for a brace"),
+            ("format '{x}' a", "format: invalid field '{x}'; use {} or {N}"),
+            ("format '{}' $(list a b)", 'format: argument 0 is a list; join it first'),
+            ("format", 'usage: format TEMPLATE'),
+            ("try { () read /x } { (e) bogus }", 'unknown command: bogus'),
+            ("try { () read /x } { (e) add $e 1 }", 'invalid finite number: read /x'),
+            ("retry 3 { () equals a b }", 'retry: 3 attempts failed: equals: a differs from b'),
+            ("retry 0 { () text x }", 'retry: N 0 is not 1 to 10000000'),
+            ("retry 2 every -1 { () text x }", 'retry: SECONDS -1 is below 0'),
+            ("retry 2 every x { () text x }", 'invalid finite number: x'),
+            ("retry 2 every 1", 'usage: retry N [every SECONDS] BLOCK'),
+        ]
+        for source, error in errors:
+            with self.subTest(source=source):
+                self.run_line(source, error=error)
+        # every waits between attempts: two waits for three attempts.
+        start = time.monotonic()
+        self.run_line("retry 3 every 0.2 { () equals a b }", error='3 attempts failed')
+        self.assertGreaterEqual(time.monotonic() - start, 0.4)
+        # An interrupt ends the wait, and cmdr exits by SIGINT.
+        proc = subprocess.Popen([str(BINARY), '-c', 'retry 100 every 10 { () equals a b }'],
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        time.sleep(0.5)
+        start = time.monotonic()
+        proc.send_signal(signal.SIGINT)
+        out, err = proc.communicate(timeout=5)
+        self.assertLess(time.monotonic() - start, 3)
+        self.assertEqual(proc.returncode, -signal.SIGINT, err)
+        self.assertIn('interrupted', err)
+        # A mismatch keeps its status, so not treats a failed retry as false.
+        self.run_line("text z | not { (x) retry 2 { () equals $x a } }", 'z\n')
+
     def test_if(self):
         # if [VALUE] COND THEN [elif COND THEN ...] [else ELSE]: the THEN of
         # the first COND that holds, else ELSE, each with VALUE.
@@ -596,7 +663,7 @@ class Commands(unittest.TestCase):
         self.assertIn("each item 1: inner: equals: y differs from x", result.stderr)
         # A block keeps the names it captured after its def returns.
         result = self.run_input(
-            "def adder { (n) try $n { equals never } { (x) add $x $n } }\n"
+            "def adder { (n) or $n { equals never } { (x) add $x $n } }\n"
             "def call { (b x) try $x $b none }\n"
             "adder 10 | call 5\n"
             "def without { (xs v) keep $xs { not { equals $v } } }\n"
@@ -1407,7 +1474,8 @@ class Commands(unittest.TestCase):
                   "def shout { (s) upper $s | text \"a\\tb\" 'x y' }\n"
                   "list 1 -2.5 a1 | each { gt 0 }\n"
                   "text a#b \\| c\n"
-                  "num.seq 1 3 | re.replace x '(a)' '\\1' | str.pad-left 3 0\n")
+                  "num.seq 1 3 | re.replace x '(a)' '\\1' | str.pad-left 3 0\n"
+                  "text $(upper (a)) $tones.hz $(take $x 3) $($n | length) | each { (_ y) text $y }\n")
         expected = [
             [('# note | x', 'cmdrComment')],
             [('def', 'cmdrKeyword'), ('shout', 'cmdrDefName'), ('s', 'cmdrParam'),
@@ -1421,6 +1489,14 @@ class Commands(unittest.TestCase):
             [('num.seq', 'cmdrCommand'), ('1', 'cmdrNumber'), ('re.replace', 'cmdrCommand'),
              ("'(a)'", 'cmdrString'), ("'\\1'", 'cmdrString'), ('str.pad-left', 'cmdrCommand'),
              ('3', 'cmdrNumber')],
+            # A sub-pipeline: its first word is a command, and parentheses balance;
+            # its plain text is in cmdrSub, which has no color.
+            [('text', 'cmdrCommand'), ('$(', 'cmdrSubDelim'), ('upper', 'cmdrCommand'), ('(a)', 'cmdrSub'),
+             (')', 'cmdrSubDelim'), ('$tones.hz', 'cmdrReference'), ('$(', 'cmdrSubDelim'),
+             ('take', 'cmdrCommand'), ('$x', 'cmdrReference'), ('3', 'cmdrNumber'), (')', 'cmdrSubDelim'),
+             ('$(', 'cmdrSubDelim'), ('$n', 'cmdrReference'), ('length', 'cmdrCommand'),
+             (')', 'cmdrSubDelim'), ('each', 'cmdrCommand'), ('_', 'cmdrParam'), ('y', 'cmdrParam'),
+             ('text', 'cmdrCommand'), ('$y', 'cmdrReference')],
         ]
         with tempfile.TemporaryDirectory() as directory:
             sample, out = Path(directory) / 'sample.cmdr', Path(directory) / 'groups'
@@ -1542,7 +1618,6 @@ class Commands(unittest.TestCase):
     def test_interrupt_script(self):
         # Ctrl-C stops the program, even one ignoring SIGINT, and cmdr exits
         # by SIGINT, so a calling shell stops too.
-        import signal
         with tempfile.TemporaryDirectory() as directory:
             pidfile = Path(directory) / 'pid'
             script = Path(directory) / 'script.cmdr'

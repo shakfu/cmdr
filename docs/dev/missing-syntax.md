@@ -1,6 +1,6 @@
 # Missing syntax
 
-Design exploration, 2026-10-20. Status: implemented.
+Design exploration, 2026-10-20. Status: implemented, except structured data, which TODO.md tracks.
 
 cmdr is a glue language: pipelines of commands over text and lists. Three gaps cost the most code in this repository's own scripts. Each section states the problem with counts, the proposal, examples rewritten from real files, and when not to use the feature.
 
@@ -196,6 +196,107 @@ after:  drums | midi.loop 4 | midi.stack $(melody | midi.loop 2) | midi.stack $b
 | Backticks, as old shells | No nesting without escapes; shells moved to `$(...)` for this reason |
 | An `as NAME` stage that binds within one pipeline (compose-ng.md, G1) | Names a value but still needs a stage per value; `$(...)` puts the computation where it is used |
 | Keep `with` | 372 single-use `with` blocks stay |
+
+## Library gaps
+
+The syntax above covers how a script composes. Three gaps remain in the commands, by the same count of this repository's scripts. A fourth, structured data, is a decision about the value model; see TODO.md.
+
+| Proposal | Fixes | Size |
+|-|-|-|
+| [`concat VALUE ...`](#concat-joining-text-without-list) | Building text with `list ... \| concat` | Small: one primitive replaces a prelude definition |
+| [`try`'s handler](#try-with-a-handler-block) | A fallback that cannot see why the block failed | Small: a branch in `try` |
+| [`retry`](#retry-attempts-until-success) | Polling and retries, which have no loop | Small: one primitive |
+
+### `concat`: joining text without `list`
+
+#### Problem
+
+`concat` joins one list's items, so text built from parts first collects them with `list`. The scripts hold 69 `list ... | concat`:
+
+```text
+list "### " $f "\n```\n" $c "\n```" | concat
+list "failed with status " $s ":\n" $e | concat
+```
+
+#### Proposal
+
+`concat VALUE ...` joins its arguments without a separator. A text argument adds itself; a list adds its items. So `list a b | concat` keeps its meaning, and the line above becomes:
+
+```text
+concat "### " $f "\n```\n" $c "\n```"
+```
+
+It is Python's `"".join`, over all arguments. A primitive replaces the prelude's `def concat { join "" }`.
+
+`format TEMPLATE ARG ...`, as Python's `str.format`, was the alternative, and was added beside `concat`. `concat` adds no syntax and suits joining parts. `format` keeps the result's shape in one string, so it suits a sentence, `format "{} has {} lines." $f $n`, where `concat` cannot put punctuation directly after a `$(...)`, and a template kept as data. Its fields are `{}` and `{N}`, with `{{` and `}}` for braces; an unused argument is an error, unlike Python.
+
+#### Use it
+
+```text
+concat cli- $n
+concat "sandbox unavailable: " $e
+concat $base $(by-mode $mode "" $llama-format)
+```
+
+#### Don't use it
+
+- **To join with a separator.** Use `join LIST SEP`, or `text`, which separates with spaces.
+- **On a list whose items are lists.** An item must be text; `concat` fails otherwise, as `join` does.
+
+### `try` with a handler block
+
+#### Problem
+
+`try [INPUT] BLOCK FALLBACK` returns FALLBACK on any failure, and the reason is lost. The scripts hold 39 `try`. `aw`'s `edit-stage` replaces every parse failure with one fixed message, though `edit-parse` reports which part was missing:
+
+```text
+list "" "" "" "malformed edit block: expected a file path alone on a line, SEARCH, =======, and REPLACE" | with { (bad) try $c { (x) edit-parse $d $x } $bad }
+```
+
+#### Proposal
+
+If FALLBACK is a block, `try` calls it with the error message, without cmdr's `cmdr: ` prefix, and returns its result. Python's `except E as e`. A FALLBACK that is text or a list is returned as now. The handler's arity is checked with BLOCK's, before either runs. An error in the handler propagates. An interrupt is still not caught.
+
+#### Use it
+
+```text
+try $c { (x) edit-parse $d $x } { (e) list "" "" "" $(concat "malformed edit block: " $e) }
+try { () read config.txt } { (e) concat "# defaults: " $e }
+```
+
+#### Don't use it
+
+- **When the reason does not matter.** `try { read } ""` is shorter.
+- **To branch on a predicate.** A mismatch is not an error; use `if` or `or`, which let errors through.
+
+### `retry`: attempts until success
+
+#### Problem
+
+A `def` cannot call itself, and `repeat` runs a fixed number of times, so "until it succeeds" cannot be written. `aw`'s llama adapter retries once by hand; a script that polls a server or a file cannot poll at all.
+
+#### Proposal
+
+`retry N [every SECONDS] BLOCK [ARG ...]` calls BLOCK with the ARGs until a call succeeds, at most N times, and returns that call's result. With `every`, it waits SECONDS between attempts, not before the first; an interrupt ends the wait. If every call fails, it fails with the last failure, its status kept, so a mismatch stays a mismatch. Each failure counts: an error or a mismatch. An interrupt stops it. N is 1 to 10,000,000, as for `repeat`.
+
+`retry` over `until COND` or `while COND`: a loop over a condition needs state that changes between iterations, which cmdr values do not have; an attempt that can fail is what scripts need. N bounds it, so it cannot run forever as recursion could.
+
+The wait is part of `retry`, not of BLOCK, because a block cannot run two commands in turn without piping one into the next: `run sleep 1 | run curl ...` passes sleep's output to `run` as its program. `every` is a word, as `else` is in `if`.
+
+#### Use it
+
+```text
+# Wait for a server: up to 30 attempts, a second apart.
+retry 30 every 1 { () run curl -sf http://localhost:8080/health }
+
+# Until a file appears: a mismatch from fs.is-file is a failed attempt.
+retry 50 every 0.2 { () fs.is-file out.json }
+```
+
+#### Don't use it
+
+- **For a fixed number of independent calls.** Use `repeat`, which keeps every result.
+- **Around an effect that is not safe to repeat,** such as `append`. Each attempt repeats the effects before its failure.
 
 ## Cost
 
