@@ -156,6 +156,7 @@ add_test(NAME consumer
           "${CMAKE_CURRENT_SOURCE_DIR}/consumer" "${CMAKE_BINARY_DIR}/consumer"
           --build-generator "${CMAKE_GENERATOR}"
           --build-options "-DCMAKE_PREFIX_PATH=${CMDR_STAGED}"
+                          "-DCMDR_REQUIRED_VERSION=${PROJECT_VERSION_MAJOR}.${PROJECT_VERSION_MINOR}"
           --test-command ${CMAKE_CTEST_COMMAND} --output-on-failure)
 set_tests_properties(install PROPERTIES FIXTURES_SETUP staged)
 set_tests_properties(consumer PROPERTIES FIXTURES_REQUIRED staged TIMEOUT 120)

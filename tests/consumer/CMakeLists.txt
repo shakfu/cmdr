@@ -3,7 +3,9 @@ cmake_minimum_required(VERSION 3.16)
 project(cmdr_consumer LANGUAGES C)
 enable_testing()
 
-find_package(cmdr 0.1 CONFIG REQUIRED)
+# The consumer test passes the version it built; before 1.0 only the same
+# minor version is compatible.
+find_package(cmdr ${CMDR_REQUIRED_VERSION} CONFIG REQUIRED)
 set(targets cmdr::static)
 if(TARGET cmdr::shared)
   list(APPEND targets cmdr::shared)

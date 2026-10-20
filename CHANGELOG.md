@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## [0.2.0]
+
 ### Changed
 
 - `path-ext` takes the basename first and mismatches when it has no extension. `Makefile` gave `Makefile`, `.bashrc` gave `bashrc`, and `a.b/c` gave `b/c`. A mismatch over Python's empty text, so `or` supplies a default and `path-ext` agrees with `path-has-ext`.

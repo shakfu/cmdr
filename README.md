@@ -34,7 +34,7 @@ The REPL edits lines with a vendored copy of linenoise, in [thirdparty/linenoise
 
 - `./cmdr --version` prints the version.
 
-The REPL starts with a line such as `cmdr 0.1.0 (prelude: standard)`, or the prelude's path with `--user`, in bold cyan where the prompt has color.
+The REPL starts with a line such as `cmdr 0.2.0 (prelude: standard)`, or the prelude's path with `--user`, in bold cyan where the prompt has color.
 
 Errors go to stderr; the exit status is nonzero if any line failed. Ctrl-C while a line runs stops it, and cmdr exits by SIGINT, so a calling shell stops too. A running program gets SIGTERM, then SIGKILL a second later, so one that ignores SIGINT does not outlive cmdr. Lines starting with `#`, including a `#!/usr/bin/env cmdr` shebang, are comments. A line ending in an unescaped `|` continues on the next line; blank and comment lines inside a continuation are skipped. Quotes and blocks cannot span lines otherwise: write a newline as `\n`, and end a line inside a block with `|` to continue it.
 
@@ -401,7 +401,7 @@ cmake -S . -B build && cmake --build build
 cmake --install build --prefix /usr/local
 ```
 
-This installs `cmdr`, `libcmdr.a`, `libcmdr.so`, `cmdr.h`, a CMake package, and `cmdr.pc`. A CMake host uses `find_package(cmdr)` and links `cmdr::static` or `cmdr::shared`; others use `pkg-config --cflags --libs cmdr`. `-DCMDR_SHARED=OFF` builds only the static library. The shared library's soname is `libcmdr.so.0.1`, since a minor version may break the API before 1.0.
+This installs `cmdr`, `libcmdr.a`, `libcmdr.so`, `cmdr.h`, a CMake package, and `cmdr.pc`. A CMake host uses `find_package(cmdr)` and links `cmdr::static` or `cmdr::shared`; others use `pkg-config --cflags --libs cmdr`. `-DCMDR_SHARED=OFF` builds only the static library. The shared library's soname is `libcmdr.so.0.2`, since a minor version may break the API before 1.0.
 
 Syntax highlighting for Vim, Sublime Text, and VS Code is in [editors/](editors/README.md).
 
