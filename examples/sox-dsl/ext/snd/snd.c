@@ -462,12 +462,21 @@ static size_t read_wide(const run *r, sox_format_t *ft, sox_sample_t *buf, size_
     return sox_read(ft, buf, len * ft->signal.channels) / ft->signal.channels;
 }
 
+/* Round and clip to a sample, counting clips, as SOX_ROUND_CLIP_COUNT does.
+ * That macro uses SOX_SAMPLE_MIN, which shifts 1 by 31 bits in an int. */
+static sox_sample_t clip(double d, sox_uint64_t *clips)
+{
+    if (d <= INT32_MIN - 0.5) return ++*clips, INT32_MIN;
+    if (d >= INT32_MAX + 0.5) return ++*clips, INT32_MAX;
+    return (sox_sample_t)(d < 0 ? d - 0.5 : d + 0.5);
+}
+
 static void balance(sox_sample_t *buf, size_t wide, const file_spec *f, sox_uint64_t *clips)
 {
     if (f->volume == 1 || f->volume == HUGE_VAL) return;
     for (size_t s = 0; s < wide * f->ft->signal.channels; ++s) {
         double d = f->volume * buf[s];
-        buf[s] = SOX_ROUND_CLIP_COUNT(d, *clips);
+        buf[s] = clip(d, clips);
     }
 }
 
@@ -523,9 +532,9 @@ static int combiner_drain(sox_effect_t *effp, sox_sample_t *obuf, size_t *osamp)
                     unsigned ch = r->inputs[i].ft->signal.channels;
                     double x = ws < z->ilen[i] && s < ch ? z->ibuf[i][ws * ch + s] : 0;
                     /* multiply scales products back to the sample range. */
-                    acc = r->method != MULTIPLY ? acc + x : i ? acc * x * (-1. / SOX_SAMPLE_MIN) : x;
+                    acc = r->method != MULTIPLY ? acc + x : i ? acc * x * (-1. / INT32_MIN) : x;
                 }
-                *p = SOX_ROUND_CLIP_COUNT(acc, effp->clips);
+                *p = clip(acc, &effp->clips);
             }
         }
     }

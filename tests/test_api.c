@@ -307,10 +307,45 @@ static void threads(void)
     CHECK(a.status == 0 && b.status == 0);
 }
 
+/* Return the block argument, so the test can call it through the API. */
+static int keep_block(const cmdr *repl, void *user, size_t argc, const cmdr_value *argv,
+                      cmdr_value *result, char **error)
+{
+    if (argc != 1 || argv[0].kind != CMDR_BLOCK) return cmdr_error(error, "usage: keep-block BLOCK");
+    return cmdr_clone(&argv[0], result, error);
+}
+
+/* A block with a default accepts 1 or 2 arguments; cmdr_run fills the second. */
+static void block_defaults(void)
+{
+    const cmdr_command commands[] = {{.name = "keep-block", .run = keep_block}};
+    const cmdr table = {commands, 1, &cmdr_primitives};
+    cmdr_session *session = cmdr_session_open(&table, 1, NULL);
+    cmdr_value block, out;
+    char *error;
+    CHECK(!cmdr_session_eval(session, "keep-block { (a b=2) text $a $b }", &block, &error));
+    CHECK(block.kind == CMDR_BLOCK);
+    CHECK(!cmdr_block_arity(&block, 1, &error) && !cmdr_block_arity(&block, 2, &error));
+    CHECK(cmdr_block_arity(&block, 0, &error) && strstr(error, "block takes 1 to 2 arguments, got 0"));
+    free(error);
+    CHECK(cmdr_block_arity(&block, 3, &error));
+    free(error);
+    cmdr_value args[] = {cmdr_text("x", 1), cmdr_text("y", 1)};
+    CHECK(!cmdr_run(&block, 1, args, &out, &error) && !strcmp(out.text, "x 2"));
+    cmdr_free(&out);
+    CHECK(!cmdr_run(&block, 2, args, &out, &error) && !strcmp(out.text, "x y"));
+    cmdr_free(&out);
+    cmdr_free(&args[0]);
+    cmdr_free(&args[1]);
+    cmdr_free(&block);
+    cmdr_session_close(session);
+}
+
 int main(void)
 {
     host_commands();
     definitions();
+    block_defaults();
     scripts();
     script_args();
     sandbox();

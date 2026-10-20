@@ -11,8 +11,10 @@ syn match cmdrDefName /[^ \t|{}'"$\\]\+/ contained
 syn match cmdrPipe /|/
 syn match cmdrBrace /[{}]/
 syn region cmdrParams matchgroup=cmdrBrace start=/{\@1<=\s*(/ end=/)/ oneline
-      \ contains=cmdrParam nextgroup=cmdrCommand skipwhite
+      \ contains=cmdrParam,cmdrDefault nextgroup=cmdrCommand skipwhite
 syn match cmdrParam /\a[A-Za-z0-9_-]*/ contained
+" A parameter's default, from '=' to the next space or ')'.
+syn match cmdrDefault /=[^ \t)]*/ contained
 syn match cmdrCommand /[^ \t|{}'"$\\]\+/ contained
 
 syn match cmdrReference /\$\a[A-Za-z0-9_-]*/
@@ -33,6 +35,7 @@ hi def link cmdrDefName Identifier
 hi def link cmdrPipe Operator
 hi def link cmdrBrace Delimiter
 hi def link cmdrParam Identifier
+hi def link cmdrDefault Constant
 hi def link cmdrReference Identifier
 hi def link cmdrEscape SpecialChar
 hi def link cmdrString String

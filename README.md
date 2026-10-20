@@ -62,6 +62,16 @@ a,c
 
 - `{ (a b) ... }` declares parameters, referenced as `$a` and `$b`. A block takes exactly the arguments it declares. `{ ... }` takes one input, received by pipe; `{ () ... }` takes none.
 
+- A parameter after the first may have a default: `{ (chain amount=50) ... }`. A call may omit it, and parameters after it need defaults too. A default is one word without spaces, quotes, or `)`, or `""` for empty text. `help` shows it as `[AMOUNT=50]`. See [docs/dev/defaults.md](docs/dev/defaults.md).
+
+  ```text
+  cmdr> def greet { (name greeting=hello) text $greeting $name }
+  cmdr> greet bob
+  hello bob
+  cmdr> greet bob hi
+  hi bob
+  ```
+
 - Declared parameters appear only where named, and each must be used. Only `{ ... }` pipes its input into its first stage, so a block can start from something else: `{ (w) read app.log | contains $w }`.
 
 - Each later stage receives the previous result first. A stage that is a lone `$name` makes that value the result.

@@ -168,22 +168,34 @@ static int valid_name(const char *name)
     return 1;
 }
 
-/* Help syntax from the block: "NAME A B" for { (a b) ... }, "NAME VALUE" for
- * { ... }, which takes one piped input. */
+/* Help syntax from the block: "NAME A [B=1]" for { (a b=1) ... }, "NAME VALUE"
+ * for { ... }, which takes one piped input. The block's line compiled it, so
+ * its parameter list is valid. */
 static char *usage_of(const char *name, const char *block)
 {
     const char *p = block;
     while (isspace((unsigned char)*p)) ++p;
     size_t n = strlen(name);
-    char *usage = cmdr_realloc(NULL, n + strlen(p) + sizeof(" VALUE"), 1), *u = usage + n;
+    /* Each parameter gains at most a space and two brackets. */
+    char *usage = cmdr_realloc(NULL, n + 2 * strlen(p) + sizeof(" VALUE"), 1), *u = usage + n;
     memcpy(usage, name, n);
-    if (*p != '(') u += sprintf(u, " VALUE");
-    else
-        for (++p; *p && *p != ')'; ++p)
-            if (!isspace((unsigned char)*p)) {
-                if (p[-1] == '(' || isspace((unsigned char)p[-1])) *u++ = ' ';
-                *u++ = (char)toupper((unsigned char)*p);
+    if (*p != '(') {
+        u += sprintf(u, " VALUE");
+    } else {
+        for (++p; *p && *p != ')';) {
+            if (isspace((unsigned char)*p)) { ++p; continue; }
+            const char *start = p;
+            while (*p && !isspace((unsigned char)*p) && *p != ')' && *p != '=') ++p;
+            int has_default = *p == '=';
+            *u++ = ' ';
+            if (has_default) *u++ = '[';
+            for (const char *c = start; c < p; ++c) *u++ = (char)toupper((unsigned char)*c);
+            if (has_default) {
+                while (*p && !isspace((unsigned char)*p) && *p != ')') *u++ = *p++;
+                *u++ = ']';
             }
+        }
+    }
     *u = '\0';
     return usage;
 }

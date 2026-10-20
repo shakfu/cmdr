@@ -1,9 +1,6 @@
 # Minimal cmdr
 
-The `minimal` branch reduces the C implementation at `532dc6c`. C source went
-from 2384 to 1284 lines, and the binary from 234 KB to 175 KB.
-[compose-ng.md](compose-ng.md) predates this change and still describes `as`
-and captured failures.
+The `minimal` branch reduces the C implementation at `532dc6c`. C source went from 2384 to 1284 lines, and the binary from 234 KB to 175 KB. [compose-ng.md](compose-ng.md) predates this change and still describes `as` and captured failures.
 
 ## Removed
 
@@ -19,15 +16,12 @@ and captured failures.
 
 ## Behavior changes
 
-- `try` checks its body first. Syntax, name, and arity errors are reported,
-  not replaced by FALLBACK, as `keep` and `not` already did.
-- `try` needs FALLBACK, so `try BODY` with one argument is a usage error.
-  With a piped value, `try` takes three arguments; without, two.
-- Freeing, cloning, and printing values recurse. `cmdr_clone` rejects values
-  nested more than 1024 deep. Every stage clones its input or builds flat
-  lists, so no value grows deeper than that limit.
-- Composed-command depth is a counter in `cmdr_call`, not a field copied on
-  each call.
+- `try` checks its body first. Syntax, name, and arity errors are reported, not replaced by FALLBACK, as `keep` and `not` already did.
 
-Making list commands always return lists was tried and reverted. It saved
-about 10 lines, but `read FILE | sort | upper` then needed `map upper`.
+- `try` needs FALLBACK, so `try BODY` with one argument is a usage error. With a piped value, `try` takes three arguments; without, two.
+
+- Freeing, cloning, and printing values recurse. `cmdr_clone` rejects values nested more than 1024 deep. Every stage clones its input or builds flat lists, so no value grows deeper than that limit.
+
+- Composed-command depth is a counter in `cmdr_call`, not a field copied on each call.
+
+Making list commands always return lists was tried and reverted. It saved about 10 lines, but `read FILE | sort | upper` then needed `map upper`.

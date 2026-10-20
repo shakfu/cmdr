@@ -77,6 +77,17 @@
             "2": {
               "patterns": [
                 {
+                  "match": "(=)([^\\s)]*)",
+                  "captures": {
+                    "1": {
+                      "name": "keyword.operator.assignment.cmdr"
+                    },
+                    "2": {
+                      "name": "constant.other.cmdr"
+                    }
+                  }
+                },
+                {
                   "match": "[A-Za-z][A-Za-z0-9_-]*",
                   "name": "variable.parameter.cmdr"
                 }

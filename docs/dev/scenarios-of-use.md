@@ -167,8 +167,7 @@ files src | all { (f) path-basename $f | matches '^[a-z]+\.[ch]$' } | count
 files src | all { (f) path-basename $f | matches '^[a-z]\.c$' } | count
 ```
 
-Output: `3`. The second line fails:
-`all [src/a.c, src/b.c, src/util.h] { (f) path-basename $f | matches ...}: empty: not: [src/util.h] satisfies { nonempty }`.
+Output: `3`. The second line fails: `all [src/a.c, src/b.c, src/util.h] { (f) path-basename $f | matches ...}: empty: not: [src/util.h] satisfies { nonempty }`.
 
 - Fit: point 4 and point 5. The failure names the file that broke the rule.
 

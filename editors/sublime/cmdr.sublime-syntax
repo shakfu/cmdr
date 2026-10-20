@@ -50,6 +50,11 @@ contexts:
     - match: '\)'
       scope: punctuation.section.parameters.end.cmdr
       set: after-params
+    # A parameter's default, from '=' to the next space or ')'.
+    - match: '(=)([^\s)]*)'
+      captures:
+        1: keyword.operator.assignment.cmdr
+        2: constant.other.cmdr
     - match: '[A-Za-z][A-Za-z0-9_-]*'
       scope: variable.parameter.cmdr
 

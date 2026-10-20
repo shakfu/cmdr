@@ -1,6 +1,6 @@
 # Default parameter values
 
-Proposal, 2026-10-19, against `d191c3b` plus the working tree. Not implemented.
+Decision record, 2026-10-19, against `d191c3b` plus the working tree. Implemented as option 2, with the first-parameter rule. The code below is as merged, except where noted under Implementation notes.
 
 ## Background
 
@@ -45,12 +45,12 @@ The proposal: a trailing parameter may declare a default, `{ (chain amount=50) .
 |-|-|-|
 | A required argument is missing, as E2 | Error | Error: required parameters are unchanged |
 | Too many arguments | Error | Error: the maximum is the parameter count |
-| A block expects input and receives none | Error | Error, unless its first parameter has a default |
+| A block expects input and receives none | Error | Error: the first parameter cannot have a default |
 | A defaulted argument is omitted | Not expressible | Accepted; the default appears in the signature and in `help` |
 
 The new silent case is the last row, and it is the feature. It applies only to parameters whose author wrote a default.
 
-A block whose first parameter has a default accepts no input. `try { (a=1) add $a 1 } x` runs with `a` set to 1, where E2 failed. This is E2's shape, but the author wrote the default, so it is the behaviour asked for. Forbidding a default on the first parameter would block `def greet { (name=world) text hello $name }`, callable as `greet` and as `text bob | greet`. The proposal allows it.
+The first parameter cannot have a default. A block whose first parameter had one would accept no input, so `try { (a=1) add $a 1 } x` would run with `a` set to 1 where E2 fails: a forgotten pipe would pass silently. Every case in the evidence defaults a parameter after a required one: `reverb CHAIN [AMOUNT]`, `chain T SPECS [INPUT]`, `num-seq FIRST LAST [STEP]`. The rule costs forms such as `def greet { (name=world) ... }`, callable with or without a piped name. Allowing them later breaks no script; forbidding them after modules use them would.
 
 ### Blocks passed to commands
 
@@ -96,13 +96,17 @@ A bare default excludes whitespace, quotes, `\`, `|`, `$`, `{`, `}`, and `)`. Al
 ### What stays out
 
 - **Compile-time arity checks.** The count is still checked at call time. A def call's count is known when the line compiles: the stage's words, plus one for a piped value. Checking it then is a separate change, with or without defaults.
+
 - **Rest parameters,** `(first ...rest)`. No module needs one; `run-with` already flattens lists.
 
 ## Options
 
 1. **Exact arity, as now.** Write a second def for each short form, `effect "..."` for full sox syntax, or `""` with `or` in the body. No language change. Every module repeats the workaround.
+
 2. **Trailing literal defaults,** below. Required parameters keep the E2 check. About 140 lines across `src/cmdr.c`, `src/session.c`, `src/editor.c`, three grammars, `include/cmdr.h`, tests, and docs.
+
 3. **A sentinel argument.** Callers pass `""` and the body does `or $amount { nonempty } 50`. It works today, but every call site carries the empty argument, and a real empty value cannot be told apart from the sentinel.
+
 4. **Keyword arguments.** Rejected above: they change existing calls.
 
 Recommended: option 2.
@@ -118,13 +122,14 @@ default   = bare | '""' | "''"
 bare      = one or more characters other than whitespace, quotes, \ | $ { } )
 ```
 
-A parameter without a default may not follow one with a default.
+The first parameter has no default, and a parameter without a default may not follow one with a default. So a block with defaults takes at least one argument.
 
 ### Errors
 
 | Source | Error |
 |-|-|
-| `{ (a=1 b) ... }` | `parameter $b has no default but follows one that does` |
+| `{ (a=1) ... }`, `{ (a=1 b=2) ... }` | `parameter $a: the first parameter cannot have a default` |
+| `{ (a b=1 c) ... }` | `parameter $c has no default but follows one that does` |
 | `{ (a=) ... }`, `{ (a="x y") ... }`, `{ (a=$x) ... }` | `invalid default for $a in '{...}': use a word without spaces, quotes, or ')', or "" for empty text` |
 | `def r { (c a=50) ... }` then `r` | `command 'r' expects 1 to 2 arguments, got 0` |
 | `each { (s m=!) ... } x y` | `each: block takes 1 to 2 arguments, got 3` |
@@ -173,6 +178,12 @@ static size_t default_length(const char *p, int *empty)
     return n;
 }
 
+/* Whether p ends a parameter: whitespace, ')', or the end of the text. */
+static int param_end(const char *p)
+{
+    return !*p || isspace((unsigned char)*p) || *p == ')';
+}
+
     if (*p == '(') {
         code->declared = 1;
         for (++p;;) {
@@ -182,13 +193,20 @@ static size_t default_length(const char *p, int *empty)
             int has_default = n && p[n] == '=', empty = 0;
             if (has_default) vn = default_length(p + n + 1, &empty);
             const char *end = has_default ? p + n + 1 + vn : p + n;
-            if (!n || (*end && !isspace((unsigned char)*end) && *end != ')' && !has_default)) {
+            if (!n || (!has_default && !param_end(end))) {
                 status = cmdr_error(error, "invalid parameter list in '{%s}'", text);
                 break;
             }
-            if (has_default && (!vn || (*end && !isspace((unsigned char)*end) && *end != ')'))) {
+            if (has_default && (!vn || !param_end(end))) {
                 status = cmdr_error(error, "invalid default for $%.*s in '{%s}': use a word without "
                                     "spaces, quotes, or ')', or \"\" for empty text", (int)n, p, text);
+                break;
+            }
+            /* A first parameter with a default would let a block run without
+             * its input, the silent failure exact arity prevents. */
+            if (has_default && !code->params) {
+                status = cmdr_error(error, "parameter $%.*s: the first parameter cannot have a default",
+                                    (int)n, p);
                 break;
             }
             if (!has_default && code->required < code->params) {
@@ -397,7 +415,7 @@ VS Code, `editors/vscode/syntaxes/cmdr.tmLanguage.json`, first in the parameter 
              'hello bob\nhi bob\n'),
             ('def greet { (name greeting=hello) text $greeting $name }\ntext bob | greet\n',
              'hello bob\n'),
-            ('def two { (a=1 b=2) text $a $b }\ntwo\ntwo x\ntwo x y\n', '1 2\nx 2\nx y\n'),
+            ('def three { (a b=1 c=2) text $a $b $c }\nthree x\nthree x y\nthree x y z\n', 'x 1 2\nx y 2\nx y z\n'),
             ('def e { (a b="") list $a $b | join , }\ne x\n', 'x,\n'),
             ("def e { (a b='') list $a $b | join , }\ne x\n", 'x,\n'),
             # Blocks passed to commands take defaults too.
@@ -415,7 +433,9 @@ VS Code, `editors/vscode/syntaxes/cmdr.tmLanguage.json`, first in the parameter 
             ('def g { (a b=1) text $a $b }\ng\n', "command 'g' expects 1 to 2 arguments, got 0"),
             ('def g { (a b=1) text $a $b }\ng x y z\n', "command 'g' expects 1 to 2 arguments, got 3"),
             ('list a | each { (s m=!) text $s $m } x y\n', 'each: block takes 1 to 2 arguments, got 3'),
-            ('list a | each { (a=1 b) text $a $b }\n', 'parameter $b has no default but follows one that does'),
+            ('list a | each { (a b=1 c) text $a $b $c }\n', 'parameter $c has no default but follows one that does'),
+            ('list a | each { (a=1) text $a }\n', 'parameter $a: the first parameter cannot have a default'),
+            ('text 1 | try { (a=1 b=2) text $a $b } no\n', 'parameter $a: the first parameter cannot have a default'),
             ('list a | each { (a b=) text $a $b }\n', 'invalid default for $b'),
             ('list a | each { (a b="x y") text $a $b }\n', 'invalid default for $b'),
             ('list a | each { (a b=$a) text $a $b }\n', 'invalid default for $b'),
@@ -454,8 +474,11 @@ The existing exact-arity tests stay as they are. A block without defaults still 
 ### Documentation
 
 - `README.md`, "Blocks and definitions": "A block takes exactly the arguments it declares" becomes "A block takes the arguments it declares. Trailing parameters with defaults, `(chain amount=50)`, may be omitted." Add the `help` form.
+
 - `CHANGELOG.md`: one paragraph: the feature, trailing literal defaults over keyword arguments because `NAME=VALUE` words are ordinary arguments today, and a pointer here.
+
 - `blocks.md`: one line under Decision pointing here.
+
 - Editors README: no change; the grammars change in place.
 
 ### Migration candidates
@@ -469,10 +492,21 @@ These are optional; none is required.
 | `snd` | `def fade { (chain in out) ... }` | `(chain in out=0)`: fade in only |
 | `aw` | `chain` and `chain-from` | `def chain { (t specs input="") ... }`; keep `chain-from` as an alias for importers |
 
+### Implementation notes
+
+- The merged `compile_block` factors the end-of-parameter test into `param_end`, shown above.
+- `test_defaults` also covers a negative default, `fold`, and an alias bound with `from`. Each error case also checks that nothing printed.
+- The editor tests check only the prompt's colour, so `scan`'s split at `=` has no test of its own.
+- Running the suite under ASan and UBSan found undefined behaviour outside this change: `examples/sox-dsl/ext/snd` used libsox's `SOX_ROUND_CLIP_COUNT` and `SOX_SAMPLE_MIN`, which shift 1 by 31 bits in an `int`. It now clips with its own function.
+
 ### Order of work
 
 1. `src/cmdr.c` and `include/cmdr.h`, with `test_defaults` and the API test, under ASan and UBSan.
+
 2. `src/session.c` `usage_of`, with the `help` test.
+
 3. `src/editor.c` and the three grammars; `test_syntax_files` and the editor tests already parse them.
+
 4. README, CHANGELOG, and the `blocks.md` pointer.
+
 5. Migrations, each with its module's tests.

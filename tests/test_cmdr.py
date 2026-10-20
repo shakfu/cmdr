@@ -977,6 +977,62 @@ class Commands(unittest.TestCase):
             with self.subTest(source=source):
                 self.run_line(source, error=message)
 
+    def test_defaults(self):
+        cases = [
+            # Omitted trailing arguments take their defaults; given ones replace them.
+            ('def greet { (name greeting=hello) text $greeting $name }\ngreet bob\ngreet bob hi\n',
+             'hello bob\nhi bob\n'),
+            ('def greet { (name greeting=hello) text $greeting $name }\ntext bob | greet\n',
+             'hello bob\n'),
+            ('def three { (a b=1 c=2) text $a $b $c }\nthree x\nthree x y\nthree x y z\n',
+             'x 1 2\nx y 2\nx y z\n'),
+            ('def e { (a b="") list $a $b | join , }\ne x\n', 'x,\n'),
+            ("def e { (a b='') list $a $b | join , }\ne x\n", 'x,\n'),
+            ('def neg { (a b=-0.5) add $a $b }\nneg 1\n', '0.5\n'),
+            # Blocks passed to commands take defaults too.
+            ('list a b | each { (s mark=!) text $s $mark } | join ,\n', 'a !,b !\n'),
+            ('list a b | each { (s mark=!) text $s $mark } ? | join ,\n', 'a ?,b ?\n'),
+            ('text 3 | with { (n step=2) add $n $step }\n', '5\n'),
+            ('list 1 2 3 | fold 0 { (acc x scale=10) mul $x $scale | add $acc }\n', '60\n'),
+            # A nested block captures a default as it captures an argument.
+            ('def mk { (y x=7) list a | each { (s) text $s $x $y } }\nmk q\n', 'a 7 q\n'),
+        ]
+        for source, expected in cases:
+            with self.subTest(source=source):
+                result = self.run_input(source)
+                self.assertEqual(result.stdout, expected, result.stderr)
+        errors = [
+            ('def g { (a b=1) text $a $b }\ng\n', "command 'g' expects 1 to 2 arguments, got 0"),
+            ('def g { (a b=1) text $a $b }\ng x y z\n', "command 'g' expects 1 to 2 arguments, got 3"),
+            ('list a | each { (s m=!) text $s $m } x y\n', 'each: block takes 1 to 2 arguments, got 3'),
+            # E2 still fails: a required parameter without input is an error, not a fallback.
+            ('list 1 x | each { (n) try { (a b=1) add $a $b } $n }\n',
+             'each item 1: try: block takes 1 to 2 arguments, got 0'),
+            ('list a | each { (a b=1 c) text $a $b $c }\n', 'parameter $c has no default but follows one that does'),
+            ('list a | each { (a=1) text $a }\n', 'parameter $a: the first parameter cannot have a default'),
+            ('text 1 | try { (a=1 b=2) text $a $b } no\n', 'parameter $a: the first parameter cannot have a default'),
+            ('list a | each { (a b=) text $a $b }\n', 'invalid default for $b'),
+            ('list a | each { (a b="x y") text $a $b }\n', 'invalid default for $b'),
+            ('list a | each { (a b=$a) text $a $b }\n', 'invalid default for $b'),
+            ('list a | each { (a b={x}) text $a $b }\n', 'invalid default for $b'),
+            ('list a | each { (a b=x"y") text $a $b }\n', 'invalid default for $b'),
+            ('list a | each { (a b=1) text $a }\n', 'parameter $b is never used'),
+        ]
+        for source, message in errors:
+            with self.subTest(source=source):
+                result = self.run_input(source)
+                self.assertIn(message, result.stderr)
+                self.assertEqual(result.stdout, '')
+        # help shows defaults in brackets; from keeps them under the bound name.
+        result = self.run_input('def r { (chain amount=50 tag="") text $chain $amount $tag }\nhelp | filter def:\n')
+        self.assertRegex(result.stdout, r'(?m)^r CHAIN \[AMOUNT=50\] \[TAG=""\] +def:')
+        with tempfile.TemporaryDirectory() as directory:
+            (Path(directory) / 'm.cmdr').write_text('def r { (c a=50) text $c $a } "R"\n')
+            result = subprocess.run([str(BINARY)], input='from m import r as rr\nrr x\nhelp | filter R\n',
+                                    capture_output=True, text=True, timeout=20, cwd=directory)
+            self.assertEqual(result.stdout.splitlines()[0], 'x 50', result.stderr)
+            self.assertRegex(result.stdout, r'(?m)^rr C \[A=50\] +R$')
+
     def test_from_import(self):
         with tempfile.TemporaryDirectory() as directory:
             app = Path(directory).resolve()

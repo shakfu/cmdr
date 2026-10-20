@@ -65,9 +65,16 @@ static void scan(const char *buf, size_t len, char *colors,
             for (++i; i < len && buf[i] != ')'; ) {
                 if (isspace((unsigned char)buf[i])) { ++i; continue; }
                 token p = {PARAM, i, i, 0, 1};
-                while (i < len && !isspace((unsigned char)buf[i]) && buf[i] != ')') ++i;
+                while (i < len && !isspace((unsigned char)buf[i]) && buf[i] != ')' && buf[i] != '=')
+                    ++i;
                 p.end = i;
                 visit(&p, data);
+                if (i < len && buf[i] == '=') { /* A default: an ordinary word. */
+                    token v = {WORD, i, i, 0, 1};
+                    while (i < len && !isspace((unsigned char)buf[i]) && buf[i] != ')') ++i;
+                    v.end = i;
+                    visit(&v, data);
+                }
             }
             if (i < len) visit(&(token){PARAMS_END, i, i + 1, 0, 0}, data), ++i;
             opened = 0;

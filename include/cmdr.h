@@ -92,11 +92,13 @@ int cmdr_call(const cmdr *repl, const char *name, size_t argc,
               const cmdr_value *argv, cmdr_value *result, char **error);
 /* Evaluate a line, which has no input. */
 int cmdr_eval(const cmdr *repl, const char *line, cmdr_value *result, char **error);
-/* Call a block with argv bound to its parameters. Its commands resolve where
- * it was written, not in the caller. */
+/* Call a block with argv bound to its parameters; omitted trailing
+ * parameters take their defaults. Its commands resolve where it was written,
+ * not in the caller. */
 int cmdr_run(const cmdr_value *block, size_t argc, const cmdr_value *argv,
              cmdr_value *result, char **error);
-/* Fail unless the block takes exactly argc arguments. */
+/* Fail unless the block accepts argc arguments: at least its parameters
+ * without defaults, at most all of them. */
 int cmdr_block_arity(const cmdr_value *block, size_t argc, char **error);
 
 /* Write value as cmdr_render does, ending with a newline, and flush. Nothing

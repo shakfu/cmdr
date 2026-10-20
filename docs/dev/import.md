@@ -8,15 +8,25 @@ Decision record, 2026-10-19. `script-dir | path-join workflows.cmdr | load` work
 
 - **Search.** For each directory, in order, the first of `DIR/NAME/__init__.cmdr` and `DIR/NAME.cmdr` that exists is the module:
   1. The directory of the file in which `import` is written. In the REPL and `-c`, the current directory.
+
   2. Each entry of `CMDR_PATH`, separated by `:`.
+
   3. `~/.cmdr/lib`.
+
   4. `${prefix}/share/cmdr/lib`, fixed when cmdr is configured.
+
 - **Run once.** The first import of a module, by its resolved path, runs it with no arguments. Later imports, from any file, bind its names again without running it. A failed import is not recorded, so the next one runs the module again.
+
 - **Silent.** The module's values are not printed, as a Python module prints only what it prints explicitly.
+
 - **Bind qualified names.** The importer gets `NAME.DEF` for each definition the module made, or `ALIAS.DEF` with `as`. When a module defines a name twice, the later definition is bound.
+
 - **Hide the rest.** The module's own names, including its imports, are visible only inside it. Its definitions resolve names where they were written, so they keep working after the import.
+
 - **Errors.** No module: `import NAME: not found in DIR:DIR:...`. A module that imports itself, directly or through others: `import NAME: circular import`. An error inside the module: `import NAME: PATH:LINE: ...`.
+
 - **`from NAME import DEF [as ALIAS] ...`** finds and runs the module as `import` does, then binds each DEF unqualified, or as ALIAS. It checks every DEF before binding any. Each must be one of the module's definitions, and each bound name must be new to the session or already bound to that definition. Errors: `from NAME import DEF: NAME has no definition DEF`, `...: ALIAS already exists; bind it with as`, and `...: ALIAS is bound twice`.
+
 - `load` is unchanged: it runs a file every time, and its definitions enter the session unqualified.
 
 ## Departures from Python

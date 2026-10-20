@@ -9,6 +9,9 @@ def write-to { (chain p) tmp $p | with { (o) snd.out $chain $o } } "Run CHAIN in
 # Building a chain only adds words; nothing runs until out.
 snd.in a.wav | snd.rate 8000 | snd.gain -3 | snd.reverse | unwords | equals "a.wav rate 8000 gain -3 reverse"
 snd.in a.wav | snd.trim 0 1 | snd.fade 1 2 | snd.mono | snd.stereo | rest | unwords | equals "trim 0 1 fade 1 -0 2 channels 1 channels 2"
+# Defaults: sox's reverberance, a 0 dBFS peak, and no fade-out.
+snd.in a.wav | snd.reverb | snd.norm | snd.fade 1 | rest | unwords | equals "reverb 50 norm 0 fade 1 -0 0"
+snd.in a.wav | snd.reverb 80 | snd.norm -1 | rest | unwords | equals "reverb 80 norm -1"
 snd.in a.wav | snd.tape-stop | rest | unwords | equals "varispeed 1 0.1 fade 0 -0 0.05"
 snd.in a.wav | snd.effect "reverb 50 50" | snd.remix "1,2 2" | rest | unwords | equals "reverb 50 50 remix 1,2 2"
 snd.in-as "-t raw -r 8k" a.raw | unwords | equals "-t raw -r 8k a.raw"

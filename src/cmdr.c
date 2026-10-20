@@ -190,8 +190,10 @@ typedef struct {
 /* A compiled block, shared by every value made from it. */
 struct cmdr_code {
     size_t refs;
-    size_t params;  /* Declared parameters. */
-    int declared;   /* The source starts with "(...)", possibly empty. */
+    size_t params;   /* Declared parameters. */
+    size_t required; /* Leading parameters without defaults. */
+    char **defaults; /* Texts of the last params - required parameters. */
+    int declared;    /* The source starts with "(...)", possibly empty. */
     const cmdr *scope; /* Names in body resolve here, where the block was written. */
     program body;
 };
@@ -204,10 +206,17 @@ static cmdr_code *retain(cmdr_code *code)
     return code;
 }
 
+static void free_defaults(cmdr_code *code)
+{
+    for (size_t i = 0; i < code->params - code->required; ++i) free(code->defaults[i]);
+    free(code->defaults);
+}
+
 static void release_code(cmdr_code *code)
 {
     if (--code->refs) return;
     dispose(&code->body);
+    free_defaults(code);
     free(code);
 }
 
@@ -353,8 +362,25 @@ typedef struct {
 static int compile_body(const cmdr *repl, const char *line, scope *sc, program *pg,
                         char **error);
 
-/* Compile block source: "(a b)" parameters, appended to sc while the body
- * compiles, then a pipeline. */
+/* Length of a default at p: "" or '' for empty text, else a bare word. */
+static size_t default_length(const char *p, int *empty)
+{
+    *empty = (p[0] == '"' || p[0] == '\'') && p[1] == p[0];
+    if (*empty) return 2;
+    size_t n = 0;
+    while (p[n] && !isspace((unsigned char)p[n]) && !strchr("'\"\\|${})", p[n])) ++n;
+    return n;
+}
+
+/* Whether p ends a parameter: whitespace, ')', or the end of the text. */
+static int param_end(const char *p)
+{
+    return !*p || isspace((unsigned char)*p) || *p == ')';
+}
+
+/* Compile block source: "(a b=1)" parameters, appended to sc while the body
+ * compiles, then a pipeline. Defaults are literal and trail the required
+ * parameters; the first parameter has none. See docs/dev/defaults.md. */
 static int compile_block(const cmdr *repl, const char *text, scope *sc, cmdr_code **out,
                          char **error)
 {
@@ -369,17 +395,44 @@ static int compile_block(const cmdr *repl, const char *text, scope *sc, cmdr_cod
         for (++p;;) {
             while (isspace((unsigned char)*p)) ++p;
             if (*p == ')') { ++p; break; }
-            size_t n = identifier(p);
-            if (!n || (p[n] && !isspace((unsigned char)p[n]) && p[n] != ')')) {
+            size_t n = identifier(p), vn = 0;
+            int has_default = n && p[n] == '=', empty = 0;
+            if (has_default) vn = default_length(p + n + 1, &empty);
+            const char *end = has_default ? p + n + 1 + vn : p + n;
+            if (!n || (!has_default && !param_end(end))) {
                 status = cmdr_error(error, "invalid parameter list in '{%s}'", text);
+                break;
+            }
+            if (has_default && (!vn || !param_end(end))) {
+                status = cmdr_error(error, "invalid default for $%.*s in '{%s}': use a word without "
+                                    "spaces, quotes, or ')', or \"\" for empty text", (int)n, p, text);
+                break;
+            }
+            /* A first parameter with a default would let a block run without
+             * its input, the silent failure exact arity prevents. */
+            if (has_default && !code->params) {
+                status = cmdr_error(error, "parameter $%.*s: the first parameter cannot have a default",
+                                    (int)n, p);
+                break;
+            }
+            if (!has_default && code->required < code->params) {
+                status = cmdr_error(error, "parameter $%.*s has no default but follows one that does",
+                                    (int)n, p);
                 break;
             }
             sc->names = cmdr_realloc(sc->names, sc->count + 1, sizeof(*sc->names));
             sc->used = cmdr_realloc(sc->used, sc->count + 1, sizeof(*sc->used));
             sc->used[sc->count] = 0;
             sc->names[sc->count++] = cmdr_strndup(p, n);
+            if (has_default) {
+                size_t k = code->params - code->required;
+                code->defaults = cmdr_realloc(code->defaults, k + 1, sizeof(*code->defaults));
+                code->defaults[k] = empty ? cmdr_strndup("", 0) : cmdr_strndup(p + n + 1, vn);
+            } else {
+                ++code->required;
+            }
             ++code->params;
-            p += n;
+            p = end;
         }
     }
     if (!status) status = compile_body(repl, p, sc, &code->body, error);
@@ -391,8 +444,12 @@ static int compile_block(const cmdr *repl, const char *text, scope *sc, cmdr_cod
             dispose(&code->body);
         }
     while (sc->count > outer) free(sc->names[--sc->count]);
-    if (status) free(code);
-    else *out = code;
+    if (status) {
+        free_defaults(code);
+        free(code);
+    } else {
+        *out = code;
+    }
     return status;
 }
 
@@ -523,23 +580,26 @@ int cmdr_eval(const cmdr *repl, const char *line, cmdr_value *result, char **err
     return status;
 }
 
-/* A block without a parameter list takes exactly its piped input. */
-static size_t arity(const cmdr_code *code)
-{
-    return code->declared ? code->params : 1;
-}
+/* A block without a parameter list takes exactly its piped input. One with
+ * defaults takes its required parameters, then up to all of them. */
+static size_t min_arity(const cmdr_code *code) { return code->declared ? code->required : 1; }
+static size_t max_arity(const cmdr_code *code) { return code->declared ? code->params : 1; }
 
-static int arity_error(const char *name, size_t want, size_t argc, char **error)
+static int arity_error(const char *name, const cmdr_code *code, size_t argc, char **error)
 {
-    const char *s = want == 1 ? "" : "s";
-    if (name) return cmdr_error(error, "command '%s' expects %zu argument%s, got %zu", name, want, s, argc);
-    return cmdr_error(error, "block takes %zu argument%s, got %zu", want, s, argc);
+    size_t lo = min_arity(code), hi = max_arity(code);
+    char want[64];
+    if (lo == hi) snprintf(want, sizeof(want), "%zu argument%s", lo, lo == 1 ? "" : "s");
+    else snprintf(want, sizeof(want), "%zu to %zu arguments", lo, hi);
+    if (name) return cmdr_error(error, "command '%s' expects %s, got %zu", name, want, argc);
+    return cmdr_error(error, "block takes %s, got %zu", want, argc);
 }
 
 int cmdr_block_arity(const cmdr_value *block, size_t argc, char **error)
 {
-    size_t want = arity(block->code);
-    return want == argc ? 0 : arity_error(NULL, want, argc, error);
+    const cmdr_code *code = block->code;
+    return argc >= min_arity(code) && argc <= max_arity(code) ? 0
+        : arity_error(NULL, code, argc, error);
 }
 
 /* Bind argv to the block's parameters, after its captured values. */
@@ -548,15 +608,21 @@ static int call_block(const cmdr_value *block, const char *name,
 {
     *result = (cmdr_value){0};
     const cmdr_code *code = block->code;
-    if (arity(code) != argc) return arity_error(name, arity(code), argc, error);
+    if (argc < min_arity(code) || argc > max_arity(code))
+        return arity_error(name, code, argc, error);
     /* Declared parameters appear only where named; only { ... } pipes its input. */
     const cmdr_value *env = block->items, *input = code->declared ? NULL : argv;
     cmdr_value *bound = NULL;
     if (code->params) {
         /* memcpy needs a non-NULL pointer even for zero bytes. */
-        bound = cmdr_realloc(NULL, block->count + argc, sizeof(*bound));
+        bound = cmdr_realloc(NULL, block->count + code->params, sizeof(*bound));
         if (block->count) memcpy(bound, block->items, block->count * sizeof(*bound));
         memcpy(bound + block->count, argv, argc * sizeof(*bound));
+        /* argc >= required, so each omitted parameter has a default. The
+         * default is borrowed from code, which outlives the call. */
+        for (size_t i = argc; i < code->params; ++i)
+            bound[block->count + i] = (cmdr_value){.kind = CMDR_TEXT,
+                                                   .text = code->defaults[i - code->required]};
         env = bound;
     }
     int status = evaluate(code->scope, &code->body, name, 0, input, env, block->count + code->params,
