@@ -12,8 +12,8 @@ import fs
 
 env.or SND_OUT snd-out | fs.mkdir | as out-dir "The output directory"
 def at { (p) out-dir | path-join $p } "Path P in the output directory"
-def write-to { (chain p) at $p | with { (o) snd.out $chain $o } } "Run CHAIN into P in the output directory; return the path"
-def report { (ps) lines $ps | each { (p) snd.info $p | head 3 | rest | unwords | with { (i) path-basename $p | with { (b) list $b $i | unwords } } } } "One line per path in PS, a path or a list: the file name, rate, and channels"
+def write-to { (chain p) snd.out $chain $(at $p) } "Run CHAIN into P in the output directory; return the path"
+def report { (ps) lines $ps | each { (p) list $(path-basename $p) $(snd.info $p | head 3 | rest | unwords) | unwords } } "One line per path in PS, a path or a list: the file name, rate, and channels"
 
 # 1. Synthesize two tones. A chain is a list of sox's arguments until out runs it.
 # as names a file for later steps.

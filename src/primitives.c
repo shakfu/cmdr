@@ -944,6 +944,96 @@ COMMAND(or_command)
 }
 
 /* As or, but a mismatch fails with MESSAGE in place of the block's own. */
+/* The blocks of if's arguments from start: COND THEN pairs, as indexes of
+ * their CONDs, and ELSE's index, or 0 if there is none. */
+static int if_shape(size_t argc, const cmdr_value *argv, size_t start, size_t *conds,
+                    size_t *n, size_t *otherwise, char **error)
+{
+    *n = *otherwise = 0;
+    for (size_t i = start; i < argc;) {
+        int first = i == start;
+        const char *word = first ? NULL : argv[i].kind == CMDR_TEXT ? argv[i].text : "";
+        if (!first && strcmp(word, "elif") && strcmp(word, "else")) {
+            char *got = cmdr_describe(&argv[i]);
+            cmdr_error(error, "if: expected elif or else, got %s", got);
+            free(got);
+            return 1;
+        }
+        size_t at = first ? i : i + 1, need = !first && !strcmp(word, "else") ? 1 : 2;
+        for (size_t k = at; k < at + need; ++k)
+            if (k >= argc || argv[k].kind != CMDR_BLOCK)
+                return cmdr_error(error, "if: expected a block for %s",
+                                  need == 1 ? "else" : k == at ? "COND" : "THEN");
+        if (need == 1) {
+            if (at + 1 != argc) return cmdr_error(error, "if: else must come last");
+            *otherwise = at;
+        } else {
+            conds[(*n)++] = at;
+        }
+        i = at + need;
+    }
+    return 0;
+}
+
+/* if [VALUE] COND THEN [elif COND THEN ...] [else ELSE]: run the THEN of the
+ * first COND that holds, else ELSE, each with VALUE. Only that branch runs.
+ * An error in a COND propagates; with no else, the last mismatch is the
+ * result. VALUE is present when the arguments only parse with it. */
+COMMAND(if_command)
+{
+    static const char usage[] = "usage: if [VALUE] COND THEN [elif COND THEN ...] [else ELSE]";
+    if (argc < 2) return cmdr_error(error, usage);
+    size_t *conds = cmdr_realloc(NULL, argc, sizeof(*conds)), n, otherwise, start = 0;
+    char *ignored = NULL;
+    int bad = argv[0].kind == CMDR_BLOCK ? if_shape(argc, argv, 0, conds, &n, &otherwise, &ignored)
+                                         : 1;
+    if (bad) {
+        free(ignored);
+        start = 1;
+        bad = if_shape(argc, argv, 1, conds, &n, &otherwise, error);
+    }
+    /* Every block's arity, before any runs, so a typo in a branch not taken fails. */
+    for (size_t k = 0; !bad && k < n; ++k)
+        bad = check_body("if", &argv[conds[k]], start, error)
+            || check_body("if", &argv[conds[k] + 1], start, error);
+    if (!bad && otherwise) bad = check_body("if", &argv[otherwise], start, error);
+    if (bad) {
+        free(conds);
+        return 1;
+    }
+    char *mismatch = NULL;
+    int status = CMDR_MISMATCH;
+    for (size_t k = 0; k < n && status == CMDR_MISMATCH; ++k) {
+        cmdr_value held;
+        char *detail;
+        int failed = cmdr_run(&argv[conds[k]], start, argv, &held, &detail);
+        cmdr_free(&held);
+        if (failed == CMDR_MISMATCH) {
+            free(mismatch);
+            mismatch = detail;
+        } else if (failed) {
+            free(mismatch);
+            free(conds);
+            *error = detail;
+            return failed;
+        } else {
+            free(detail);
+            status = cmdr_run(&argv[conds[k] + 1], start, argv, result, error);
+            free(mismatch);
+            free(conds);
+            return status;
+        }
+    }
+    if (otherwise) {
+        free(mismatch);
+        status = cmdr_run(&argv[otherwise], start, argv, result, error);
+    } else {
+        *error = mismatch;
+    }
+    free(conds);
+    return status;
+}
+
 COMMAND(check_command)
 {
     if (argc != 2 && argc != 3) return cmdr_error(error, "usage: check [INPUT] BLOCK MESSAGE");
@@ -1015,6 +1105,8 @@ static const cmdr_command pure[] = {
     VALUE("repeat", "repeat N BLOCK [ARG ...]", "Call a block N times with ARGs; list the results", repeat_command),
     VALUE("try", "try [INPUT] BLOCK FALLBACK", "Return FALLBACK if the block fails", try_command),
     VALUE("or", "or [INPUT] BLOCK FALLBACK", "Return FALLBACK if the block mismatches", or_command),
+    VALUE("if", "if [VALUE] COND THEN [elif COND THEN ...] [else ELSE]",
+          "Run THEN for the first COND that holds, else ELSE", if_command),
     VALUE("check", "check [INPUT] BLOCK MESSAGE", "Mismatch with MESSAGE if the block mismatches", check_command),
     TEXT("path-basename", "path-basename PATH", "Return the final path component", basename_command),
     TEXT("path-dirname", "path-dirname PATH", "Return the parent path", dirname_command),

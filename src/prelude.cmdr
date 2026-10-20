@@ -5,7 +5,7 @@
 # Lists
 def first { nonempty | head 1 | join "" } "Return the first item"
 def last { nonempty | tail 1 | join "" } "Return the last item"
-def nth { (xs n) gt $n 0 | $xs | count | with { (c) le $n $c } | $xs | head $n | last } "Return item N, counting from 1"
+def nth { (xs n) gt $n 0 | le $(count $xs) | $xs | head $n | last } "Return item N, counting from 1"
 def init { (xs) nonempty $xs | count | sub 1 | with { (n) head $xs $n } } "Drop the last item"
 def rest { (xs) nonempty $xs | count | sub 1 | with { (n) tail $xs $n } } "Drop the first item"
 def concat { join "" } "Join text items without a separator"

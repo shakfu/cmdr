@@ -336,6 +336,93 @@ class Commands(unittest.TestCase):
             with self.subTest(source=source):
                 self.run_line(source, error=error)
 
+    def test_sub_pipeline(self):
+        # $(PIPELINE) is an argument: PIPELINE's result, computed before the
+        # stage's command, left to right, with no input.
+        cases = [
+            ("text $(text a | upper) and $(text b)", 'A and b\n'),
+            ("text a | text $(text b) $(text c)", 'a b c\n'),
+            ("list $(list a b) c | count", '2\n'),               # A list stays one argument.
+            ("text $(text (a))", '(a)\n'),                       # Parentheses balance.
+            ("text $(text $(upper x) y)", 'X y\n'),              # Nesting.
+            ("text $(text 'a)b')", 'a)b\n'),                    # Quotes hide ')'.
+            ("text '$(x)' \\$(x)", '$(x) $(x)\n'),             # Quoting is literal.
+            # It sees the enclosing block's parameters, and blocks in it capture them.
+            ("list a b | each { (x) text $(upper $x) } | join ,", 'A,B\n'),
+            ("text a | with { (s) text $(list x | each { (y) text $y $s } | join '') }", 'x a\n'),
+            # A mismatch inside it keeps its status, so keep treats it as false.
+            ("list a b | keep { (x) text $(equals $x a) } | join ,", 'a\n'),
+            # Arithmetic over two computed values.
+            ("add $(list a b c | count) $(list d e | count)", '5\n'),
+        ]
+        for source, expected in cases:
+            with self.subTest(source=source):
+                self.run_line(source, expected)
+        errors = [
+            ("$(text a)", 'command name cannot be a sub-pipeline; write the pipeline itself'),
+            ("text $()", 'empty sub-pipeline $()'),
+            ("text $(text a", "unclosed '$('"),
+            ("text $(text a)b", "expected a space after ')'"),
+            ("text $(bogus) x", 'unknown command: bogus'),       # Checked with its line.
+            ("text $(read /nonexistent) x", 'read /nonexistent'),
+            ("import fs\ntext $(import num) x", '$(import num) returned no value'),
+            ("list a | each { (x) text $(text $y) }", "invalid reference '$y'"),
+        ]
+        for source, error in errors:
+            with self.subTest(source=source):
+                self.run_line(source, error=error)
+        # Inside a def, and with bindings: $name means what it does beside it.
+        result = self.run_input("text a.wav | as a\n"
+                                "def shout { (x) text $(upper $x) $a }\n"
+                                "shout b\n")
+        self.assertEqual(result.stdout, 'B a.wav\n', result.stderr)
+        # An earlier effect has run when a later sub-pipeline fails, as with stages.
+        with tempfile.TemporaryDirectory() as directory:
+            log = Path(directory) / 'log'
+            self.run_line(f"text $(text x | write {quote(str(log))}) $(read /nonexistent)",
+                          error='read /nonexistent')
+            self.assertEqual(log.read_text(), 'x')
+
+    def test_if(self):
+        # if [VALUE] COND THEN [elif COND THEN ...] [else ELSE]: the THEN of
+        # the first COND that holds, else ELSE, each with VALUE.
+        cases = [
+            ("text a | if { equals a } { (x) text yes $x } else { (x) text no $x }", 'yes a\n'),
+            ("text b | if { equals a } { (x) text yes $x } else { (x) text no $x }", 'no b\n'),
+            ("text b | if { equals a } { (_) text A } elif { equals b } { (_) text B } else { (_) text C }", 'B\n'),
+            ("text c | if { equals a } { (_) text A } elif { equals b } { (_) text B } else { (_) text C }", 'C\n'),
+            ("if { () equals a a } { () text yes }", 'yes\n'),
+            # Only the chosen branch runs: the other would fail.
+            ("text 5 | if { gt 3 } { (n) mul $n 2 } else { (_) read /nonexistent }", '10\n'),
+            # Without else, the last mismatch is the result, so keep drops the item.
+            ("list a.wav b.txt | keep { if { ends-with .wav } { (f) $f } } | join ,", 'a.wav\n'),
+            # Keywords count only after a THEN, so a value may be the word else.
+            ("text else | if { equals else } { (x) text got $x }", 'got else\n'),
+            # A block may be the value.
+            ("if { upper } { (b) $b } { (_) text matched }", 'matched\n'),
+        ]
+        for source, expected in cases:
+            with self.subTest(source=source):
+                self.run_line(source, expected)
+        errors = [
+            ("text z | if { equals a } { (_) text A } elif { equals b } { (_) text B }", 'equals: z differs from b'),
+            # An error in COND is not a mismatch, unlike try.
+            ("text a | if { add 1 } { (_) text x } else { (_) text y }", 'invalid finite number: a'),
+            # Every branch is checked before COND runs.
+            ("text a | if { equals b } { (_) bogus } else { (_) text ok }", 'unknown command: bogus'),
+            ("text a | if { equals b } { (_ y) text $y } else { (_) text ok }", 'if: block takes 2 arguments, got 1'),
+            ("text a | if { equals a } { (_) text A } els { (_) text B }", 'if: expected elif or else, got els'),
+            ("text a | if { equals a } { (_) text A } else { (_) text B } else { (_) text C }", 'if: else must come last'),
+            ("text a | if { equals a } { (_) text A } elif { equals b }", 'if: expected a block for THEN'),
+            ("text a | if { equals a }", 'if: expected a block for THEN'),
+            ("if", 'usage: if [VALUE] COND THEN'),
+        ]
+        for source, error in errors:
+            with self.subTest(source=source):
+                self.run_line(source, error=error)
+        # A mismatch keeps its status, so not and keep treat it as false.
+        self.run_line("text z | not { if { equals a } { (_) text A } }", 'z\n')
+
     def test_ignored_parameter(self):
         # _ takes an argument the block ignores: exempt from the unused check,
         # never referenced, and repeatable.
@@ -1521,6 +1608,15 @@ class Commands(unittest.TestCase):
             # and quit are not stored.
             self.assertEqual(history, ['text a', 'text b |   upper', 'text d'])
             self.assertFalse((Path(home) / '.cmdr_history.tmp').exists())
+
+    @unittest.skipUnless(os.environ.get('CMDR_EDITOR') == '1', 'built without the editor')
+    def test_editor_sub_pipeline(self):
+        # $( and its ) are punctuation, and the word after $( is a command.
+        with tempfile.TemporaryDirectory() as home:
+            code, out = self.pty_session([b"text $(upper (a)) b\r", b"quit\r"], home)
+            self.assertEqual(code, 0, out)
+            self.assertIn(b"\n(A) b\r\n", out)
+            self.assertIn(b"\x1b[33m$(\x1b[34mupper\x1b[0m (a)\x1b[33m)\x1b[0m b", out)
 
     @unittest.skipUnless(os.environ.get('CMDR_EDITOR') == '1', 'built without the editor')
     def test_editor_bindings(self):

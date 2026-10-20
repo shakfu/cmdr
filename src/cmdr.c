@@ -197,6 +197,8 @@ typedef struct {
     const cmdr_value *constant; /* A command's value, when no block declares the name. */
     int block;       /* text is the source of a { ... } block. */
     cmdr_code *code; /* The block, compiled. */
+    int sub;         /* text is the source of a $( ... ) sub-pipeline. */
+    struct program *pipeline; /* The sub-pipeline, compiled. */
 } word;
 
 typedef struct {
@@ -204,7 +206,7 @@ typedef struct {
     size_t count;
 } stage;
 
-typedef struct {
+typedef struct program {
     stage *stages;
     size_t count;
 } program;
@@ -246,8 +248,13 @@ static void dispose(program *pg)
 {
     for (size_t i = 0; i < pg->count; ++i) {
         for (size_t j = 0; j < pg->stages[i].count; ++j) {
-            free(pg->stages[i].words[j].text);
-            if (pg->stages[i].words[j].code) release_code(pg->stages[i].words[j].code);
+            word *w = &pg->stages[i].words[j];
+            free(w->text);
+            if (w->code) release_code(w->code);
+            if (w->pipeline) {
+                dispose(w->pipeline);
+                free(w->pipeline);
+            }
         }
         free(pg->stages[i].words);
     }
@@ -284,12 +291,36 @@ static int lex_block(const char **p, word *out, char **error)
     return 0;
 }
 
+/* Read a sub-pipeline $( ... ) at *p. Unquoted parentheses balance, as
+ * braces do in a block, so $(text (a)) keeps its literal parentheses; quotes
+ * and escapes hide them. */
+static int lex_sub(const char **p, word *out, char **error)
+{
+    const char *s = *p + 2;
+    char quote = 0;
+    size_t depth = 1;
+    for (; *s; ++s) {
+        if (*s == '\\' && quote != '\'') { if (!*++s) break; }
+        else if (quote) { if (*s == quote) quote = 0; }
+        else if (*s == '\'' || *s == '"') quote = *s;
+        else if (*s == '(' && ++depth > MAX_CALL_DEPTH) return cmdr_error(error, "sub-pipelines nested too deeply");
+        else if (*s == ')' && !--depth) break;
+    }
+    if (!*s) return cmdr_error(error, "unclosed '$('");
+    if (s[1] && !isspace((unsigned char)s[1]) && s[1] != '|')
+        return cmdr_error(error, "expected a space after ')'");
+    *out = (word){.text = cmdr_strndup(*p + 2, (size_t)(s - *p - 2)), .sub = 1};
+    *p = s + 1;
+    return 0;
+}
+
 /* Read one word at *p: quotes group, backslash escapes, unquoted $name
- * refers, and { opens a block. */
+ * refers, $( opens a sub-pipeline, and { opens a block. */
 static int lex(const char **p, word *out, char **error)
 {
     const char *s = *p;
     if (*s == '{') return lex_block(p, out, error);
+    if (s[0] == '$' && s[1] == '(') return lex_sub(p, out, error);
     if (*s == '$') {
         while (*s && !isspace((unsigned char)*s) && *s != '|') ++s;
         size_t n = (size_t)(s - *p - 1);
@@ -528,10 +559,26 @@ static int compile_body(const cmdr *repl, const char *line, scope *sc, program *
                 sc->used[w->slot = k - 1] = 1;
             }
             if (w->block && compile_block(repl, w->text, sc, &w->code, error)) goto fail;
+            if (w->sub) {
+                /* In the enclosing scope, so $name means what it does beside it. */
+                const char *t = w->text;
+                while (isspace((unsigned char)*t)) ++t;
+                if (!*t) {
+                    cmdr_error(error, "empty sub-pipeline $()");
+                    goto fail;
+                }
+                w->pipeline = cmdr_realloc(NULL, 1, sizeof(*w->pipeline));
+                if (compile_body(repl, w->text, sc, w->pipeline, error)) {
+                    free(w->pipeline);
+                    w->pipeline = NULL;
+                    goto fail;
+                }
+            }
         }
         if (!s->count || value_stage(s)) continue;
-        if (s->words[0].ref || s->words[0].block) {
-            cmdr_error(error, "command name cannot be a %s", s->words[0].ref ? "reference" : "block");
+        if (s->words[0].ref || s->words[0].block || s->words[0].sub) {
+            cmdr_error(error, "command name cannot be a %s", s->words[0].ref ? "reference"
+                       : s->words[0].block ? "block" : "sub-pipeline; write the pipeline itself");
             goto fail;
         }
         if (!cmdr_find(repl, s->words[0].text)) {
@@ -597,18 +644,33 @@ static int evaluate(const cmdr *repl, const program *pg, const char *name, int l
         }
         size_t n = s->count - 1 + (size_t)piped, at = 0;
         cmdr_value *argv = cmdr_realloc(NULL, n, sizeof(*argv));
-        cmdr_value next;
+        /* Sub-pipelines' results, owned until the call returns. */
+        cmdr_value *subs = cmdr_realloc(NULL, s->count, sizeof(*subs));
+        size_t nsubs = 0;
+        cmdr_value next = {0};
         if (piped) argv[at++] = *result;
-        for (size_t j = 1; j < s->count; ++j) {
+        for (size_t j = 1; !status && j < s->count; ++j) {
             const word *w = &s->words[j];
+            if (w->sub) { /* Left to right, before the call. */
+                status = evaluate(repl, w->pipeline, NULL, 0, NULL, env, envc, &subs[nsubs], error);
+                if (!status && subs[nsubs].kind == CMDR_NONE)
+                    status = cmdr_error(error, "$(%s) returned no value", w->text);
+                if (status) break;
+                argv[at++] = subs[nsubs++];
+                continue;
+            }
             /* A block borrows env as its captured values; cmdr_clone copies them. */
             argv[at++] = w->constant ? *w->constant : w->ref ? env[w->slot] : w->block
                 ? (cmdr_value){.kind = CMDR_BLOCK, .text = w->text, .code = w->code,
                                .items = (cmdr_value *)env, .count = envc}
                 : (cmdr_value){.kind = CMDR_TEXT, .text = w->text};
         }
-        status = cmdr_call(repl, s->words[0].text, n, argv, &next, error);
-        if (status == CMDR_MISMATCH && line) frame(repl, s->words[0].text, n, argv, error);
+        if (!status) {
+            status = cmdr_call(repl, s->words[0].text, n, argv, &next, error);
+            if (status == CMDR_MISMATCH && line) frame(repl, s->words[0].text, n, argv, error);
+        }
+        while (nsubs) cmdr_free(&subs[--nsubs]);
+        free(subs);
         free(argv);
         cmdr_free(result);
         *result = next;

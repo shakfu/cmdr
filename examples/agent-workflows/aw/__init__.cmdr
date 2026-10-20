@@ -75,7 +75,7 @@ def require-kind { (t k) target-kind $t | check { equals $k } "wrong target kind
 
 # Actions: actions/NAME.md. The first line is "mode: read" or "mode: write";
 # the rest is a template with {{target}}, {{input}}, and {{history}}.
-def action-file { (a) list $a .md | concat | with { (f) home-dir | path-join actions | path-join $f } }
+def action-file { (a) path-join $home-dir actions | path-join $(list $a .md | concat) }
 def action-mode { (a) action-file $a | read | lines | first | strip-prefix "mode: " | check { matches '^(read|write)$' } "mode must be read or write" }
 def action-body { (a) action-file $a | read | lines | rest | unlines }
 

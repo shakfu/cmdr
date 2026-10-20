@@ -38,7 +38,7 @@ def loop { (score n) end $score | with { (e) sub $n 1 | with { (m) num.seq 0 $m 
 # Building. Each starts at beat 0; shift, then, and sequence place it.
 def item { (kind start length key velocity channel) _midi.key $key | with { (k) list $kind $start $length $k $velocity $channel | unwords } } "One note item"
 def note { (key length=1 velocity=100 channel=1) item note 0 $length $key $velocity $channel | with { (n) list $n } } "A score of one note"
-def seq { (ks length=1 velocity=100 channel=1) keys $ks | with { (k) count $k | num.range | each { (i) nth $k $i | with { (key) sub $i 1 | mul $length | with { (t) list rest $t $length | unwords | with { (r) or { () equals $key . | replace . 0 } $key | with { (safe) item note $t $length $safe $velocity $channel } | with { (n) or { () equals $key . | $r } $n } } } } } } } "Play KEYS one after another, each LENGTH beats; a key of . is a rest"
+def seq { (ks length=1 velocity=100 channel=1) keys $ks | with { (k) count $k | num.range | each { (i) sub $i 1 | mul $length | with { (t) nth $k $i | if { equals . } { (_) list rest $t $length | unwords } else { (key) item note $t $length $key $velocity $channel } } } } } "Play KEYS one after another, each LENGTH beats; a key of . is a rest"
 def chord { (ks length=1 velocity=100 channel=1) keys $ks | each { (k) item note 0 $length $k $velocity $channel } } "Play KEYS together for LENGTH beats"
 def cc { (controller value channel=1) list cc 0 $controller $value $channel | unwords | with { (n) list $n } } "A score of one control change"
 def program { (number channel=1) list program 0 $number $channel | unwords | with { (n) list $n } } "A score of one program change; NUMBER is 0 to 127"

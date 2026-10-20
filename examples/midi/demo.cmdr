@@ -46,7 +46,7 @@ repeat 4 { () midi.scale A4 minor-pentatonic | midi.walk 4 } | each { (ks) midi.
 # 5. Stack the parts, loop drums and melody to the progression's length, slow
 # down for the last bar, loosen the timing, and save. humanize goes last, as
 # it can move the last note and so the end that loop measures.
-drums | midi.loop 4 | with { (d) melody | midi.loop 2 | midi.stack $d } | midi.stack $bass | midi.stack $pads | with { (s) midi.tempo 80 | midi.shift 12 | midi.stack $s } | midi.humanize 0.02 12 | write-to song.mid 96 | midi.read | report
+drums | midi.loop 4 | midi.stack $(melody | midi.loop 2) | midi.stack $bass | midi.stack $pads | midi.stack $(midi.tempo 80 | midi.shift 12) | midi.humanize 0.02 12 | write-to song.mid 96 | midi.read | report
 
 # 6. Trailing rests are kept: a bar of silence follows the arpeggio.
 midi.scale A3 minor-pentatonic 2 | with { (up) str.reverse $up | rest | with { (down) list $up $down } } | each { (ks) midi.seq $ks 0.25 } | with { (parts) midi.rest 4 | with { (r) push $parts $r } } | midi.sequence | write-to arp.mid 120 | as arp

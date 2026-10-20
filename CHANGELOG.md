@@ -72,6 +72,10 @@
 
 - `-DCMDR_EXAMPLES=OFF` skips building `cmdr-snd` and `cmdr-midi` and their tests. It defaults to `ON`, so `make test` still runs the examples' tests.
 
+- `$(PIPELINE)` is an argument whose value is PIPELINE's result: `text has $(read f | lines | count) lines`. An argument could only be a literal, a `$name`, or a block, so each computed argument needed a `with` to name it first; 372 of the 430 `with` blocks in the repository's scripts existed only for that. It runs before its stage's command, left to right, with no input, and is checked with its line. `$(...)` over `(...)`, which would change the meaning of existing text such as `(a)`. See [docs/dev/missing-syntax.md](docs/dev/missing-syntax.md).
+
+- `if [VALUE] COND THEN [elif COND THEN ...] [else ELSE]` runs the THEN of the first COND that holds, else ELSE, each with VALUE. Only the chosen branch runs. `or`, `try`, and `check` compute their fallback first, so a branch that fails or has effects needed workarounds: `midi.seq` substituted `0` for a rest's key so the unused note would not fail. An error in a COND propagates, unlike `try`. `else` and `elif` are words, as `as` is in `import`, over a positional fourth block, which reads poorly beside three others and allows no third branch. See [docs/dev/missing-syntax.md](docs/dev/missing-syntax.md).
+
 - `_` in a parameter list declares a parameter the block ignores, exempt from the unused-parameter rule: `each { (_) random.random }`. Callers such as `each`, `fold`, and `with` pass arguments a block may not need, and the rule forced it to use them anyway. A name over relaxing the rule, which catches blocks that ignore their input by mistake. `_` may repeat; `$_` is an error, `nothing is bound to _`. See [docs/dev/missing-syntax.md](docs/dev/missing-syntax.md).
 
 - `repeat N BLOCK [ARG ...]` calls a block N times with only ARGs and lists the results. A block must use each parameter it declares, so `num.range 8 | each { (i) random }` was an error, and repeated calls needed a counter. A count over 10,000,000 is an error, as in `num.seq`.

@@ -1,6 +1,6 @@
 # Missing syntax
 
-Design exploration, 2026-10-20. Status: `_` is implemented; `if` and `$(...)` are proposed.
+Design exploration, 2026-10-20. Status: implemented.
 
 cmdr is a glue language: pipelines of commands over text and lists. Three gaps cost the most code in this repository's own scripts. Each section states the problem with counts, the proposal, examples rewritten from real files, and when not to use the feature.
 
@@ -40,10 +40,10 @@ A block must use every parameter it declares (blocks.md). The rule catches a rea
 num.range 8 | each { (_) random.int 1 6 }
 
 # A branch that does not need the value it was chosen for (see if).
-if $key { equals . } { (_) list rest $t $length | unwords } { (k) item note $t $length $k 100 1 }
+if $key { equals . } { (_) list rest $t $length | unwords } else { (k) item note $t $length $k 100 1 }
 
 # A condition that ignores the value it tests.
-if $n { (_) random | lt $p } { (m) $m } { (m) to-rest $m }
+if $n { (_) random.random | lt $p } { (m) $m } else { (m) to-rest $m }
 ```
 
 ### Don't use it
@@ -73,14 +73,15 @@ compose-ng.md proposed this command as `when`, because scripting.md reserved `if
 ### Proposal
 
 ```text
-if [VALUE] COND THEN [ELSE]
+if [VALUE] COND THEN [elif COND THEN ...] [else ELSE]
 ```
 
-- COND runs with VALUE. On success, THEN runs with VALUE. On a mismatch, ELSE runs with VALUE; without ELSE, `if` returns the mismatch.
+- Each COND runs with VALUE, in order. The THEN of the first that holds runs with VALUE. If none holds, ELSE runs with VALUE; without `else`, `if` returns the last mismatch.
+- `elif` and `else` are words, as `as` is in `import`. They count only after a THEN, so a VALUE may be the word `else`. A block where `elif` or `else` belongs is an error; there is no positional ELSE.
 - An error in COND propagates. `if` never treats an error as false, unlike `try`.
 - Only the chosen branch runs.
-- All three blocks have their arity checked before COND runs, so a typo in a branch not taken still fails.
-- VALUE may be piped: `... | if { fs.is-file } { ... } { ... }`.
+- Every block has its arity checked before the first COND runs, so a typo in a branch not taken still fails.
+- VALUE may be piped: `... | if { fs.is-file } { ... } else { ... }`. It is present when the arguments only parse with it, so a block can be a VALUE.
 
 `if` is a command, not syntax, so a `def` can shadow it like any other command.
 
@@ -95,7 +96,7 @@ at a440.wav | if { fs.is-file } { (p) $p } else { (p) snd.tone 2 440 | snd.out $
 
 # midi.chance: a note becomes a rest with probability 1 - P; other items pass.
 def to-rest { (n) list rest $(field $n 2) $(field $n 3) | unwords }
-if $n { (m) random | ge $p | $m | matches "^note " } { (m) to-rest $m } else { (m) $m }
+if $n { (m) random.random | ge $p | $m | matches "^note " } { (m) to-rest $m } else { (m) $m }
 
 # A guard with no ELSE: the mismatch is the result, so keep drops the item.
 list a.wav b.txt | keep { if { ends-with .wav } { (f) fs.is-file $f } }
@@ -131,7 +132,7 @@ The repository's `.cmdr` files hold 430 `with { (x) ... }` blocks. In 372 of the
 - Its result is one argument; a list stays one argument. No value is an error: `$(...) returned no value`.
 - A failure or mismatch inside it fails the stage, with the same status.
 - It cannot be a command name, as a reference cannot. A whole stage of `$(...)` is an error; write the pipeline itself.
-- Quoting hides it: `'$(x)'` is literal text. A `)` inside it closes it unless quoted or part of a nested `$(...)`.
+- Quoting hides it: `'$(x)'` is literal text. Unquoted parentheses inside it balance, as braces do in a block, so `$(text (a))` keeps its parentheses. The proposal had the first unquoted `)` close it, which would have broken `text (a)` there.
 
 `$(` is an invalid reference today, so no script changes meaning. Plain `(...)` was rejected: `text (a)` prints `(a)` today, and would change. Shell has the same form, `$(...)`.
 

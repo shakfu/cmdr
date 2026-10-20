@@ -44,6 +44,15 @@ Errors go to stderr; the exit status is nonzero if any line failed. Ctrl-C while
 
 Whitespace separates arguments. Single and double quotes preserve spaces and pipes, including empty arguments (`""`). Backslash escapes the next character outside single quotes; inside double quotes, `\n` and `\t` are a newline and a tab. Syntax and command names are checked for the whole pipeline before any command runs. `map`'s COMMAND is an argument, so it is looked up only when `map` runs; `each { COMMAND }` is checked first. Effects from earlier stages remain if a later stage fails. There is no variable expansion, globbing, redirection, or implicit shell.
 
+`$(PIPELINE)` is an argument whose value is PIPELINE's result. It runs when its stage runs, before the command, left to right among the arguments, and receives no input. Its names mean what they would beside it, and it is checked with its line. Its result is one argument, even a list.
+
+```text
+cmdr> text notes.txt has $(read notes.txt | lines | count) lines and $(read notes.txt | length) bytes
+notes.txt has 3 lines and 14 bytes
+```
+
+Without it, each computed argument needs a `with` to name it first, one level per value. Use `with` or `as` when a value is needed twice, since each `$(...)` runs again. Keep the main flow of data as stages, and keep effects out of arguments. Unquoted parentheses inside it balance, so `$(text (a))` keeps its parentheses. A sub-pipeline cannot be a command name. See [docs/dev/missing-syntax.md](docs/dev/missing-syntax.md).
+
 ## Blocks and definitions
 
 ```text
@@ -133,6 +142,7 @@ These are the primitives, in [src/primitives.c](src/primitives.c). Extensions ad
 | `with VALUE BLOCK [ARG ...]` | Call a block with VALUE |
 | `fold VALUE INIT BLOCK [ARG ...]` | Combine items left to right; the block takes the result so far and the item |
 | `repeat N BLOCK [ARG ...]` | Call a block N times with only ARGs; list the results |
+| `if [VALUE] COND THEN [elif COND THEN ...] [else ELSE]` | Run the THEN of the first COND that holds, else ELSE |
 | `try [INPUT] BLOCK FALLBACK` | Return FALLBACK if the block fails |
 | `or [INPUT] BLOCK FALLBACK` | Return FALLBACK if the block mismatches |
 | `check [INPUT] BLOCK MESSAGE` | Mismatch with MESSAGE if the block mismatches |
@@ -163,6 +173,17 @@ List commands accept lists or newline-separated text; in text, a final newline e
 **`try`** returns the block's result, or FALLBACK if it fails at run time. Its arity is checked first, so a typo or a missing input is an error, not a fallback. `each { try { read } "" }` reads each file or substitutes empty text.
 
 **`or`** is `try` for predicates: only a mismatch selects FALLBACK, and errors propagate. `with` passes a computed value to any argument position: `length $x | with { (n) drop $s $n }`. `check` replaces a mismatch's message, so a composed predicate can report `b is not a` instead of the commands it is built from.
+
+**`if`** runs one branch. Each COND runs with VALUE in turn; the THEN of the first that holds runs with VALUE, and if none holds, ELSE does. Only the chosen branch runs, so it may fail or have effects that the others must not, which `or`'s precomputed FALLBACK cannot allow. An error in a COND propagates, unlike `try`. Without `else`, the last mismatch is the result, so `if` also works as a guard inside `keep`. `elif` and `else` are words that count only after a THEN.
+
+```text
+cmdr> text b | if { equals a } { (_) text A } elif { equals b } { (_) text B } else { (_) text C }
+B
+cmdr> import fs
+cmdr> list a.wav b.txt | keep { if { ends-with .wav } { (f) fs.exists $f } }
+```
+
+Use `or` for a cheap fallback, `keep` to filter, `check` to replace a message, and `try` to recover from an error. See [docs/dev/missing-syntax.md](docs/dev/missing-syntax.md).
 
 **`run`** resolves PROGRAM through PATH and passes arguments unchanged. `run` supplies empty stdin; `run-in` supplies TEXT. Output is returned after the program exits. A nonzero exit status, such as `grep` without matches, fails the stage. The program's stderr is not captured; it goes to cmdr's stderr.
 

@@ -26,7 +26,8 @@ struct editor {
     char *next;    /* Its next line to return. */
 };
 
-typedef enum { WORD, REF, BAR, NOTE, OPEN, CLOSE, PARAMS, PARAM, PARAMS_END } token_kind;
+typedef enum { WORD, REF, BAR, NOTE, OPEN, CLOSE, PARAMS, PARAM, PARAMS_END, SUB_OPEN,
+               SUB_CLOSE } token_kind;
 
 typedef struct {
     token_kind kind;
@@ -38,7 +39,8 @@ typedef struct {
 /* Split buf[0, len) as the lexer in cmdr.c does, tolerating an unfinished
  * line, calling visit per token and marking quoted bytes in colors when
  * non-NULL. Inside a block, unquoted braces nest anywhere, as in lex_block;
- * "(a b)" directly after '{' declares parameters. */
+ * "(a b)" directly after '{' declares parameters. "$(" opens a sub-pipeline,
+ * whose first word is a command, and the ')' that balances it closes it. */
 static void scan(const char *buf, size_t len, char *colors,
                  void (*visit)(const token *, void *), void *data)
 {
@@ -49,10 +51,29 @@ static void scan(const char *buf, size_t len, char *colors,
         return;
     }
     int command = 1, opened = 0; /* opened: after '{', where "(a b)" may start. */
+    /* Open sub-pipelines, each with the unquoted '(' its words opened. */
+    size_t parens[64], subs = 0;
     while (i < len) {
         if (isspace((unsigned char)buf[i])) { ++i; continue; }
         token t = {WORD, i, i + 1, command, 1};
         char c = buf[i];
+        if (c == '$' && i + 1 < len && buf[i + 1] == '(' && subs < 64) {
+            t.kind = SUB_OPEN;
+            t.end = i += 2;
+            parens[subs++] = 0;
+            command = 1;
+            opened = 0;
+            visit(&t, data);
+            continue;
+        }
+        if (c == ')' && subs && !parens[subs - 1]) {
+            t.kind = SUB_CLOSE;
+            --subs;
+            ++i;
+            command = 0;
+            visit(&t, data);
+            continue;
+        }
         if (c == '|' || c == '{' || (c == '}' && depth)) {
             t.kind = c == '|' ? BAR : c == '{' ? OPEN : CLOSE;
             depth = c == '{' ? depth + 1 : c == '}' ? depth - 1 : depth;
@@ -87,7 +108,7 @@ static void scan(const char *buf, size_t len, char *colors,
         if (c == '$') {
             t.kind = REF;
             while (i < len && !isspace((unsigned char)buf[i]) && buf[i] != '|'
-                   && !(depth && buf[i] == '}')) ++i;
+                   && !(depth && buf[i] == '}') && !(subs && buf[i] == ')')) ++i;
             t.end = i;
             command = 0;
             visit(&t, data);
@@ -103,6 +124,11 @@ static void scan(const char *buf, size_t len, char *colors,
                 --nested;
             }
             if (!quote && depth && c == '{') ++nested;
+            if (!quote && subs && c == '(') ++parens[subs - 1];
+            if (!quote && subs && c == ')') {
+                if (!parens[subs - 1]) break; /* Closes the sub-pipeline. */
+                --parens[subs - 1];
+            }
             if (c == '\\' && quote != '\'') {
                 width = i + 1 < len ? 2 : 1;
                 t.plain = 0;
@@ -155,6 +181,8 @@ static void paint_token(const token *t, void *data)
     else if (t->kind != WORD) memset(at, PUNCTUATION, n);
     /* A stage after '|', or first in a block without parameters, is piped. */
     if (t->kind == BAR || t->kind == OPEN) p->piped = 1, p->binding = 0;
+    else if (t->kind == SUB_OPEN) p->piped = 0, p->binding = 0; /* It receives no input. */
+    else if (t->kind == SUB_CLOSE) p->binding = 0;
     else if (t->kind == PARAMS) p->piped = 0;
     else if (t->kind == CLOSE) p->binding = 0;
     if (t->kind != WORD && t->kind != REF) return;
