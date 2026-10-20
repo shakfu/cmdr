@@ -14,14 +14,16 @@
 extern const char cmdr_prelude_source[], cmdr_prelude_effects_source[];
 
 /* A def's layer comes first, so a layer pointer is its node. A def uses
- * commands[0] and owns block. An import's alias also uses commands[0], whose
- * block is the module's. A script pushes a layer of the script commands,
+ * commands[0] and owns block; an as binding uses commands[0] and owns value.
+ * An import's alias also uses commands[0], whose block, or binding node as
+ * user, is the module's. A script pushes a layer of the script commands,
  * whose user is the node holding its path and arguments; after it ends, a
  * layer whose user is the outer script's node, or NULL. */
 typedef struct definition {
     cmdr layer;
     cmdr_command commands[3];
     cmdr_value block;
+    cmdr_value value;
     char *path;
     cmdr_value args;
     struct definition *next; /* The session's previous node. */
@@ -42,13 +44,16 @@ typedef struct {
 struct cmdr_session {
     cmdr head;
     cmdr base;
-    cmdr_command builtins[8];
+    cmdr_command builtins[9];
     int effects;
     FILE *out;
     definition *nodes;
     module **modules;
     size_t nmodules;
 };
+
+/* script-file, script-dir, and script-args start here in builtins. */
+#define SCRIPT_BUILTINS 2
 
 /* A zeroed node the session frees at close. */
 static definition *new_node(cmdr_session *session)
@@ -108,6 +113,12 @@ static int script_args_command(const cmdr *repl, void *user, size_t argc,
     return !node || cmdr_clone(&node->args, result, error);
 }
 
+/* A def, an as binding, or an alias of either, which owns its strings. */
+static int defined(const cmdr_command *command)
+{
+    return command->block || command->value;
+}
+
 static int script_command(const cmdr_command *command)
 {
     return command->run == script_file_command || command->run == script_dir_command
@@ -149,7 +160,7 @@ static int help_command(const cmdr *repl, void *user, size_t argc, const cmdr_va
     if (argc > 1) return cmdr_error(error, "usage: help [NAME]");
     if (argc) return help_one(repl, argv[0].text, result, error);
     /* Tables in lookup order, then definitions oldest first, which reverses
-     * their lookup order. Each def is a layer of one command with a block. */
+     * their lookup order. Each def or binding is a layer of one command. */
     const cmdr **groups = NULL;
     size_t ngroups = 0;
     for (const cmdr *group = repl; group; group = group->parent) {
@@ -162,7 +173,7 @@ static int help_command(const cmdr *repl, void *user, size_t argc, const cmdr_va
     for (size_t pass = 0; pass < 2; ++pass)
         for (size_t k = 0; k < ngroups; ++k) {
             const cmdr *group = groups[pass ? ngroups - 1 - k : k];
-            int def = group->count && group->commands[0].block;
+            int def = group->count && defined(&group->commands[0]);
             if (def != (int)pass) continue;
             /* A script's layers shadow the built-ins, which list in their place. */
             if (group->count && script_command(&group->commands[0])) continue;
@@ -276,6 +287,41 @@ static int def_command(const cmdr *repl, void *user, size_t argc, const cmdr_val
                                        .docstring = docstring,
                                        .block = &node->block};
     push_node(session, node, 1);
+    return 0;
+}
+
+/* as VALUE NAME [DOC]: NAME becomes a command returning VALUE, for lines
+ * compiled after this one. No value, as def and Python's assignment. */
+static int as_command(const cmdr *repl, void *user, size_t argc, const cmdr_value *argv,
+                      cmdr_value *result, char **error)
+{
+    cmdr_session *session = user;
+    if (argc < 2 || argc > 3 || argv[1].kind != CMDR_TEXT
+        || (argc == 3 && argv[2].kind != CMDR_TEXT))
+        return cmdr_error(error, "usage: as VALUE NAME [DOC]");
+    const char *name = argv[1].text;
+    if (!valid_name(name)) return cmdr_error(error, "as: invalid name '%s'", name);
+    if (!strcmp(name, "def")) return cmdr_error(error, "as: cannot redefine def");
+    if (argv[0].kind == CMDR_BLOCK) return cmdr_error(error, "as %s: VALUE is a block; use def", name);
+    cmdr_value value;
+    if (cmdr_clone(&argv[0], &value, error)) return 1;
+    char *docstring;
+    if (argc == 3) {
+        docstring = cmdr_strndup(argv[2].text, strlen(argv[2].text));
+    } else {
+        char *shown = cmdr_describe(&value);
+        docstring = cmdr_realloc(NULL, strlen(shown) + sizeof("as: "), 1);
+        sprintf(docstring, "as: %s", shown);
+        free(shown);
+    }
+    definition *node = new_node(session);
+    node->value = value;
+    node->commands[0] = (cmdr_command){.name = cmdr_strndup(name, strlen(name)),
+                                       .usage = cmdr_strndup(name, strlen(name)),
+                                       .docstring = docstring,
+                                       .value = &node->value};
+    push_node(session, node, 1);
+    *result = (cmdr_value){0};
     return 0;
 }
 
@@ -416,7 +462,8 @@ static int run_module(cmdr_session *session, module *m, const char *verb, const 
     /* Newest first, so the first definition of a name is its latest. */
     for (const cmdr *layer = session->head.parent; !status && layer != before; layer = layer->parent) {
         const definition *node = (const definition *)layer;
-        if (node->block.kind != CMDR_BLOCK) continue; /* Script layers and aliases. */
+        /* Script layers and aliases own neither a block nor a value. */
+        if (node->block.kind != CMDR_BLOCK && node->value.kind == CMDR_NONE) continue;
         size_t i = 0;
         while (i < m->count && strcmp(m->exports[i]->name, node->commands[0].name)) ++i;
         if (i < m->count) continue;
@@ -441,7 +488,7 @@ static void bind(cmdr_session *session, const cmdr_command *command, char *name,
     definition *node = new_node(session);
     node->commands[0] = (cmdr_command){.name = name, .usage = usage,
                                        .docstring = cmdr_strndup(doc, strlen(doc)),
-                                       .block = command->block};
+                                       .block = command->block, .value = command->value};
     push_node(session, node, 1);
 }
 
@@ -610,6 +657,9 @@ cmdr_session *cmdr_session_open(const cmdr *commands, int effects, FILE *out)
             {.name = "script-args", .usage = "script-args",
              .docstring = "Return the arguments of the script file this code is written in",
              .run = script_args_command},
+            {.name = "as", .usage = "as VALUE NAME [DOC]",
+             .docstring = "Bind VALUE to NAME, a command for later lines",
+             .run = as_command, .user = s},
             {.name = "load", .usage = "load PATH [ARG ...]",
              .docstring = "Run a script in this session, with arguments; PATH is relative to the cwd",
              .run = load_command, .user = s, .text = 1},
@@ -624,7 +674,7 @@ cmdr_session *cmdr_session_open(const cmdr *commands, int effects, FILE *out)
         .out = out,
     };
     /* load, import, and from are last, so a session without effects omits them. */
-    s->base = (cmdr){s->builtins, effects ? 8 : 5, commands};
+    s->base = (cmdr){s->builtins, effects ? 9 : 6, commands};
     s->head.parent = &s->base;
     return s;
 }
@@ -634,7 +684,7 @@ void cmdr_session_close(cmdr_session *session)
     if (!session) return;
     for (definition *node = session->nodes, *next; node; node = next) {
         next = node->next;
-        if (node->commands[0].block) { /* Script layers share the built-ins' strings. */
+        if (defined(&node->commands[0])) { /* Script layers share the built-ins' strings. */
             free((char *)node->commands[0].name);
             free((char *)node->commands[0].usage);
             free((char *)node->commands[0].docstring);
@@ -642,6 +692,7 @@ void cmdr_session_close(cmdr_session *session)
         free(node->path);
         cmdr_free(&node->args);
         cmdr_free(&node->block);
+        cmdr_free(&node->value);
         free(node);
     }
     for (size_t i = 0; i < session->nmodules; ++i) free_module(session->modules[i]);
@@ -696,7 +747,7 @@ static definition *push_script(cmdr_session *session, const definition *user)
 {
     definition *node = new_node(session);
     for (size_t i = 0; i < 3; ++i) {
-        node->commands[i] = session->builtins[2 + i];
+        node->commands[i] = session->builtins[SCRIPT_BUILTINS + i];
         node->commands[i].user = (void *)user;
     }
     push_node(session, node, 3);

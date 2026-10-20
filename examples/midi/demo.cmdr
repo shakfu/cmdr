@@ -1,0 +1,52 @@
+#!/usr/bin/env cmdr-midi
+# MIDI generation in cmdr: build scores from scales, chords, rhythms, and
+# chance, add instruments, controllers, and tempo, and write MIDI files.
+#
+#   build/examples/midi/cmdr-midi examples/midi/demo.cmdr
+#
+# Files go in MIDI_OUT (default midi-out/ in the current directory). Nothing
+# plays; midi.play SCORE would send a score to the first MIDI output port.
+
+import midi
+
+env-or MIDI_OUT midi-out | fs-mkdir | as out-dir "The output directory"
+def at { (p) out-dir | path-join $p } "Path P in the output directory"
+def report { (s) midi.end $s | with { (e) count $s | with { (n) list $n items, $e beats | unwords } } } "One line: the item count and length of score S"
+def write-to { (score p bpm) at $p | with { (f) midi.save $score $f $bpm } } "Write SCORE to P in the output directory at BPM; return the path"
+
+# The same seed gives the same piece, as in Python.
+random-seed 2026
+
+# 1. A score is a list of items: notes, rests, and channel and tempo events.
+midi.seq "C4 E4 G4 . C5" 0.5
+
+# 2. Bass: roots of i-iv-v-i in A minor on a fingered bass, two beats each.
+midi.scale A2 minor | midi.degrees "1 4 5 1" | midi.seq 2 90 2 | with { (b) midi.program 33 2 | midi.stack $b } | as bass "Bass part"
+# Chords on the same roots on strings, swelling with controller 11.
+list A3 D4 E4 A3 | each { (r) midi.chord-keys $r minor | midi.chord 2 60 3 } | midi.sequence | with { (c) midi.ramp 11 40 110 8 16 3 | midi.stack $c } | with { (c) midi.program 48 3 | midi.stack $c } | as pads "Pad part"
+bass | report
+pads | report
+
+# 3. Drums on channel 10: Bjorklund's patterns for kick and hat, a fixed snare.
+midi.euclid 3 8 C2 | midi.seq 0.5 110 10 | with { (k) midi.seq ". . D2 . . . D2 ." 0.5 100 10 | midi.stack $k } | with { (ks) midi.euclid 5 8 F#2 2 | midi.seq 0.5 60 10 | midi.stack $ks } | as drums "One bar of kick, snare, and closed hat"
+drums | report
+
+# 4. A melody by random walk over two octaves of pentatonic, with rests drawn
+# among the steps and some notes dropped.
+midi.scale A4 minor-pentatonic 2 | midi.walk 16 6 | push . . | midi.pick 16 0.5 80 1 | midi.chance 0.8 | as melody "Two bars of melody"
+melody | report
+# Four phrases, each its own short walk: repeat calls the block four times,
+# and the block needs no counter.
+repeat 4 { () midi.scale A4 minor-pentatonic | midi.walk 4 } | each { (ks) midi.seq $ks 0.25 70 } | midi.sequence | report
+
+# 5. Stack the parts, loop drums and melody to the progression's length, slow
+# down for the last bar, loosen the timing, and save. humanize goes last, as
+# it can move the last note and so the end that loop measures.
+drums | midi.loop 4 | with { (d) melody | midi.loop 2 | midi.stack $d } | midi.stack $bass | midi.stack $pads | with { (s) midi.tempo 80 | midi.shift 12 | midi.stack $s } | midi.humanize 0.02 12 | write-to song.mid 96 | midi.from-file | report
+
+# 6. Trailing rests are kept: a bar of silence follows the arpeggio.
+midi.scale A3 minor-pentatonic 2 | with { (up) str-reverse $up | rest | with { (down) list $up $down } } | each { (ks) midi.seq $ks 0.25 } | with { (parts) midi.rest 4 | with { (r) push $parts $r } } | midi.sequence | write-to arp.mid 120 | as arp
+arp | midi.from-file | report
+
+# 7. Files read back as scores, so they can be changed and saved again.
+arp | midi.from-file | midi.transpose 7 | midi.stretch 2 | write-to arp-fifth.mid 120 | midi.from-file | report

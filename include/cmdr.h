@@ -39,10 +39,13 @@ typedef struct {
     const char *name;
     const char *usage;     /* Syntax shown by help; NULL shows the name. */
     const char *docstring; /* Description shown by help. */
-    cmdr_fn run;           /* Set run or block. */
+    cmdr_fn run;           /* Set run, block, or value. */
     void *user;            /* Passed to run. */
     int text;              /* run accepts only text arguments. */
     const cmdr_value *block; /* A compiled block, as def makes. */
+    /* A constant, as as makes: calling the command returns a copy, and $NAME
+     * refers to it. It must outlive every line compiled against it. */
+    const cmdr_value *value;
 } cmdr_command;
 
 /* A command table searched before its parent. */

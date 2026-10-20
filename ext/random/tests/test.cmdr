@@ -1,0 +1,46 @@
+# Each line must succeed; cmdr stops at the first that fails. Expected values
+# are Python 3.9's after random.seed with the same N.
+
+random-seed 42
+repeat 3 { () random } | join , | equals 0.6394267984578837,0.025010755222666936,0.27502931836911926
+random-seed 42
+repeat 8 { () random-int 1 6 } | join , | equals 6,1,1,6,3,2,2,2
+random-seed 42
+random-int 0 1099511627776 | equals 247559453085
+random-int 0 1099511627776 | equals 538052153943
+random-seed -7
+repeat 6 { () random-int -3 3 } | join , | equals -1,-2,0,2,-3,-3
+random-seed 1099511627781
+repeat 4 { () random-int 0 99 } | join , | equals 64,66,34,84
+random-seed 0
+repeat 5 { () random-int 0 9 } | join , | equals 6,6,0,4,8
+random-seed 42
+repeat 2 { () random-uniform -1 1 } | join , | equals 0.2788535969157675,-0.9499784895546661
+random-seed 42
+repeat 3 { () random-gauss 0 1 } | join , | equals -0.14409032957792836,-0.1729036003315193,-0.11131586156766246
+
+random-seed 42
+repeat 6 { () list a b c d e | random-choice } | join , | equals a,a,c,b,b,b
+random-seed 42
+list a b c d | random-choices 8 | join , | equals c,a,b,a,c,c,d,a
+random-seed 42
+list a b c | random-choices 8 "1\n0\n3" | join , | equals c,a,c,a,c,c,c,a
+random-seed 42
+list a b c d e f g h | random-shuffle | join , | equals d,e,g,h,c,f,a,b
+random-seed 42
+list a b c d e f g h | random-sample 3 | join , | equals b,a,f
+random-seed 42
+num-seq 0 99 | random-sample 10 | join , | equals 81,14,3,94,35,31,28,17,13,86
+
+# Python's choices(range(1, 7), k=8) draws differently from randint.
+random-seed 42
+num-seq 1 6 | random-choices 8 | join , | equals 4,1,2,2,5,5,6,1
+
+# Text is split into lines, as list commands do; items may be lists.
+random-seed 42
+text "a\nb\nc\nd\n" | random-choices 8 | join , | equals c,a,b,a,c,c,d,a
+list | random-choices 0 | empty
+list | random-shuffle | empty
+list a b | random-sample 0 | empty
+list a b | random-sample 2 | sort | join , | equals a,b
+list a | with { (x) list $x $x } | random-choice | join , | equals a

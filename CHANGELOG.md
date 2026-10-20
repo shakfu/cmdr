@@ -66,6 +66,18 @@
 
 - `examples/sox-dsl`: sox in cmdr. The `snd` extension runs sox's arguments in-process through libsox: all 62 effects, the six `--combine` methods, format options, the null file, and the default audio device for play and record. It adds `varispeed`, which sox lacks: speed changes linearly over the output, on libsoxr's variable-rate mode. The `snd` module builds chains as lists of those arguments and splits files at times, at silences, and by channel. libsox over libsoxr with effects written here, because it covers sox's effects with sox's own arguments and DSP. Configure builds `cmdr-snd` only when pkg-config finds libsox and libsoxr, so `cmdr` depends on neither. See [examples/sox-dsl](examples/sox-dsl/README.md).
 
+- `examples/midi`: MIDI generation in cmdr, on the vendored libremidi 5.4.3. The `midi` extension plays scores on MIDI output ports, reads and writes Standard MIDI Files, and makes Euclidean rhythms by Bjorklund's algorithm. The `midi` module builds scores from scales, chords, scale degrees, and rhythms; draws them by chance with `pick`, `walk`, `chance`, and `humanize`; and transposes, shifts, stretches, stacks, sequences, and loops them. A score is a list of items as text, `KIND START ...` in beats: notes, rests, controllers, programs, pitch bends, and tempo changes. Text over handles held in C, so scores print and pass through list commands. Rests count toward a score's length, so joining, looping, and files keep a trailing gap. Configure builds `cmdr-midi` only with a C++ compiler and CMake 3.22, so `cmdr` needs neither. See [examples/midi](examples/midi/README.md).
+
+- Extension `random`: `random-seed`, `random`, `random-int`, `random-uniform`, `random-gauss`, `random-choice`, `random-choices`, `random-shuffle`, and `random-sample`, as Python's `random`. It uses Python's Mersenne Twister and seeding, so after `random-seed N` each command returns what Python returns after `random.seed(N)`. Python's generator over a smaller one, so a seed means the same in both and results can be checked against Python.
+
+- `-DCMDR_EXAMPLES=OFF` skips building `cmdr-snd` and `cmdr-midi` and their tests. It defaults to `ON`, so `make test` still runs the examples' tests.
+
+- `repeat N BLOCK [ARG ...]` calls a block N times with only ARGs and lists the results. A block must use each parameter it declares, so `num-range 8 | each { (i) random }` was an error, and repeated calls needed a counter. A count over 10,000,000 is an error, as in `num-seq`.
+
+- `as VALUE NAME [DOC]` binds a value to a name for later lines: `snd.out $c a440.wav | as a440`. NAME is a command returning the value, with `def`'s rules: lexical, shadowable, and exported from modules. Like `def` and Python's assignment, `as` returns no value, so a binding prints nothing in a script. The REPL colors bound names bold magenta, a bold form of the reference color, since a binding is a named value. A constant over a variable, so a definition keeps the value it saw. `as` over `let`, because cmdr passes the value first: `as VALUE NAME` reads as Python's `with ... as name`, and `let VALUE NAME` reverses `let`'s usual order.
+
+- `$NAME` refers to an `as` binding where no enclosing block declares NAME: `list $a $b`. Before, a binding could only start a stage, and `list a b` silently built the words `a` and `b`. It resolves where its line compiles, as command names do, so a definition keeps the value it saw and errors precede effects; resolving at run time would have given dynamic scope. `$NAME` names values only: `$upper` is an error, so a reference never runs code. `cmdr_command` gains `value`, a constant that calling returns and `$NAME` refers to; a host can declare its own. See [docs/dev/bindings.md](docs/dev/bindings.md).
+
 - **Extensions in `ext/NAME/`.** Each holds C commands, `.cmdr` definitions, a `README.md`, and `tests/`, and the build compiles them into `cmdr`. `make test` runs each `tests/*.cmdr` with `cmdr` and builds each `tests/*.c` against the extension. `help` shows C commands with `ext/NAME:` before the docstring. An extension command that reuses an existing name stops startup. A shadowed name would silently change prelude definitions, which bind names when defined. Extension scripts run before the prelude, because `--user` replaces it. See [README.md](README.md#extensions) and [ext/env](ext/env/README.md).
 
 - Extensions `re`, `num`, `fs`, `time`, and `str`. Each covers a gap a `def` cannot fill: `matches` returns no captures, a `def` cannot loop N times, and no primitive calls `stat`. Every command starts with its extension's name, so a later primitive cannot collide with it. `time-local` and `time-utc` take `[EPOCH] FORMAT` over `FORMAT [EPOCH]`, so a piped time is formatted: `fs-mtime f | time-local %F`. See [README.md](README.md#extensions).
@@ -114,6 +126,8 @@
 - `def NAME BLOCK [DOC]`: `help` shows DOC, and the usage column shows the block's parameters, such as `exts DIR`.
 
 ### Fixed
+
+- `cmdr_add_extension_tests` put `tests/` on a C test program's include path only when called from `tests/`. An example's `ext/NAME/tests/*.c` could not find `ext_check.h`.
 
 - `map`'s help and the README say its COMMAND is looked up when `map` runs, not with the line. `each { COMMAND }` is checked first.
 

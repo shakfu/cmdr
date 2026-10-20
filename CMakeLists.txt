@@ -132,5 +132,10 @@ if(CMDR_BUILD_TESTS)
   add_subdirectory(tests)
 endif()
 
-# An example with its own binary, which needs libraries cmdr does not.
-add_subdirectory(examples/sox-dsl)
+# Examples with their own binaries, which need libraries cmdr does not. Each
+# skips itself when its libraries are missing.
+option(CMDR_EXAMPLES "Build the examples' binaries, cmdr-snd and cmdr-midi" ON)
+if(CMDR_EXAMPLES)
+  add_subdirectory(examples/sox-dsl)
+  add_subdirectory(examples/midi)
+endif()

@@ -220,6 +220,8 @@ Verdict: the full language is not justified. Proposals 1-4 are small and close G
 
 ### G1: `as NAME` instead of `let`
 
+Superseded: `as` is now `as VALUE NAME`, which binds a constant for the rest of the session, not a name within one pipeline. See README.md, "Blocks and definitions".
+
 `as NAME` is a pipeline stage that binds the current value to `$NAME` and passes it through. A lone reference is a stage anywhere and replaces the current value.
 
 ```text

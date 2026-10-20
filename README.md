@@ -16,7 +16,7 @@ hello world
 
 Run `help` for the command list; it returns text, so `help | filter map` works. `help NAME` shows one command's full usage and documentation. Exit with `quit`, `exit`, or Ctrl-D.
 
-The REPL edits lines with a vendored copy of linenoise, in [thirdparty/linenoise](thirdparty/linenoise). The prompt is light green, except on terminals without escape sequences (`dumb`, `cons25`, `emacs`). It colors commands, references, blocks, and strings, and shows unknown commands in red. Tab completes command names. Up and Down recall history, saved in `~/.cmdr_history`, with a continued pipeline stored as one entry. Ctrl-C drops the current pipeline. Pasted lines run one at a time, each echoed after its prompt. Configure with `-DCMDR_EDITOR=OFF` to read plain lines instead.
+The REPL edits lines with a vendored copy of linenoise, in [thirdparty/linenoise](thirdparty/linenoise). The prompt is light green, except on terminals without escape sequences (`dumb`, `cons25`, `emacs`). It colors commands, references, blocks, and strings, shows names bound by `as` in bold magenta, where bound and where used, and shows unknown commands in red. Tab completes command names. Up and Down recall history, saved in `~/.cmdr_history`, with a continued pipeline stored as one entry. Ctrl-C drops the current pipeline. Pasted lines run one at a time, each echoed after its prompt. Configure with `-DCMDR_EDITOR=OFF` to read plain lines instead.
 
 - `./cmdr -c 'PIPELINE'` evaluates one pipeline.
 
@@ -82,7 +82,30 @@ a,c
 
 `def NAME BLOCK [DOC]` defines a command for the rest of the session. `help` shows DOC, or the body if DOC is absent. Definitions are lexical: a body uses the commands that existed when it was defined, and a body that names its own command calls the one it shadows. A definition may shadow any command except `def`. Errors from a body are prefixed with its name (`outer: inner: equals: ...`). A mismatch from a def called on the line also shows the call's arguments: `ends-with ar bar: ge: 2 is not at least 3`.
 
-`each`, `keep`, `not`, and `try` take blocks. Extra arguments follow the item: `list a b c | keep { (s v) not $s { equals $v } } b`.
+`as VALUE NAME [DOC]` binds VALUE to NAME. NAME becomes a command of no arguments that returns VALUE, as a Python assignment names a value. Like `def` and assignment, `as` returns no value, so it ends its pipeline and prints nothing:
+
+```text
+cmdr> text 440 | as hz "Concert A"
+cmdr> hz | mul 2
+880
+```
+
+A binding follows `def`'s rules. Later lines see NAME; the line that binds it does not. A definition keeps the value it saw, and binding NAME again shadows it. A module exports it as MODULE.NAME. VALUE is constant and cannot be a block; use `def` for code.
+
+`$NAME` refers to a binding where no enclosing block declares NAME, so a binding can be an argument. A plain NAME there is the word itself:
+
+```text
+cmdr> text a.wav | as a
+cmdr> text b.wav | as b
+cmdr> list $a $b | join ,
+a.wav,b.wav
+cmdr> list a b | join ,
+a,b
+```
+
+A block's parameter shadows a binding of the same name. `$MODULE.NAME` refers to a module's binding. `$upper` is an error, since `upper` is a command, not a value. See [docs/dev/bindings.md](docs/dev/bindings.md).
+
+`each`, `keep`, `not`, and `try` take blocks. Extra arguments follow the item: `list a b c | keep { (s v) not $s { equals $v } } b`. `repeat N BLOCK` passes only the extra arguments, so a block that needs no counter declares none: `repeat 3 { () text x }`.
 
 ## Commands
 
@@ -107,6 +130,7 @@ These are the primitives, in [src/primitives.c](src/primitives.c). Extensions ad
 | `not VALUE BLOCK [ARG ...]` | Return VALUE if the block mismatches |
 | `with VALUE BLOCK [ARG ...]` | Call a block with VALUE |
 | `fold VALUE INIT BLOCK [ARG ...]` | Combine items left to right; the block takes the result so far and the item |
+| `repeat N BLOCK [ARG ...]` | Call a block N times with only ARGs; list the results |
 | `try [INPUT] BLOCK FALLBACK` | Return FALLBACK if the block fails |
 | `or [INPUT] BLOCK FALLBACK` | Return FALLBACK if the block mismatches |
 | `check [INPUT] BLOCK MESSAGE` | Mismatch with MESSAGE if the block mismatches |
@@ -282,6 +306,7 @@ The extensions in `ext/`:
 | [env](ext/env/README.md) | Environment variables |
 | [fs](ext/fs/README.md) | Path tests, sizes, times, `fs-mkdir`, `fs-remove`, `fs-move` |
 | [num](ext/num/README.md) | `num-seq`, modulo, rounding |
+| [random](ext/random/README.md) | Seeded random numbers, choices, shuffles, and samples, as Python's `random` |
 | [re](ext/re/README.md) | Regex extraction, splitting, and replacement |
 | [shlex](ext/shlex/README.md) | Shell-style word splitting and quoting, as Python's `shlex` |
 | [str](ext/str/README.md) | Byte offsets, repetition, padding, reversal |
@@ -309,5 +334,7 @@ Syntax highlighting for Vim, Sublime Text, and VS Code is in [editors/](editors/
 ## Checks
 
 `make test` builds cmdr and runs [tests/test_cmdr.py](tests/test_cmdr.py) with Python 3, in parallel. It also runs each extension's `tests/`. It runs [tests/test_api.c](tests/test_api.c) against both libraries, then installs into `build/staged` and builds [tests/consumer](tests/consumer) against it. Each test method is a CTest test, so `ctest --test-dir build -R test_editor` runs only the editor tests. Tests that need the editor show as skipped in a build without it. Configure with `-DCMDR_BUILD_TESTS=OFF` to build without Python.
+
+`make` also builds the binaries of [examples/sox-dsl](examples/sox-dsl/README.md) and [examples/midi](examples/midi/README.md), `cmdr-snd` and `cmdr-midi`, and `make test` runs their tests. Each skips itself if its libraries or compiler are missing. Configure with `-DCMDR_EXAMPLES=OFF` to skip both. `cmdr` itself never includes them.
 
 Design history: [docs/dev/minimal.md](docs/dev/minimal.md), [docs/dev/blocks.md](docs/dev/blocks.md).

@@ -7,8 +7,8 @@
 # Inputs. Format options go before a file, as in sox: -t raw -r 8k -c 1 PATH.
 def in { (path) list $path } "Start a chain that reads PATH"
 def in-as { (opts path) words $opts | push $path } "Start a chain that reads PATH with format OPTIONS, such as \"-t raw -r 8k -e signed -b 16 -c 1\""
-def null { () list -n } "Start a chain from silence without end, for synth"
-def device { () list -d } "Start a chain that records from the default audio device"
+list -n | as null "Start a chain from silence without end, for synth"
+list -d | as device "Start a chain that records from the default audio device"
 def tone { (seconds hz) list -r 44100 -n synth $seconds sine $hz gain -6 } "Start a chain of a SECONDS sine at HZ, at -6 dBFS"
 def scaled { (path factor) list -v $factor $path } "PATH, with its samples multiplied by FACTOR, for combine and its forms"
 def combine { (method paths) list --combine $method | with { (h) fold $paths $h { (c p) push $c $p } } } "Start a chain that combines PATHS by METHOD, as sox --combine"

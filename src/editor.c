@@ -10,8 +10,11 @@
 #include <string.h>
 #include <strings.h>
 
-/* linenoise colors: 1 red, 2 green, 3 yellow, 4 blue, 5 magenta, 6 cyan. */
-enum { UNKNOWN = 1, STRING = 2, PUNCTUATION = 3, COMMAND = 4, REFERENCE = 5, COMMENT = 6 };
+/* linenoise colors: 1 red, 2 green, 3 yellow, 4 blue, 5 magenta, 6 cyan;
+ * adding 8 makes them bold. A binding is a named value, so it is a bold
+ * reference color. */
+enum { UNKNOWN = 1, STRING = 2, PUNCTUATION = 3, COMMAND = 4, REFERENCE = 5, COMMENT = 6,
+       BINDING = 13 };
 
 struct editor {
     linenoise_context_t *ctx;
@@ -122,14 +125,14 @@ static void scan(const char *buf, size_t len, char *colors,
     }
 }
 
-/* Whether buf[0, n) names an active command. */
-static int known(const cmdr *repl, const char *name, size_t n)
+/* The active command that buf[0, n) names, or NULL. */
+static const cmdr_command *known(const cmdr *repl, const char *name, size_t n)
 {
     char word[256];
-    if (n >= sizeof(word)) return 0;
+    if (n >= sizeof(word)) return NULL;
     memcpy(word, name, n);
     word[n] = '\0';
-    return cmdr_find(repl, word) != NULL;
+    return cmdr_find(repl, word);
 }
 
 typedef struct {
@@ -137,6 +140,9 @@ typedef struct {
     const char *buf;
     char *colors;
     size_t pos;
+    int piped;   /* The current stage receives a value, so NAME is as's first argument. */
+    int binding; /* The current stage is the built-in as. */
+    int args;    /* Arguments seen in the current stage. */
 } paint;
 
 static void paint_token(const token *t, void *data)
@@ -147,18 +153,34 @@ static void paint_token(const token *t, void *data)
     if (t->kind == NOTE) memset(at, COMMENT, n);
     else if (t->kind == REF || t->kind == PARAM) memset(at, REFERENCE, n);
     else if (t->kind != WORD) memset(at, PUNCTUATION, n);
-    else if (t->command && t->plain) {
+    /* A stage after '|', or first in a block without parameters, is piped. */
+    if (t->kind == BAR || t->kind == OPEN) p->piped = 1, p->binding = 0;
+    else if (t->kind == PARAMS) p->piped = 0;
+    else if (t->kind == CLOSE) p->binding = 0;
+    if (t->kind != WORD && t->kind != REF) return;
+    if (!t->command) {
+        /* as's NAME: as VALUE NAME, or NAME alone after a piped VALUE. */
+        if (p->binding && ++p->args == (p->piped ? 1 : 2) && t->kind == WORD && t->plain)
+            memset(at, BINDING, n);
+        return;
+    }
+    p->binding = 0, p->args = 0;
+    if (t->kind != WORD || !t->plain) return;
+    const cmdr_command *command = known(p->ed->repl, p->buf + t->start, n);
+    if (command) {
+        memset(at, command->value ? BINDING : COMMAND, n);
+        /* The built-in, not a def that shadows it. */
+        p->binding = n == 2 && !memcmp(p->buf + t->start, "as", 2) && !command->block;
+    } else if (p->pos != t->end && !(n == 4 && !memcmp(p->buf + t->start, "[...", 4))) {
         /* A word still being typed is not marked unknown, nor the start of
          * linenoise's "[... N pasted lines ...]", which buf shows for a paste. */
-        if (known(p->ed->repl, p->buf + t->start, n)) memset(at, COMMAND, n);
-        else if (p->pos != t->end && !(n == 4 && !memcmp(p->buf + t->start, "[...", 4)))
-            memset(at, UNKNOWN, n);
+        memset(at, UNKNOWN, n);
     }
 }
 
 static void highlight(const char *buf, char *colors, size_t len, size_t pos, void *udata)
 {
-    paint p = {udata, buf, colors, pos};
+    paint p = {.ed = udata, .buf = buf, .colors = colors, .pos = pos};
     scan(buf, len, colors, paint_token, &p);
 }
 

@@ -72,13 +72,18 @@ static void host_commands(void)
         {.name = "bang", .usage = "bang TEXT", .docstring = "Mark text", .run = bang,
          .user = &calls, .text = 1},
         {.name = "upper", .run = bang, .user = &calls, .text = 1}, /* Shadows. */
+        {.name = "greeting", .value = &(cmdr_value){.kind = CMDR_TEXT, .text = "hi"}},
     };
-    const cmdr table = {commands, 2, &cmdr_primitives};
+    const cmdr table = {commands, 3, &cmdr_primitives};
     cmdr_session *session = cmdr_session_open(&table, 1, NULL);
     expect(session, "list 'a b' '' 'a|b' | map bang", "!a b\n!\n!a|b\n");
     CHECK(calls == 3);
     expect(session, "upper x", "!x\n");
     expect(session, "lower X", "x\n");
+    /* A host's constant is a command and a $NAME, as an as binding is. */
+    expect(session, "greeting", "hi\n");
+    expect(session, "text $greeting there", "hi there\n");
+    expect_error(session, "greeting x", 1, "greeting takes no arguments");
     expect(session, "help | filter 'Mark text' | count", "1\n");
     expect_error(session, "bang", 1, "usage: bang TEXT");
     expect_error(session, "list a | bang", 1, "command 'bang' expects text");
@@ -117,6 +122,12 @@ static void definitions(void)
     cmdr_free(&value);
     cmdr_free(&arg);
     expect_error(a, "text a | equals b", CMDR_MISMATCH, "equals: a differs from b");
+    /* An as binding is a command with a value, which $NAME refers to. */
+    expect(a, "list p q | as pair", "");
+    expect(a, "pair | count", "2\n");
+    expect(a, "list $pair x | count", "2\n");
+    CHECK(cmdr_find(cmdr_session_commands(a), "pair")->value);
+    CHECK(!cmdr_find(cmdr_session_commands(a), "g")->value);
     cmdr_session_close(a);
     cmdr_session_close(b);
 }

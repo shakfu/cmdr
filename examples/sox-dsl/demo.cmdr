@@ -8,30 +8,37 @@
 
 import snd
 
-def at { (p) env-or SND_OUT snd-out | fs-mkdir | path-join $p } "Path P in the output directory"
-def report { (p) snd.info $p | head 3 | rest | unwords | with { (i) path-basename $p | with { (b) list $b $i | unwords } } } "One line: the file name, rate, and channels"
+env-or SND_OUT snd-out | fs-mkdir | as out-dir "The output directory"
+def at { (p) out-dir | path-join $p } "Path P in the output directory"
+def write-to { (chain p) at $p | with { (o) snd.out $chain $o } } "Run CHAIN into P in the output directory; return the path"
+def report { (ps) lines $ps | each { (p) snd.info $p | head 3 | rest | unwords | with { (i) path-basename $p | with { (b) list $b $i | unwords } } } } "One line per path in PS, a path or a list: the file name, rate, and channels"
 
 # 1. Synthesize two tones. A chain is a list of sox's arguments until out runs it.
+# as names a file for later steps.
 snd.tone 2 440 | unwords
-snd.tone 2 440 | with { (c) at a440.wav | with { (o) snd.out $c $o } } | report
-snd.tone 2 330 | with { (c) at e330.wav | with { (o) snd.out $c $o } } | report
+snd.tone 2 440 | write-to a440.wav | as a440
+snd.tone 2 330 | write-to e330.wav | as e330
+list a440.wav e330.wav | each { at } | as tones
+tones | report
 
 # 2. Effects, named or as sox writes them.
-at a440.wav | snd.in | snd.rate 48000 | snd.fade 0.1 0.5 | snd.effect "chorus 0.7 0.9 55 0.4 0.25 2 -t" | with { (c) at chorus.wav | with { (o) snd.out $c $o } } | report
+a440 | snd.in | snd.rate 48000 | snd.fade 0.1 0.5 | snd.effect "chorus 0.7 0.9 55 0.4 0.25 2 -t" | write-to chorus.wav | report
 
 # 3. Combine: mix into a chord, merge into stereo, join end to end.
-list a440.wav e330.wav | each { at } | snd.mix | with { (c) at chord.wav | with { (o) snd.out $c $o } } | report
-list a440.wav e330.wav | each { at } | snd.merge | with { (c) at stereo.wav | with { (o) snd.out $c $o } } | report
-list a440.wav e330.wav | each { at } | snd.join | snd.stats-field "Length s"
+tones | snd.mix | write-to chord.wav | as chord
+chord | report
+tones | snd.merge | write-to stereo.wav | as stereo
+stereo | report
+tones | snd.join | snd.stats-field "Length s"
 
 # 4. Presets are definitions from chain to chain.
-at stereo.wav | snd.in | snd.telephone | with { (c) at telephone.wav | with { (o) snd.out $c $o } } | report
-at chord.wav | snd.in | snd.tape-stop | with { (c) at tape-stop.wav | with { (o) snd.out $c $o } } | snd.info-field seconds
+stereo | snd.in | snd.telephone | write-to telephone.wav | report
+chord | snd.in | snd.tape-stop | write-to tape-stop.wav | snd.info-field seconds
 
 # 5. Split: at times, at silences, and by channel.
-at cut.wav | with { (o) at a440.wav | snd.in | snd.split-at "0.5 1" $o } | each { report }
-at note.wav | with { (o) at e330.wav | snd.in | snd.trim 0 0.4 | snd.pad 0 0.6 | snd.repeat 2 | snd.split-silence -40 0.3 $o } | each { report }
-at voice.wav | with { (o) at stereo.wav | snd.in | snd.split-channels $o } | each { report }
+at cut.wav | with { (o) a440 | snd.in | snd.split-at "0.5 1" $o } | report
+at note.wav | with { (o) e330 | snd.in | snd.trim 0 0.4 | snd.pad 0 0.6 | snd.repeat 2 | snd.split-silence -40 0.3 $o } | report
+at voice.wav | with { (o) stereo | snd.in | snd.split-channels $o } | report
 
 # 6. sox's stats for any chain, with no file written.
-at chord.wav | snd.in | snd.stats | lines | head 4
+chord | snd.in | snd.stats | lines | head 4

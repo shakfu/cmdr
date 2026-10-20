@@ -3,7 +3,8 @@
 
 import snd
 
-def tmp { (p) env SND_OUT | fs-mkdir | path-join $p } "Path P in the test directory"
+env SND_OUT | fs-mkdir | as out-dir "The test directory"
+def tmp { (p) out-dir | path-join $p } "Path P in the test directory"
 def write-to { (chain p) tmp $p | with { (o) snd.out $chain $o } } "Run CHAIN into P in the test directory"
 
 # Building a chain only adds words; nothing runs until out.

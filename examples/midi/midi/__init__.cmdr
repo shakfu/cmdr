@@ -1,0 +1,73 @@
+# MIDI generation in cmdr. A score is a list of items, each the text KIND
+# START ..., with START and lengths in beats:
+#   note START LENGTH KEY VELOCITY CHANNEL    cc START CONTROLLER VALUE CHANNEL
+#   program START PROGRAM CHANNEL            bend START VALUE CHANNEL
+#   tempo START BPM                          rest START LENGTH
+# KEY is 0 to 127 or a name such as C4 (60). Definitions that build or change
+# a score return a new list; play and save send it with midi-play and
+# midi-write. Random definitions use ext/random, so random-seed repeats them.
+# midi-* are the C commands; these are the API. `import midi` binds them as
+# midi.NAME; see ../README.md. Needs cmdr-midi.
+
+# Items. Field 1 is the kind and field 2 the start.
+def field { (n i) words $n | nth $i } "Field I of item N"
+def put { (n i v) words $n | with { (w) sub $i 1 | with { (a) head $w $a } | push $v | with { (h) count $w | sub $i | with { (b) tail $w $b | fold $h { (c x) push $c $x } } } } | unwords } "Item N with field I set to V"
+def edit { (score kind i f) each $score { (n) or { () field $n 1 | equals $kind | $n | field $i | with $f | with { (v) put $n $i $v } } $n } } "SCORE with block F applied to field I of each item of KIND"
+def append { (a b) fold $b $a { (c x) push $c $x } } "The items of A, then those of B"
+def flatten { (scores) list | with { (e) fold $scores $e { (c s) append $c $s } } } "Join a list of scores into one"
+def keys { (k) try $k { words } $k } "KEYS as a list: a list as is, or text split into words"
+def at-least { (x lo) list $x $lo | max } "X, or LO if X is below it"
+def clamp { (x lo hi) at-least $x $lo | with { (y) list $y $hi | min } } "X limited to LO to HI"
+
+# Changing a score.
+def shift { (score beats) each $score { (n) field $n 2 | add $beats | with { (s) put $n 2 $s } } } "Start every item BEATS later"
+def stretch { (score factor) each $score { (n) field $n 2 | mul $factor | with { (s) put $n 2 $s } | with { (m) or { () matches $m "^(note|rest) " | field 3 | mul $factor | with { (l) put $m 3 $l } } $m } } } "Multiply starts and lengths by FACTOR"
+def transpose { (score n) edit $score note 4 { add $n } } "Move every key by N semitones"
+def velocity { (score v) each $score { (n) or { () matches $n "^note " | put 5 $v } $n } } "Set every note's velocity to V"
+def channel { (score c) each $score { (n) or { () matches $n "^(note|cc|program|bend) " | words | count | with { (i) put $n $i $c } } $n } } "Set every channel to C"
+def end { (score) each $score { (n) field $n 2 | with { (s) or { () matches $n "^(note|rest) " | field 3 | add $s } $s } } | fold 0 { (a x) or $a { gt $x } $x } } "The beat at which the last item, rests included, ends"
+def stack { (a b) append $a $b } "Play scores A and B together"
+def then { (a b) end $a | with { (e) shift $b $e } | with { (s) append $a $s } } "Play B after A ends"
+def sequence { (scores) list | with { (e) fold $scores $e { (c s) then $c $s } } } "Play a list of scores one after another"
+def loop { (score n) end $score | with { (e) sub $n 1 | with { (m) num-seq 0 $m } | each { (i) mul $i $e | with { (t) shift $score $t } } } | flatten } "Play SCORE N times"
+
+# Building. Each starts at beat 0; shift, then, and sequence place it.
+def item { (kind start length key velocity channel) midi-key $key | with { (k) list $kind $start $length $k $velocity $channel | unwords } } "One note item"
+def note { (key length=1 velocity=100 channel=1) item note 0 $length $key $velocity $channel | with { (n) list $n } } "A score of one note"
+def seq { (ks length=1 velocity=100 channel=1) keys $ks | with { (k) count $k | num-range | each { (i) nth $k $i | with { (key) sub $i 1 | mul $length | with { (t) list rest $t $length | unwords | with { (r) or { () equals $key . | replace . 0 } $key | with { (safe) item note $t $length $safe $velocity $channel } | with { (n) or { () equals $key . | $r } $n } } } } } } } "Play KEYS one after another, each LENGTH beats; a key of . is a rest"
+def chord { (ks length=1 velocity=100 channel=1) keys $ks | each { (k) item note 0 $length $k $velocity $channel } } "Play KEYS together for LENGTH beats"
+def cc { (controller value channel=1) list cc 0 $controller $value $channel | unwords | with { (n) list $n } } "A score of one control change"
+def program { (number channel=1) list program 0 $number $channel | unwords | with { (n) list $n } } "A score of one program change; NUMBER is 0 to 127"
+def bend { (value channel=1) list bend 0 $value $channel | unwords | with { (n) list $n } } "A score of one pitch bend, -8192 to 8191"
+def tempo { (bpm) list tempo 0 $bpm | unwords | with { (n) list $n } } "A score of one tempo change"
+def ramp { (controller from to length steps=16 channel=1) num-seq 0 $steps | each { (i) div $i $steps | with { (f) sub $to $from | mul $f | add $from | num-round | with { (v) mul $f $length | with { (t) list cc $t $controller $v $channel | unwords } } } } } "STEPS+1 control changes from FROM to TO over LENGTH beats"
+
+# Pitch sets: lists of keys, as numbers.
+list "major 0 2 4 5 7 9 11" "minor 0 2 3 5 7 8 10" "harmonic-minor 0 2 3 5 7 8 11" "dorian 0 2 3 5 7 9 10" "phrygian 0 1 3 5 7 8 10" "lydian 0 2 4 6 7 9 11" "mixolydian 0 2 4 5 7 9 10" "locrian 0 1 3 5 6 8 10" "pentatonic 0 2 4 7 9" "minor-pentatonic 0 3 5 7 10" "blues 0 3 5 6 7 10" "whole-tone 0 2 4 6 8 10" "chromatic 0 1 2 3 4 5 6 7 8 9 10 11" | as scales "Scales, as NAME then semitones above the root"
+list "major 0 4 7" "minor 0 3 7" "dim 0 3 6" "aug 0 4 8" "sus2 0 2 7" "sus4 0 5 7" "maj7 0 4 7 11" "min7 0 3 7 10" "dom7 0 4 7 10" "dim7 0 3 6 9" "min7b5 0 3 6 10" | as chords "Chords, as NAME then semitones above the root"
+def lookup { (table name) list "unknown name: " $name | concat | with { (m) keep $table { (l) words $l | first | equals $name } | check { nonempty } $m } | first | words | rest } "The semitones of NAME in TABLE"
+def over { (root steps) midi-key $root | with { (r) each $steps { (s) add $r $s } } } "STEPS as keys above ROOT"
+def scale { (root kind=major octaves=1) scales | lookup $kind | with { (s) sub $octaves 1 | with { (m) num-seq 0 $m } | each { (o) mul $o 12 | with { (d) each $s { (x) add $x $d } } } | flatten | with { (all) over $root $all } } } "OCTAVES of scale KIND from ROOT, as keys"
+def chord-keys { (root kind=major) chords | lookup $kind | with { (s) over $root $s } } "The keys of chord KIND on ROOT"
+def degrees { (scale ds) keys $ds | each { (d) nth $scale $d } } "Items DS, counting from 1, of SCALE"
+
+# Rhythm.
+def rotate { (xs n) or { () nonempty $xs | count | with { (c) num-mod $n $c | with { (r) sub $c $r | with { (k) tail $xs $k | with { (t) head $xs $r | with { (h) append $t $h } } } } } } $xs } "XS rotated left by N items"
+def euclid { (k n key rotate=0) midi-euclid $k $n | rotate $rotate | each { (h) or { () equals $h 1 | $key } . } } "N steps, KEY on K of them as Bjorklund spreads them and . elsewhere, for seq"
+
+# Chance. random-seed N makes these repeat.
+def pick { (ks n length=1 velocity=100 channel=1) keys $ks | random-choices $n | seq $length $velocity $channel } "N keys drawn from KEYS, played in turn; a . drawn is a rest"
+def walk { (scale n start=1 step=1) count $scale | with { (c) sub 0 $step | with { (lo) num-seq $lo $step } | with { (steps) sub $n 1 | with { (m) random-choices $steps $m } } | with { (ds) list $start | with { (s0) fold $ds $s0 { (acc d) last $acc | add $d | clamp 1 $c | with { (p) push $acc $p } } } } } | each { (i) nth $scale $i } } "N keys of SCALE by a random walk from item START, moving up to STEP items at a time"
+def chance { (score p) each $score { (n) or { () random | ge $p | $n | matches "^note " | words | with { (w) nth $w 2 | with { (s) nth $w 3 | with { (l) list rest $s $l | unwords } } } } $n } } "Keep each note with probability P; the others become rests"
+def jitter { (x amount) sub 0 $amount | with { (lo) random-uniform $lo $amount } | add $x } "X plus a uniform draw within AMOUNT"
+def jitter-int { (x amount) sub 0 $amount | with { (lo) random-int $lo $amount } | add $x } "X plus a whole number within AMOUNT"
+def humanize { (score time=0.02 velocity=10) each $score { (n) or { () matches $n "^note " | field 2 | jitter $time | at-least 0 | with { (s) put $n 2 $s } | with { (m) field $m 5 | jitter-int $velocity | clamp 1 127 | with { (v) put $m 5 $v } } } $n } } "Move each note's start by up to TIME beats and velocity by up to VELOCITY"
+
+# Output.
+def play { (score bpm=120 port="") midi-play $score $bpm $port } "Play SCORE at BPM on PORT, or the first output port; return SCORE"
+def ports { () midi-ports } "List MIDI output ports"
+def save { (score path bpm=120) midi-write $score $path $bpm } "Write SCORE to the MIDI file PATH, at BPM unless it sets a tempo at 0; return PATH"
+def from-file { (path) midi-read $path } "The items of the MIDI file PATH, in beats"
+
+# Last, since it shadows the prelude's rest, which lookup uses.
+def rest { (length) list rest 0 $length | unwords | with { (n) list $n } } "A score of silence LENGTH beats long"

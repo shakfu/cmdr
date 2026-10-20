@@ -3,8 +3,8 @@
 
 import aw
 
-def cli-usage { () list "usage: aw.cmdr ask DIR AGENT[:MODEL] PROMPT ..." "       aw.cmdr edit DIR AGENT[:MODEL] PROMPT ..." "       aw.cmdr chain DIR STEP ..." "       aw.cmdr audit DIR [STEP ...]" "       aw.cmdr fix DIR REPORT-FILE [STEP ...]" "       aw.cmdr build DIR SPEC-FILE [STEP ...]" | unlines }
-def cli-args { (a n) count $a | with { (c) cli-usage | with { (u) check $c { ge $n } $u } } | $a } "Return ARGS if it has at least N items, else fail with usage"
+list "usage: aw.cmdr ask DIR AGENT[:MODEL] PROMPT ..." "       aw.cmdr edit DIR AGENT[:MODEL] PROMPT ..." "       aw.cmdr chain DIR STEP ..." "       aw.cmdr audit DIR [STEP ...]" "       aw.cmdr fix DIR REPORT-FILE [STEP ...]" "       aw.cmdr build DIR SPEC-FILE [STEP ...]" | unlines | as cli-usage
+def cli-args { (a n) count $a | with { (c) check $c { ge $n } $cli-usage } | $a } "Return ARGS if it has at least N items, else fail with usage"
 def after { (xs n) count $xs | sub $n | with { (k) tail $xs $k } } "Drop the first N items"
 def cli-steps { (a n d) after $a $n | with { (s) or $s { nonempty } $d } } "Items after N, or D if there are none"
 def cli-prompt { (a f) cli-args $a 4 | nth 2 | aw.target-path | with { (t) after $a 3 | unwords | with { (q) nth $a 3 | with { (s) list $t | map $f $s $q | concat } } } }
@@ -15,4 +15,4 @@ def cli-audit { (a) cli-args $a 2 | nth 2 | aw.target-path | with { (t) aw.audit
 def cli-fix { (a) cli-args $a 3 | nth 3 | read | with { (r) nth $a 2 | with { (d) aw.target-bug $r $d } } | with { (t) aw.fix-steps | with { (d) cli-steps $a 3 $d | with { (s) aw.workflow $t bug $s } } } }
 def cli-build { (a) cli-args $a 3 | nth 3 | read | with { (r) nth $a 2 | with { (d) aw.target-feature $r $d } } | with { (t) aw.build-steps | with { (d) cli-steps $a 3 $d | with { (s) aw.workflow $t feature $s } } } }
 
-script-args | with { (a) cli-args $a 1 | first | with { (c) cli-usage | with { (u) list ask edit chain audit fix build | check { any { equals $c } } $u } | $c | with { (n) list cli- $n | concat } | with { (cmd) list $a | map $cmd | concat } } }
+script-args | with { (a) cli-args $a 1 | first | with { (c) list ask edit chain audit fix build | check { any { equals $c } } $cli-usage | $c | with { (n) list cli- $n | concat } | with { (cmd) list $a | map $cmd | concat } } }

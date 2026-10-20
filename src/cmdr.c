@@ -192,8 +192,9 @@ int cmdr_error(char **error, const char *format, ...)
 
 typedef struct {
     char *text;      /* Literal text, a $name, or block source. */
-    int ref;         /* An unquoted $name; compile sets slot. */
+    int ref;         /* An unquoted $name; compile sets slot or constant. */
     size_t slot;     /* Index of the name in the environment. */
+    const cmdr_value *constant; /* A command's value, when no block declares the name. */
     int block;       /* text is the source of a { ... } block. */
     cmdr_code *code; /* The block, compiled. */
 } word;
@@ -292,9 +293,12 @@ static int lex(const char **p, word *out, char **error)
     if (*s == '$') {
         while (*s && !isspace((unsigned char)*s) && *s != '|') ++s;
         size_t n = (size_t)(s - *p - 1);
-        if (!n || identifier(*p + 1) != n)
+        /* A reference may name a module's binding, so '.' joins identifiers. */
+        size_t k = 0;
+        for (size_t m; (m = identifier(*p + 1 + k)) && (k += m) < n && (*p)[1 + k] == '.';) ++k;
+        if (!n || k != n || (*p)[n] == '.')
             return cmdr_error(error, "invalid reference '%.*s': use $name, declared as "
-                              "{ (name) ... }; quote '$' for literal text", (int)(s - *p), *p);
+                              "{ (name) ... } or bound by as; quote '$' for literal text", (int)(s - *p), *p);
         *out = (word){.text = cmdr_strndup(*p + 1, n), .ref = 1};
         *p = s;
         return 0;
@@ -487,10 +491,20 @@ static int compile_body(const cmdr *repl, const char *line, scope *sc, program *
             size_t k = sc->count;
             while (w->ref && k && strcmp(sc->names[k - 1], w->text)) --k;
             if (w->ref && !k) {
-                cmdr_error(error, "invalid reference '$%s': no enclosing block declares it", w->text);
-                goto fail;
+                /* No block declares it: a binding, resolved where the line compiles. */
+                const cmdr_command *c = cmdr_find(repl, w->text);
+                if (c && c->value) {
+                    w->constant = c->value;
+                } else {
+                    if (c) cmdr_error(error, "invalid reference '$%s': %s is a command, not a "
+                                      "value; call it as a stage", w->text, w->text);
+                    else cmdr_error(error, "invalid reference '$%s': no enclosing block "
+                                    "declares it, and no binding names it", w->text);
+                    goto fail;
+                }
+            } else if (w->ref) {
+                sc->used[w->slot = k - 1] = 1;
             }
-            if (w->ref) sc->used[w->slot = k - 1] = 1;
             if (w->block && compile_block(repl, w->text, sc, &w->code, error)) goto fail;
         }
         if (!s->count || value_stage(s)) continue;
@@ -549,7 +563,8 @@ static int evaluate(const cmdr *repl, const program *pg, const char *name, int l
         const stage *s = &pg->stages[i];
         if (value_stage(s)) {
             cmdr_free(result);
-            status = cmdr_clone(&env[s->words[0].slot], result, error);
+            const word *w = &s->words[0];
+            status = cmdr_clone(w->constant ? w->constant : &env[w->slot], result, error);
             have = 1;
             continue;
         }
@@ -565,7 +580,7 @@ static int evaluate(const cmdr *repl, const program *pg, const char *name, int l
         for (size_t j = 1; j < s->count; ++j) {
             const word *w = &s->words[j];
             /* A block borrows env as its captured values; cmdr_clone copies them. */
-            argv[at++] = w->ref ? env[w->slot] : w->block
+            argv[at++] = w->constant ? *w->constant : w->ref ? env[w->slot] : w->block
                 ? (cmdr_value){.kind = CMDR_BLOCK, .text = w->text, .code = w->code,
                                .items = (cmdr_value *)env, .count = envc}
                 : (cmdr_value){.kind = CMDR_TEXT, .text = w->text};
@@ -677,6 +692,9 @@ int cmdr_call(const cmdr *repl, const char *name, size_t argc,
     if (depth >= MAX_CALL_DEPTH)
         return cmdr_error(error, "command '%s' is nested too deeply "
                           "(possible cycle in composed commands)", name);
+    if (command->value)
+        return argc ? cmdr_error(error, "%s takes no arguments", name)
+                    : cmdr_clone(command->value, result, error);
     ++depth;
     int status = command->run ? command->run(repl, command->user, argc, argv, result, error)
         : call_block(command->block, name, argc, argv, result, error);

@@ -852,6 +852,37 @@ COMMAND(with_command)
     return run_body(&argv[0], argc, argv, result, error); /* Status passes through. */
 }
 
+/* A count larger than this is more likely a typo than a loop, as in num-seq. */
+#define REPEAT_LIMIT 10000000
+
+/* Call the block N times with argv[2..], so it takes no counter it must use. */
+COMMAND(repeat_command)
+{
+    if (argc < 2) return cmdr_error(error, "usage: repeat N BLOCK [ARG ...]");
+    size_t n;
+    if (cmdr_natural(&argv[0], &n, error) || check_body("repeat", &argv[1], argc - 2, error))
+        return 1;
+    if (n > REPEAT_LIMIT) return cmdr_error(error, "repeat: %zu exceeds %d", n, REPEAT_LIMIT);
+    *result = (cmdr_value){.kind = CMDR_LIST};
+    int status = 0;
+    for (size_t i = 0; i < n && !status; ++i) {
+        cmdr_value item;
+        char *detail;
+        if (cmdr_run(&argv[1], argc - 2, argv + 2, &item, &detail))
+            status = cmdr_error(error, "repeat call %zu: %s", i + 1, detail);
+        else if (item.kind == CMDR_NONE)
+            status = cmdr_error(error, "repeat call %zu: block returned no value", i + 1);
+        else {
+            cmdr_push(result, item);
+            item = (cmdr_value){0};
+        }
+        cmdr_free(&item);
+        free(detail);
+    }
+    if (status) cmdr_free(result);
+    return status;
+}
+
 COMMAND(fold_command)
 {
     if (argc < 3) return cmdr_error(error, "usage: fold LIST_OR_LINES INIT BLOCK [ARG ...]");
@@ -981,6 +1012,7 @@ static const cmdr_command pure[] = {
     VALUE("not", "not VALUE BLOCK [ARG ...]", "Return VALUE if the block mismatches", not_command),
     VALUE("with", "with VALUE BLOCK [ARG ...]", "Call a block with VALUE", with_command),
     VALUE("fold", "fold LIST_OR_LINES INIT BLOCK [ARG ...]", "Combine items, left to right", fold_command),
+    VALUE("repeat", "repeat N BLOCK [ARG ...]", "Call a block N times with ARGs; list the results", repeat_command),
     VALUE("try", "try [INPUT] BLOCK FALLBACK", "Return FALLBACK if the block fails", try_command),
     VALUE("or", "or [INPUT] BLOCK FALLBACK", "Return FALLBACK if the block mismatches", or_command),
     VALUE("check", "check [INPUT] BLOCK MESSAGE", "Mismatch with MESSAGE if the block mismatches", check_command),

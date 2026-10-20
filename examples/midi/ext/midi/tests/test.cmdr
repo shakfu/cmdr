@@ -1,0 +1,46 @@
+# Each line must succeed; cmdr stops at the first that fails. Files go in
+# MIDI_OUT, which CTest sets to a directory under build/.
+env MIDI_OUT | fs-mkdir | as out-dir "The test directory"
+def tmp { (p) out-dir | path-join $p } "Path P in the test directory"
+def round-trip { (s p) tmp $p | with { (f) midi-write $s $f 120 } | midi-read } "Write score S to P in the test directory and read it back"
+
+# Keys are numbers or names, in a score as well as alone.
+midi-key F#3 | equals 54
+list "note 0 1 C4 100 1" | round-trip a.mid | join , | equals "tempo 0 120,note 0 1 60 100 1"
+
+# A file holds every kind, sorted by start, kind as sent, channel, and key.
+list "note 1 0.5 67 80 2" "note 0 1 64 100 1" "cc 0 7 100 1" "program 0 33 2" "bend 0.5 -8192 2" "bend 0.75 8191 2" "note 0 1 60 100 1" "tempo 2 90" | round-trip b.mid | join , | equals "tempo 0 120,program 0 33 2,cc 0 7 100 1,note 0 1 60 100 1,note 0 1 64 100 1,bend 0.5 -8192 2,bend 0.75 8191 2,note 1 0.5 67 80 2,tempo 2 90"
+# A tempo at beat 0 replaces BPM; tempos print with the fewest digits that keep them.
+list "tempo 0 96.5" "note 0 1 60 100 1" | round-trip c.mid | join , | equals "tempo 0 96.5,note 0 1 60 100 1"
+list "tempo 0 90" | round-trip c.mid | join , | equals "tempo 0 90"
+# A trailing rest survives; rests within are implied by starts.
+list "note 0 1 60 100 1" "rest 1 2" "note 3 1 62 100 1" "rest 4 1.5" | round-trip d.mid | join , | equals "tempo 0 120,note 0 1 60 100 1,note 3 1 62 100 1,rest 4 1.5"
+list "rest 0 4" | round-trip d.mid | join , | equals "tempo 0 120,rest 0 4"
+# A score may be text, one item per line.
+text "note 0 0.5 60 100 1\nnote 0.5 0.5 62 100 1\n" | round-trip e.mid | count | equals 3
+# A key struck again as it ends sounds again; a note of length 0 stays.
+list "note 0 1 60 100 1" "note 1 1 60 100 1" "note 2 0 61 100 1" | round-trip f.mid | join , | equals "tempo 0 120,note 0 1 60 100 1,note 1 1 60 100 1,note 2 0 61 100 1"
+# Ticks are 1/480 beat, so a third is 160 ticks.
+list "note 0 0.3333333333333333 60 100 1" | round-trip g.mid | last | words | nth 3 | equals 0.3333333333333333
+# An empty score is a file with only the tempo.
+list | round-trip h.mid | join , | equals "tempo 0 120"
+# Writing returns PATH and replaces a file.
+list "note 0 2 60 100 1" | round-trip a.mid | join , | equals "tempo 0 120,note 0 2 60 100 1"
+tmp a.mid | fs-size | equals 42
+
+# Bjorklund's patterns, as in Toussaint's "The Euclidean Algorithm Generates
+# Traditional Musical Rhythms" (2005).
+midi-euclid 3 8 | concat | equals 10010010
+midi-euclid 5 8 | concat | equals 10110110
+midi-euclid 3 4 | concat | equals 1011
+midi-euclid 2 5 | concat | equals 10100
+midi-euclid 4 9 | concat | equals 101010100
+midi-euclid 5 12 | concat | equals 100101001010
+midi-euclid 7 12 | concat | equals 101101011010
+midi-euclid 5 16 | concat | equals 1001001001001000
+midi-euclid 7 16 | concat | equals 1001010100101010
+midi-euclid 9 16 | concat | equals 1011010101101010
+midi-euclid 13 24 | concat | equals 101101010101011010101010
+midi-euclid 0 4 | concat | equals 0000
+midi-euclid 4 4 | concat | equals 1111
+midi-euclid 1 1 | concat | equals 1

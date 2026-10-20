@@ -3,7 +3,7 @@
 
 import aw
 
-def project { () aw.runs-dir | fs-mkdir | path-join llama-project } "A git copy of sample/"
+aw.runs-dir | fs-mkdir | path-join llama-project | as project "A git copy of sample/"
 def git-in { (d args) list dir $d | with { (o) list git -c user.name=t -c user.email=t@example.invalid $args | with { (a) run-with $o $a } } | aw.agent-out }
 def request { () aw.runs-dir | path-join llama-request.json | read } "The last request body"
 def requests { () aw.runs-dir | path-join llama-requests.log | try { read | lines | count } 0 } "Requests sent so far"

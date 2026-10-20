@@ -52,7 +52,7 @@ cmdr> in a.wav | rate 48000 | reverb 50 | out b.wav
 b.wav
 ```
 
-`snd`'s `trim` and `join` collide with primitives, so bind them with `as`: `from snd import trim as cut join as join-files`.
+`snd`'s `trim`, `join`, and `repeat` collide with primitives, so bind them with `as`: `from snd import trim as cut join as join-files`.
 
 `help snd.NAME` gives a definition's full arguments and defaults; the `help` overview shows defaults as `...`. Trailing arguments take sox's defaults where sox has them: `reverb` takes its six, so `reverb 80` is `reverb 80 50 100 100 0 0`; `norm` is `norm 0`; `repeat` is `repeat 1`; `pad 0.5` pads the start only; `fade 1` fades in only. SPEC, OPTIONS, and POINTS are text, split into words. The named effects take sox's positional arguments, without flags; `effect` takes any of the 63 effects, with sox's full syntax. `varispeed FROM TO`, not in sox, changes speed linearly over the output, as a tape does; `tape-stop` is `varispeed 1 0.1` with a short fade. `fade IN OUT` is sox's `fade IN -0 OUT`. Like sox, `fade` with an end position fails after an effect that makes the length unknown, such as `chorus`, so put it first.
 

@@ -1,6 +1,7 @@
 # Each line must succeed; cmdr stops at the first that fails. Files go in
 # SND_OUT, which CTest sets to a directory under build/.
-def tmp { (p) env SND_OUT | fs-mkdir | path-join $p } "Path P in the test directory"
+env SND_OUT | fs-mkdir | as out-dir "The test directory"
+def tmp { (p) out-dir | path-join $p } "Path P in the test directory"
 def apply { (in p e) tmp $p | with { (o) words $e | with { (w) snd-run $o $in $w } } } "Apply the effect words E to IN, writing P"
 def field { (p k) snd-info $p | filter $k | first | words | nth 2 } "Field K of snd-info P"
 def peak { (p) snd-report -n $p stats | lines | filter "Pk lev dB" | first | words | nth 4 } "Peak level of P in dBFS"

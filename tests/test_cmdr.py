@@ -347,6 +347,12 @@ class Commands(unittest.TestCase):
             ("list a b c | fold '' { (a x) list $x $a | join '' }", 'cba\n'),
             ("list 1 2 | fold 0 { (a x k) add $a $x $k } 10", '23\n'),
             ("list | fold init { (a x) text $a $x }", 'init\n'),
+            # repeat calls a block N times with only its ARGs: no counter to use.
+            ("repeat 3 { () text x } | join ,", 'x,x,x\n'),
+            ("repeat 2 { (a b) text $a $b } p q | join ,", 'p q,p q\n'),
+            ("repeat 0 { () text x } | count", '0\n'),
+            ("repeat 2 { () list a b } | count", '2\n'),
+            ("text 2 | repeat { () text y } | join ,", 'y,y\n'),
             ('text "1\n2\n" | fold 0 { (a x) add $a $x }', '3\n'),
             # or falls back only on a mismatch.
             ("text a | or { equals b } other", 'other\n'),
@@ -363,6 +369,15 @@ class Commands(unittest.TestCase):
             ("text a | with { (x y) text $x $y }", 'with: block takes 2 arguments, got 1'),
             ("text a | with upper", 'with: expected a block'),
             ("list 1 2 | fold 0 { (a) add $a 1 }", 'fold: block takes 1 argument, got 2'),
+            ("repeat 2 { text x }", 'repeat: block takes 1 argument, got 0'),
+            ("repeat 2 { () text x } extra", 'repeat: block takes 0 arguments, got 1'),
+            ("repeat 2 upper", 'repeat: expected a block'),
+            ("repeat x { () text x }", 'invalid nonnegative integer: x'),
+            ("repeat -1 { () text x }", 'invalid nonnegative integer: -1'),
+            ("repeat 10000001 { () text x }", 'repeat: 10000001 exceeds 10000000'),
+            ("repeat 2 { () add 1 x }", 'repeat call 1: invalid finite number: x'),
+            ("repeat 3 { () equals a b }", 'repeat call 1: '),
+            ("repeat 2 { () random-seed 1 }", 'repeat call 1: block returned no value'),
             ("list 1 x | fold 0 { (a x) add $a $x }", 'fold item 2: invalid finite number: x'),
             ("list nonexistent | fold 0 { (a x) read $x | text $a }", 'fold item 1: read nonexistent'),
             # An error is not a mismatch, so or does not hide it.
@@ -608,8 +623,8 @@ class Commands(unittest.TestCase):
         # session. A shadowed command is listed once, at its definition.
         result = self.run_input("def zz { upper }\ndef upper { lower }\nhelp | lines | each { (row) split $row ' ' | head 1 | join '' }\n")
         names = result.stdout.split()
-        self.assertEqual(names[:8], ['help', 'def', 'script-file', 'script-dir', 'script-args',
-                                     'load', 'import', 'from'])
+        self.assertEqual(names[:9], ['help', 'def', 'script-file', 'script-dir', 'script-args',
+                                     'as', 'load', 'import', 'from'])
         self.assertEqual(names.count('upper'), 1)
         self.assertLess(names.index('run-in'), names.index('first'))
         self.assertEqual(names[names.index('first'):names.index('first') + 2], ['first', 'last'])
@@ -791,9 +806,8 @@ class Commands(unittest.TestCase):
             with self.subTest(source=source):
                 self.run_line(source, error=error)
 
-    def test_no_bindings(self):
-        # `as` is an ordinary name.
-        self.run_line('text a | as x', error='unknown command: as')
+    def test_shadow_as(self):
+        # `as` is a built-in, which a def may shadow like any but def.
         result = self.run_input("def as { upper }\ntext a | as\n")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout, 'A\n')
@@ -960,6 +974,73 @@ class Commands(unittest.TestCase):
             # A def keeps its script's arguments after the script ends.
             result = self.run_input(f'load {quote(lib)} q\nlib-args\n')
             self.assertEqual(result.stdout, 'q\nq\n', result.stderr)
+
+    def test_as(self):
+        result = self.run_input(
+            # as binds NAME for later lines and, like def, returns no value.
+            "text hello | as greeting\n"
+            "greeting | upper\n"
+            "list a b | as xs 'Two letters'\n"
+            "xs | count\n"
+            "help xs\n"
+            "help | filter 'as: hello' | count\n"
+            # Constant and lexical: an earlier body keeps the value it saw.
+            "def shout { () greeting | upper }\n"
+            "text bye | as greeting\n"
+            "greeting\n"
+            "shout\n"
+            "with x { (v) as $v inner }\n"
+            "inner\n")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, 'HELLO\n2\nxs\nTwo letters\n1\n'
+                                        'bye\nHELLO\nx\n')
+        errors = [
+            ('as x', 'usage: as VALUE NAME'),
+            ("text a | as 'a b'", "as: invalid name 'a b'"),
+            ('text a | as def', 'as: cannot redefine def'),
+            ('with { upper } { (b) as $b f }', 'as f: VALUE is a block; use def'),
+            # The binding exists only after its line runs, and as returns nothing.
+            ('text a | as y | y', 'unknown command: y'),
+            ('text a | as y | upper', "command 'upper' received no pipeline value"),
+        ]
+        for source, error in errors:
+            with self.subTest(source=source):
+                self.run_line(source, error=error)
+        result = self.run_input("text a | as y\ny extra\n")
+        self.assertIn('y takes no arguments', result.stderr)
+        # $NAME refers to a binding where no block declares NAME, resolved
+        # where its line compiles.
+        result = self.run_input(
+            "text a.wav | as a\n"
+            "text b.wav | as b\n"
+            "list $a $b | join ,\n"
+            "$a | upper\n"
+            "list x | each { (a) text $a }\n"          # A parameter shadows a binding.
+            "list x | each { (y) list $y $a | join + }\n"
+            "def f { () text $a }\n"
+            "text z | as a\n"
+            "f\n"                                      # The def keeps the value it saw.
+            "text $a '$a'\n")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, 'a.wav,b.wav\nA.WAV\nx\nx+a.wav\na.wav\nz $a\n')
+        for source, error in [
+            ('text q | as y | text $y', "invalid reference '$y': no enclosing block declares it, and no binding names it"),
+            ('text $upper', "invalid reference '$upper': upper is a command, not a value"),
+            ('text $a.', "invalid reference '$a.'"),
+            ('text $a..b', "invalid reference '$a..b'"),
+        ]:
+            with self.subTest(source=source):
+                self.run_line(source, error=error)
+        # Modules export bindings, as Python modules export variables.
+        with tempfile.TemporaryDirectory() as directory:
+            lib = Path(directory).resolve()
+            (lib / 'tones.cmdr').write_text("text 440 | as hz 'Concert A'\n")
+            env = {**os.environ, 'CMDR_PATH': str(lib)}
+            result = subprocess.run([str(BINARY)], input='import tones\ntones.hz\nhelp tones.hz\n'
+                                    'from tones import hz as freq\nfreq | mul 2\n'
+                                    'add $tones.hz $freq\n',
+                                    capture_output=True, text=True, timeout=20, env=env)
+            self.assertEqual(result.stdout, '440\ntones.hz\nConcert A\n880\n880\n', result.stderr)
 
     def test_import(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -1374,6 +1455,21 @@ class Commands(unittest.TestCase):
             # and quit are not stored.
             self.assertEqual(history, ['text a', 'text b |   upper', 'text d'])
             self.assertFalse((Path(home) / '.cmdr_history.tmp').exists())
+
+    @unittest.skipUnless(os.environ.get('CMDR_EDITOR') == '1', 'built without the editor')
+    def test_editor_bindings(self):
+        # Names that as binds are bold magenta where bound and where used.
+        with tempfile.TemporaryDirectory() as home:
+            keys = [b"text 440 | as hz\r", b"as 5 five\r", b"hz | mul 2\r",
+                    b"def as { (x y) text $x $y }\r", b"text a | as b\r", b"quit\r"]
+            code, out = self.pty_session(keys, home)
+            self.assertEqual(code, 0, out)
+            self.assertIn(b"\n880\r\n", out)
+            self.assertIn(b"\na b\r\n", out)
+            self.assertIn(b"as\x1b[0m \x1b[1;35mhz", out)           # Piped: NAME is the first argument.
+            self.assertIn(b"as\x1b[0m 5 \x1b[1;35mfive", out)       # Direct: NAME is the second.
+            self.assertIn(b"\x1b[1;35mhz\x1b[0m \x1b[33m|", out)    # A use.
+            self.assertNotIn(b"\x1b[1;35mb", out)                    # A def that shadows as binds nothing.
 
     @unittest.skipUnless(os.environ.get('CMDR_EDITOR') == '1', 'built without the editor')
     def test_editor_history_save_failure(self):

@@ -2,7 +2,7 @@
 # of steps. `import aw` binds these definitions as aw.NAME; see ../README.md.
 # Needs the env, fs, re, and time extensions.
 
-def home-dir { () script-dir } "Directory holding actions/"
+script-dir | as home-dir "Directory holding actions/"
 def runs-dir { () env-or AW_RUNS agent-runs } "Directory for run logs"
 def agent-timeout { () env-or AW_TIMEOUT 1800 } "Seconds an agent may run"
 
@@ -13,24 +13,24 @@ def opt { (f v) list | with { (none) or $v { (x) nonempty $x | with { (y) list $
 def by-mode { (mode r w) or { () equals $mode read | $r } $w } "Return R for read mode, else W"
 def agent-out { (res) nth $res 1 | with { (s) nth $res 3 | lines | tail 20 | unlines | with { (e) list "failed with status " $s ":\n" $e | concat | with { (m) check $s { equals 0 } $m } } } | $res | nth 2 } "Return stdout of a run-with result, or fail with its stderr"
 def launch { (args d) agent-timeout | with { (t) list dir $d timeout $t | with { (o) run-with $o $args } } | agent-out } "Run ARGS in DIR with the agent timeout"
-def claude-sandbox { () text '{"sandbox":{"enabled":true,"autoAllowBashIfSandboxed":true,"allowUnsandboxedCommands":false,"failIfUnavailable":true}}' } "Settings for claude: Bash may write only in DIR, and never retries unsandboxed"
+text '{"sandbox":{"enabled":true,"autoAllowBashIfSandboxed":true,"allowUnsandboxedCommands":false,"failIfUnavailable":true}}' | as claude-sandbox "Settings for claude: Bash may write only in DIR, and never retries unsandboxed"
 def sandbox-probe { () list bwrap --unshare-net --ro-bind / / --dev /dev true | with { (p) run uname | trim | with { (os) list | with { (none) or { () equals $os Linux | $p } $none } } } } "An argv that fails where claude's sandbox cannot run commands; empty off Linux"
 def check-sandbox { (args) list 0 "" "" | with { (ok) list | with { (o) or $args { (a) nonempty $a | with { (x) run-with $o $x } } $ok } } | with { (r) nth $r 3 | trim | with { (e) list "sandbox unavailable: " $e | concat | with { (m) nth $r 1 | check { equals 0 } $m } } } } "Fail with ARGS's stderr unless it exits 0; pass if ARGS is empty"
-def agent-claude { (p d m mode) sandbox-probe | check-sandbox | $m | with { (x) opt --model $x } | with { (mf) by-mode $mode plan acceptEdits | with { (pm) claude-sandbox | with { (sb) list claude -p $mf --permission-mode $pm --permission-prompts none --safe-mode --settings $sb $p | launch $d } } } } "Run claude -p in its sandbox, without user CLAUDE.md"
+def agent-claude { (p d m mode) sandbox-probe | check-sandbox | $m | with { (x) opt --model $x } | with { (mf) by-mode $mode plan acceptEdits | with { (pm) list claude -p $mf --permission-mode $pm --permission-prompts none --safe-mode --settings $claude-sandbox $p | launch $d } } } "Run claude -p in its sandbox, without user CLAUDE.md"
 def agent-codex { (p d m mode) opt -m $m | with { (mf) by-mode $mode read-only workspace-write | with { (sb) list codex exec $mf -s $sb $p | launch $d } } } "Run codex exec"
 def agent-cursor { (p d m mode) opt --model $m | with { (mf) by-mode $mode --mode=plan --force | with { (f) list cursor-agent -p --output-format text --sandbox enabled $mf $f $p | launch $d } } } "Run cursor-agent -p"
 def llama-url { () env-or AW_LLAMA_URL http://127.0.0.1:8080 } "Base URL of llama-server"
 def llama-max { () env-or AW_LLAMA_MAX_BYTES 200000 } "Largest project text sent to llama"
 def llama-file { (d f) path-join $d $f | try { read } "(unreadable)" | with { (c) list "### " $f "\n```\n" $c "\n```" | concat } }
 def llama-context { (d) list dir $d | with { (o) run-with $o git ls-files } | agent-out | lines | each { (f) llama-file $d $f } | join "\n\n" | with { (c) llama-max | with { (n) check $c { length | le $n } "project exceeds AW_LLAMA_MAX_BYTES" | $c } } } "Every tracked file in DIR, under a heading"
-def llama-format { () text "\n\nGive each change as an edit block: the file path alone on a line, then\n<<<<<<< SEARCH\nlines copied exactly from the file\n=======\nthe lines that replace them\n>>>>>>> REPLACE\nSEARCH must match exactly one place in the file. An empty SEARCH creates a new file." }
-def llama-rule { (mode) text "\n\nYou cannot run commands. Do not claim results you have not seen." | with { (base) llama-format | with { (f) by-mode $mode "" $f } | with { (w) list $base $w | concat } } }
+text "\n\nGive each change as an edit block: the file path alone on a line, then\n<<<<<<< SEARCH\nlines copied exactly from the file\n=======\nthe lines that replace them\n>>>>>>> REPLACE\nSEARCH must match exactly one place in the file. An empty SEARCH creates a new file." | as llama-format
+def llama-rule { (mode) text "\n\nYou cannot run commands. Do not claim results you have not seen." | with { (base) by-mode $mode "" $llama-format | with { (w) list $base $w | concat } } }
 def llama-run { (args x) agent-timeout | with { (t) list stdin $x timeout $t | with { (o) run-with $o $args } } | agent-out } "Run ARGS with stdin X; return stdout"
 def llama-chat { (q m) list jq -c -R -s --arg m $m '{messages: [{role: "user", content: .}]} + (if $m == "" then {} else {model: $m} end)' | llama-run $q | with { (body) llama-url | with { (u) list $u /v1/chat/completions | concat } | with { (u) list curl -sS --fail-with-body -H "content-type: application/json" --data-binary @- $u | llama-run $body } } | with { (r) list jq -r ".choices[0].message.content" | llama-run $r } } "Send Q to llama-server; return the reply"
 
 # Edit blocks: PATH, then SEARCH lines that must occur once in PATH, then their
 # replacement. Blocks apply to a staging copy; DIR changes only if all apply.
-def edit-unsafe { () text '^$|^/|/$|//|(^|/)[.][.]?(/|$)|(^|/)[.]git(/|$)' } "Paths an edit may not name"
+text '^$|^/|/$|//|(^|/)[.][.]?(/|$)|(^|/)[.]git(/|$)' | as edit-unsafe "Paths an edit may not name"
 def edit-path-of { (c) split $c "<<<<<<< SEARCH\n" | first | lines | keep { not { starts-with "```" } } | keep { (l) trim $l | nonempty } | last | re-replace '^ *#+ +|[`*]' "" | trim | check { matches '^[^ ]+$' } "a file path" } "The path on the last line before C's SEARCH marker"
 def edit-blocks { (r) split $r ">>>>>>> REPLACE" | with { (xs) count $xs | sub 1 | with { (k) head $xs $k } } | map replace "<<<<<<< SEARCH\n=======\n" "<<<<<<< SEARCH\n\n=======\n" | with { (cs) list | with { (none) fold $cs $none { (acc c) text "" | with { (e) or { () last $acc | edit-path-of } $e } | with { (pp) list $pp "\n" $c | concat } | with { (fixed) try { () edit-path-of $c | $c } $fixed } | with { (x) push $acc $x } } } } } "Each edit block in R, without its REPLACE marker; one without a path gets the previous block's"
 def edit-infer { (d o) nonempty $o | $o | with { (x) list "\n" $x "\n" | concat } | with { (o1) list dir $d | with { (op) run-with $op git ls-files } | agent-out | lines | keep { (f) path-join $d $f | try { read } "" | with { (x) list "\n" $x | concat } | contains $o1 } } | with { (fs) count $fs | check { equals 1 } "one file" | $fs | first } } "The one tracked file in DIR holding the SEARCH lines O"
@@ -55,7 +55,7 @@ def llama-retry { (st) nth $st 5 | with { (e) nth $st 4 | with { (r) nth $st 1 |
 def llama-write { (st) nth $st 1 | with { (q) nth $st 3 | with { (m) llama-chat $q $m } } | with { (r) nth $st 2 | with { (d) edit-apply $r $d } | with { (e) push $st $r $e } } | with { (st2) nth $st2 5 | with { (e) text llama-done | with { (ok) or { () equals $e "" | $ok } llama-retry } } | with { (c) list $st2 | map $c | concat } } } "Apply the reply's edits, retrying once with the reasons"
 def agent-llama { (p d m mode) llama-context $d | with { (c) llama-rule $mode | with { (rule) list "Project files:\n\n" $c "\n\n" $p $rule | concat } } | with { (q) list $q $d $m } | with { (st) by-mode $mode llama-read llama-write | with { (c) list $st | map $c | concat } } } "Ask llama-server; in write mode apply its edit blocks in DIR"
 def agent-dry { (p d m mode) list $mode $d $m | unwords | with { (h) list "[dry " $h "]\n" $p | concat } } "Return the prompt instead of running an agent"
-def agents { () list claude codex cursor llama dry } "Known agent names: those with a built-in sandbox, llama, which runs no commands, and dry"
+list claude codex cursor llama dry | as agents "Known agent names: those with a built-in sandbox, llama, which runs no commands, and dry"
 def agent { (name p d m mode) list agent- $name | concat | with { (c) list $p | map $c $d $m $mode | concat } } "Run agent NAME on PROMPT in DIR"
 
 # Targets: a list of KIND DIR BRIEF. BRIEF opens every prompt.
@@ -81,7 +81,7 @@ def render { (tmpl t h) target-brief $t | with { (b) replace $tmpl "{{target}}" 
 
 # Steps: ACTION@AGENT[:MODEL]. A parsed step is the re-groups list:
 # spec, action, agent, ":MODEL", MODEL.
-def step-re { () text '^([a-z][a-z-]*)@([a-z]+)(:(.+))?$' }
+text '^([a-z][a-z-]*)@([a-z]+)(:(.+))?$' | as step-re
 def parse-step { (s) step-re | with { (re) check $s { matches $re } "expected ACTION@AGENT[:MODEL]" | re-groups $re } }
 def step-spec { (p) nth $p 1 }
 def step-action { (p) nth $p 2 }
@@ -104,9 +104,9 @@ def ask { (t a q) list ask@ $a | concat | list | with { (s) chain-from $t $s $q 
 def edit { (t a q) list edit@ $a | concat | list | with { (s) chain-from $t $s $q } } "Have AGENT[:MODEL] change TARGET as PROMPT says"
 
 # Workflows: a default chain per target kind. Pass other steps to chain.
-def audit-steps { () list survey@claude review@codex report@claude }
-def fix-steps { () list reproduce@claude diagnose@codex patch@claude review@codex }
-def build-steps { () list plan@claude critique@codex implement@claude verify@codex review@cursor }
+list survey@claude review@codex report@claude | as audit-steps
+list reproduce@claude diagnose@codex patch@claude review@codex | as fix-steps
+list plan@claude critique@codex implement@claude verify@codex review@cursor | as build-steps
 def workflow { (t kind steps) require-kind $t $kind | with { (x) chain $x $steps } } "Run STEPS on TARGET if its kind is KIND"
 def audit { (t) audit-steps | with { (s) workflow $t path $s } } "Survey, review, and report on a path target"
 def fix { (t) fix-steps | with { (s) workflow $t bug $s } } "Reproduce, diagnose, patch, and review a bug target"
