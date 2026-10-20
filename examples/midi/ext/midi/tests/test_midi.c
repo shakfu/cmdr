@@ -1,4 +1,4 @@
-/* Error messages, then midi-play into a virtual input port of this process.
+/* Error messages, then midi.play into a virtual input port of this process.
  * Exits 77, which CTest reports as skipped, where no MIDI service runs. */
 #define _POSIX_C_SOURCE 200809L
 #include "cmdr.h"
@@ -51,53 +51,53 @@ static void *interrupt_later(void *data)
 
 int main(void)
 {
-    const cmdr table = {cmdr_ext_midi.commands, cmdr_ext_midi.count, &cmdr_primitives};
-    expect(&table, "midi-key 60", "60");
-    expect(&table, "midi-key C4", "60");
-    expect(&table, "midi-key c-1", "0");
-    expect(&table, "midi-key G9", "127");
-    expect(&table, "midi-key Bb3", "58");
-    expect(&table, "midi-key E#4", "65");
-    expect_error(&table, "midi-key G#9", 1, "midi-key: G#9 is not 0 to 127");
-    expect_error(&table, "midi-key 128", 1, "midi-key: 128 is not 0 to 127");
-    expect_error(&table, "midi-key H4", 1, "midi-key: H4 is not");
-    expect_error(&table, "midi-key C", 1, "midi-key: C is not");
-    expect_error(&table, "midi-write 'note 0 1 60 100' x.mid 120", 1,
-                 "midi-write: item 1: want note START LENGTH KEY VELOCITY CHANNEL");
-    expect_error(&table, "midi-write 'cc 0 7' x.mid 120", 1,
-                 "midi-write: item 1: want cc START CONTROLLER VALUE CHANNEL");
-    expect_error(&table, "midi-write '0 1 60 100 1' x.mid 120", 1,
-                 "midi-write: item 1: want note, rest, cc, program, bend, or tempo, not 0");
-    expect_error(&table, "list 'note 0 1 60 100 1' 'note -1 1 60 100 1' | midi-write x.mid 120",
-                 1, "midi-write: item 2: START -1 is not a number of beats");
-    expect_error(&table, "midi-write 'note 0 1 60 0 1' x.mid 120", 1,
-                 "midi-write: item 1: VELOCITY 0 is not 1 to 127");
-    expect_error(&table, "midi-write 'note 0 1 60 100 17' x.mid 120", 1,
-                 "midi-write: item 1: CHANNEL 17 is not 1 to 16");
-    expect_error(&table, "midi-write 'note 0 1 60.5 100 1' x.mid 120", 1,
-                 "midi-write: item 1: KEY 60.5 is not 0 to 127");
-    expect_error(&table, "midi-write 'cc 0 128 1 1' x.mid 120", 1,
-                 "midi-write: item 1: CONTROLLER 128 is not 0 to 127");
-    expect_error(&table, "midi-write 'program 0 5 0' x.mid 120", 1,
-                 "midi-write: item 1: CHANNEL 0 is not 1 to 16");
-    expect_error(&table, "midi-write 'bend 0 8192 1' x.mid 120", 1,
-                 "midi-write: item 1: VALUE 8192 is not -8192 to 8191");
-    expect_error(&table, "midi-write 'tempo 0 1' x.mid 120", 1,
-                 "midi-write: item 1: BPM 1 is not 3.6 to 60000000");
-    expect_error(&table, "midi-write 'rest 0 -1' x.mid 120", 1,
-                 "midi-write: item 1: LENGTH -1 is not a number of beats");
-    expect_error(&table, "midi-write 'note 0 1 60 100 1' x.mid 0", 1,
-                 "midi-write: BPM 0 is not 3.6 to 60000000");
-    expect_error(&table, "midi-write 'rest 1e6 1' x.mid 120", 1,
-                 "midi-write: the score ends at beat 1e+06, past what a file holds");
-    expect_error(&table, "midi-write 'note 0 1 60 100 1' /nonexistent/x.mid 120", 1,
-                 "midi-write: cannot write /nonexistent/x.mid");
-    expect_error(&table, "midi-read /nonexistent.mid", 1, "midi-read: cannot read");
-    expect_error(&table, "midi-read /dev/null", 1, "midi-read: /dev/null is not a MIDI file");
-    expect_error(&table, "midi-euclid 5 4", 1, "midi-euclid: K 5 is not 0 to 4");
-    expect_error(&table, "midi-euclid 1 0", 1, "midi-euclid: N 0 is not 1 to 4096");
-    expect_error(&table, "midi-play 'note 0 1 60 100 1' 120 'no such port'", 1,
-                 "midi-play: no output port named no such port");
+    const cmdr *table = ext_commands("midi", &cmdr_ext_midi);
+    expect(table, "midi.key 60", "60");
+    expect(table, "midi.key C4", "60");
+    expect(table, "midi.key c-1", "0");
+    expect(table, "midi.key G9", "127");
+    expect(table, "midi.key Bb3", "58");
+    expect(table, "midi.key E#4", "65");
+    expect_error(table, "midi.key G#9", 1, "midi.key: G#9 is not 0 to 127");
+    expect_error(table, "midi.key 128", 1, "midi.key: 128 is not 0 to 127");
+    expect_error(table, "midi.key H4", 1, "midi.key: H4 is not");
+    expect_error(table, "midi.key C", 1, "midi.key: C is not");
+    expect_error(table, "midi.write 'note 0 1 60 100' x.mid 120", 1,
+                 "midi.write: item 1: want note START LENGTH KEY VELOCITY CHANNEL");
+    expect_error(table, "midi.write 'cc 0 7' x.mid 120", 1,
+                 "midi.write: item 1: want cc START CONTROLLER VALUE CHANNEL");
+    expect_error(table, "midi.write '0 1 60 100 1' x.mid 120", 1,
+                 "midi.write: item 1: want note, rest, cc, program, bend, or tempo, not 0");
+    expect_error(table, "list 'note 0 1 60 100 1' 'note -1 1 60 100 1' | midi.write x.mid 120",
+                 1, "midi.write: item 2: START -1 is not a number of beats");
+    expect_error(table, "midi.write 'note 0 1 60 0 1' x.mid 120", 1,
+                 "midi.write: item 1: VELOCITY 0 is not 1 to 127");
+    expect_error(table, "midi.write 'note 0 1 60 100 17' x.mid 120", 1,
+                 "midi.write: item 1: CHANNEL 17 is not 1 to 16");
+    expect_error(table, "midi.write 'note 0 1 60.5 100 1' x.mid 120", 1,
+                 "midi.write: item 1: KEY 60.5 is not 0 to 127");
+    expect_error(table, "midi.write 'cc 0 128 1 1' x.mid 120", 1,
+                 "midi.write: item 1: CONTROLLER 128 is not 0 to 127");
+    expect_error(table, "midi.write 'program 0 5 0' x.mid 120", 1,
+                 "midi.write: item 1: CHANNEL 0 is not 1 to 16");
+    expect_error(table, "midi.write 'bend 0 8192 1' x.mid 120", 1,
+                 "midi.write: item 1: VALUE 8192 is not -8192 to 8191");
+    expect_error(table, "midi.write 'tempo 0 1' x.mid 120", 1,
+                 "midi.write: item 1: BPM 1 is not 3.6 to 60000000");
+    expect_error(table, "midi.write 'rest 0 -1' x.mid 120", 1,
+                 "midi.write: item 1: LENGTH -1 is not a number of beats");
+    expect_error(table, "midi.write 'note 0 1 60 100 1' x.mid 0", 1,
+                 "midi.write: BPM 0 is not 3.6 to 60000000");
+    expect_error(table, "midi.write 'rest 1e6 1' x.mid 120", 1,
+                 "midi.write: the score ends at beat 1e+06, past what a file holds");
+    expect_error(table, "midi.write 'note 0 1 60 100 1' /nonexistent/x.mid 120", 1,
+                 "midi.write: cannot write /nonexistent/x.mid");
+    expect_error(table, "midi.read /nonexistent.mid", 1, "midi.read: cannot read");
+    expect_error(table, "midi.read /dev/null", 1, "midi.read: /dev/null is not a MIDI file");
+    expect_error(table, "midi.bjorklund 5 4", 1, "midi.bjorklund: K 5 is not 0 to 4");
+    expect_error(table, "midi.bjorklund 1 0", 1, "midi.bjorklund: N 0 is not 1 to 4096");
+    expect_error(table, "midi.play 'note 0 1 60 100 1' 120 'no such port'", 1,
+                 "midi.play: no output port named no such port");
 
     libremidi_midi_configuration conf;
     libremidi_midi_configuration_init(&conf);
@@ -110,7 +110,7 @@ int main(void)
     api.configuration_type = Input;
     libremidi_midi_in_handle *in;
     if (libremidi_midi_in_new(&conf, &api, &in)) {
-        puts("test_midi: no MIDI service; skipping midi-play");
+        puts("test_midi: no MIDI service; skipping midi.play");
         return 77;
     }
 
@@ -118,9 +118,9 @@ int main(void)
      * goes before notes at equal times, and the rest holds the end. */
     struct timespec t0, t1;
     clock_gettime(CLOCK_MONOTONIC, &t0);
-    expect(&table,
+    expect(table,
            "list 'note 0 1 C4 100 1' 'program 0 5 2' 'cc 0 7 90 2' 'note 0.5 0.5 64 90 2'"
-           " 'tempo 1 1200' 'bend 1 -8192 2' 'rest 1 4' | midi-play 600 " PORT " | count",
+           " 'tempo 1 1200' 'bend 1 -8192 2' 'rest 1 4' | midi.play 600 " PORT " | count",
            "7");
     clock_gettime(CLOCK_MONOTONIC, &t1);
     double took = (double)(t1.tv_sec - t0.tv_sec) + (double)(t1.tv_nsec - t0.tv_nsec) / 1e9;
@@ -137,7 +137,7 @@ int main(void)
     count = 0;
     pthread_t thread;
     CHECK(!pthread_create(&thread, NULL, interrupt_later, NULL));
-    expect_error(&table, "midi-play 'note 0 100 62 100 3' 600 " PORT, 1, "midi-play: interrupted");
+    expect_error(table, "midi.play 'note 0 100 62 100 3' 600 " PORT, 1, "midi.play: interrupted");
     pthread_join(thread, NULL);
     cmdr_interrupt(0);
     await(2);

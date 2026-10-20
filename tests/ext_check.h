@@ -14,6 +14,22 @@
     } \
 } while (0)
 
+/* An extension's table, bound as import _NAME as NAME binds it, in a session
+ * that lives until the program exits. */
+static inline const cmdr *ext_commands(const char *name, const cmdr *table)
+{
+    cmdr_session *session = cmdr_session_open(&cmdr_primitives, 1, NULL);
+    char module[64], line[160];
+    snprintf(module, sizeof(module), "_%s", name);
+    snprintf(line, sizeof(line), "import %s as %s", module, name);
+    cmdr_session_add_module(session, module, table);
+    cmdr_value value;
+    char *error = NULL;
+    if (cmdr_session_eval(session, line, &value, &error)) fprintf(stderr, "%s: %s\n", line, error);
+    CHECK(!error);
+    return cmdr_session_commands(session);
+}
+
 /* Evaluate source, which must succeed and render as printed. */
 static inline void expect(const cmdr *repl, const char *source, const char *printed)
 {

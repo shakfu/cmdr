@@ -20,7 +20,7 @@ if(Python3_Interpreter_FOUND)
 else()
   message(STATUS "Python 3 not found: skipping the test_cmdr checks")
 endif()
-# cmdr with fixture extensions: probe works; clash collides with existing names.
+# cmdr with fixture extensions: probe works; clash defines a name twice.
 foreach(fixture IN ITEMS probe clash)
   cmdr_add_binary(test_ext_${fixture} "${CMAKE_CURRENT_SOURCE_DIR}/ext/${fixture}")
 endforeach()

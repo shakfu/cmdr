@@ -1,1 +1,6 @@
-def probe-twice { () probe | with { (p) text $p $p } } "Return probed twice"
+# The module probe: a C command from _probe, and definitions. Its names are
+# probe.NAME, so the prelude's first and the primitive take are free here.
+from _probe import probe
+def twice { () probe | with { (p) text $p $p } } "Return probed twice"
+def first { upper }
+def take { upper }

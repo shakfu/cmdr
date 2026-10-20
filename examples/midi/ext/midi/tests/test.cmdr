@@ -1,11 +1,16 @@
 # Each line must succeed; cmdr stops at the first that fails. Files go in
 # MIDI_OUT, which CTest sets to a directory under build/.
-env MIDI_OUT | fs-mkdir | as out-dir "The test directory"
+
+import env
+import fs
+import midi
+
+env.get MIDI_OUT | fs.mkdir | as out-dir "The test directory"
 def tmp { (p) out-dir | path-join $p } "Path P in the test directory"
-def round-trip { (s p) tmp $p | with { (f) midi-write $s $f 120 } | midi-read } "Write score S to P in the test directory and read it back"
+def round-trip { (s p) tmp $p | with { (f) midi.write $s $f 120 } | midi.read } "Write score S to P in the test directory and read it back"
 
 # Keys are numbers or names, in a score as well as alone.
-midi-key F#3 | equals 54
+midi.key F#3 | equals 54
 list "note 0 1 C4 100 1" | round-trip a.mid | join , | equals "tempo 0 120,note 0 1 60 100 1"
 
 # A file holds every kind, sorted by start, kind as sent, channel, and key.
@@ -26,21 +31,21 @@ list "note 0 0.3333333333333333 60 100 1" | round-trip g.mid | last | words | nt
 list | round-trip h.mid | join , | equals "tempo 0 120"
 # Writing returns PATH and replaces a file.
 list "note 0 2 60 100 1" | round-trip a.mid | join , | equals "tempo 0 120,note 0 2 60 100 1"
-tmp a.mid | fs-size | equals 42
+tmp a.mid | fs.size | equals 42
 
 # Bjorklund's patterns, as in Toussaint's "The Euclidean Algorithm Generates
 # Traditional Musical Rhythms" (2005).
-midi-euclid 3 8 | concat | equals 10010010
-midi-euclid 5 8 | concat | equals 10110110
-midi-euclid 3 4 | concat | equals 1011
-midi-euclid 2 5 | concat | equals 10100
-midi-euclid 4 9 | concat | equals 101010100
-midi-euclid 5 12 | concat | equals 100101001010
-midi-euclid 7 12 | concat | equals 101101011010
-midi-euclid 5 16 | concat | equals 1001001001001000
-midi-euclid 7 16 | concat | equals 1001010100101010
-midi-euclid 9 16 | concat | equals 1011010101101010
-midi-euclid 13 24 | concat | equals 101101010101011010101010
-midi-euclid 0 4 | concat | equals 0000
-midi-euclid 4 4 | concat | equals 1111
-midi-euclid 1 1 | concat | equals 1
+midi.bjorklund 3 8 | concat | equals 10010010
+midi.bjorklund 5 8 | concat | equals 10110110
+midi.bjorklund 3 4 | concat | equals 1011
+midi.bjorklund 2 5 | concat | equals 10100
+midi.bjorklund 4 9 | concat | equals 101010100
+midi.bjorklund 5 12 | concat | equals 100101001010
+midi.bjorklund 7 12 | concat | equals 101101011010
+midi.bjorklund 5 16 | concat | equals 1001001001001000
+midi.bjorklund 7 16 | concat | equals 1001010100101010
+midi.bjorklund 9 16 | concat | equals 1011010101101010
+midi.bjorklund 13 24 | concat | equals 101101010101011010101010
+midi.bjorklund 0 4 | concat | equals 0000
+midi.bjorklund 4 4 | concat | equals 1111
+midi.bjorklund 1 1 | concat | equals 1

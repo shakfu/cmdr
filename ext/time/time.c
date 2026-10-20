@@ -16,7 +16,7 @@
 
 COMMAND(now_command)
 {
-    if (argc) return cmdr_error(error, "usage: time-now");
+    if (argc) return cmdr_error(error, "usage: time.now");
     char text[32];
     snprintf(text, sizeof(text), "%lld", (long long)time(NULL));
     *result = cmdr_text(text, strlen(text));
@@ -65,13 +65,13 @@ static int format(int utc, const char *name, size_t argc, const cmdr_value *argv
     *result = (cmdr_value){.kind = CMDR_TEXT, .text = text};
     return 0;
 }
-COMMAND(local_command) { return format(0, "time-local", argc, argv, result, error); }
-COMMAND(utc_command) { return format(1, "time-utc", argc, argv, result, error); }
+COMMAND(local_command) { return format(0, "time.local", argc, argv, result, error); }
+COMMAND(utc_command) { return format(1, "time.utc", argc, argv, result, error); }
 
 #define TEXT(n, u, d, f) {.name = n, .usage = u, .docstring = d, .run = f, .text = 1}
 static const cmdr_command commands[] = {
-    TEXT("time-now", "time-now", "Return the time in epoch seconds", now_command),
-    TEXT("time-local", "time-local [EPOCH] FORMAT", "Format a time with strftime, in local time", local_command),
-    TEXT("time-utc", "time-utc [EPOCH] FORMAT", "Format a time with strftime, in UTC", utc_command),
+    TEXT("now", "now", "Return the time in epoch seconds", now_command),
+    TEXT("local", "local [EPOCH] FORMAT", "Format a time with strftime, in local time", local_command),
+    TEXT("utc", "utc [EPOCH] FORMAT", "Format a time with strftime, in UTC", utc_command),
 };
 const cmdr cmdr_ext_time = {commands, sizeof(commands) / sizeof(commands[0]), NULL};

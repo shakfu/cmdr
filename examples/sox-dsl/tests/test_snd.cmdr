@@ -1,9 +1,11 @@
-# Checks the snd module. CTest runs it as example_sox_dsl, with CMDR_PATH set
-# to examples/sox-dsl and SND_OUT to a directory under build/.
+# Checks the snd module. CTest runs it as example_sox_dsl, with SND_OUT set to
+# a directory under build/.
 
 import snd
+import env
+import fs
 
-env SND_OUT | fs-mkdir | as out-dir "The test directory"
+env.get SND_OUT | fs.mkdir | as out-dir "The test directory"
 def tmp { (p) out-dir | path-join $p } "Path P in the test directory"
 def write-to { (chain p) tmp $p | with { (o) snd.out $chain $o } } "Run CHAIN into P in the test directory"
 
@@ -46,7 +48,7 @@ list a.wav a.wav | each { tmp } | snd.multiply | snd.stats-field "Pk lev dB" | e
 # Splitting writes numbered files and returns their paths.
 tmp s.wav | with { (o) tmp a.wav | snd.in | snd.split-at "0.25 0.5" $o } | map path-basename | join , | equals s001.wav,s002.wav,s003.wav
 tmp s003.wav | snd.info-field seconds | equals 0.5
-tmp s000.wav | not { fs-exists }
+tmp s000.wav | not { fs.exists }
 tmp p.wav | with { (o) tmp a.wav | snd.in | snd.pad 0 0.5 | snd.repeat 2 | snd.split-silence -40 0.3 $o } | count | equals 3
 tmp ch.wav | with { (o) tmp m.wav | snd.in | snd.split-channels $o } | each { (p) snd.info-field $p channels } | join , | equals 1,1
 tmp ch002.wav | snd.in | snd.stats-field "Length s" | equals 2.000

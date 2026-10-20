@@ -1,4 +1,3 @@
-# A prelude definition, a primitive, and one new name.
-def first { upper }
-def take { upper }
-def novel { upper }
+# The module clash. _clash defines fresh twice, so importing it fails, and
+# with it import clash.
+from _clash import fresh

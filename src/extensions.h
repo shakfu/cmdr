@@ -3,8 +3,9 @@
 
 #include "cmdr.h"
 
-/* Extensions under ext/, compiled into the executable by the build. Each array
- * ends with a NULL entry. See README.md, "Extensions". */
+/* Extensions under ext/, compiled into the executable by the build. main
+ * makes each table importable as _NAME, and each script as the module its file
+ * names. Each array ends with a NULL entry. See README.md, "Extensions". */
 typedef struct {
     const char *origin;   /* "ext/NAME" */
     const cmdr *commands; /* cmdr_ext_NAME */

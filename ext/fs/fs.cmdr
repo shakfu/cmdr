@@ -1,0 +1,2 @@
+# The fs module: import fs. C commands come from _fs.
+from _fs import exists is-file is-dir dirs size mtime mkdir remove move

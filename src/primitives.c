@@ -852,7 +852,7 @@ COMMAND(with_command)
     return run_body(&argv[0], argc, argv, result, error); /* Status passes through. */
 }
 
-/* A count larger than this is more likely a typo than a loop, as in num-seq. */
+/* A count larger than this is more likely a typo than a loop, as in num.seq. */
 #define REPEAT_LIMIT 10000000
 
 /* Call the block N times with argv[2..], so it takes no counter it must use. */

@@ -32,8 +32,6 @@ foreach(test IN ITEMS ext_snd_test example_sox_dsl example_sox_demo)
   set_tests_properties(${test} PROPERTIES TIMEOUT 60
     ENVIRONMENT "SND_OUT=${CMAKE_CURRENT_BINARY_DIR}/${test}")
 endforeach()
-set_property(TEST example_sox_dsl APPEND PROPERTY ENVIRONMENT
-  "CMDR_PATH=${CMAKE_CURRENT_SOURCE_DIR}")
 set_tests_properties(example_sox_demo PROPERTIES
   PASS_REGULAR_EXPRESSION "telephone.wav rate 8000 channels 1")
 add_dependencies(check cmdr-snd)

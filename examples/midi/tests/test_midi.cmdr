@@ -1,10 +1,22 @@
-# Checks the midi module. CTest runs it as example_midi, with CMDR_PATH set to
-# examples/midi and MIDI_OUT to a directory under build/. Random expectations
-# are Python 3.9's for the same seed and draws.
+# Checks the midi module. CTest runs it as example_midi, with MIDI_OUT set to
+# a directory under build/. Random expectations are Python 3.9's for the same
+# seed and draws.
 
 import midi
 
-env MIDI_OUT | fs-mkdir | as out-dir "The test directory"
+# One namespace: the C commands and the module's definitions are both midi.NAME.
+import midi as m
+import env
+import fs
+import random
+m.key C4 | equals 60
+m.scale C4 | count | equals 7
+help m.write | first | equals "m.write SCORE PATH [BPM]"
+from midi import bjorklund chord-keys
+bjorklund 3 8 | concat | equals 10010010
+chord-keys C4 | join , | equals 60,64,67
+
+env.get MIDI_OUT | fs.mkdir | as out-dir "The test directory"
 def tmp { (p) out-dir | path-join $p } "Path P in the test directory"
 
 # Items and their fields.
@@ -59,21 +71,21 @@ list | midi.end | equals 0
 midi.note C4 | with { (a) midi.note D4 | midi.stack $a } | join , | equals "note 0 1 62 100 1,note 0 1 60 100 1"
 
 # Chance: these match Python's random after the same seed.
-random-seed 1
+random.seed 1
 midi.scale C4 | midi.walk 8 | join , | equals 60,60,62,64,62,62,62,62
-random-seed 1
+random.seed 1
 midi.scale C4 major 2 | midi.walk 8 3 2 | join , | equals 64,60,64,65,64,64,64,65
-random-seed 2
+random.seed 2
 midi.seq "C4 D4 E4 F4 G4 A4" | midi.chance 0.5 | join , | equals "rest 0 1,rest 1 1,note 2 1 64 100 1,note 3 1 65 100 1,rest 4 1,rest 5 1"
-random-seed 3
+random.seed 3
 midi.pick "C4 E4 ." 6 0.5 | join , | equals "note 0 0.5 60 100 1,note 0.5 0.5 64 100 1,note 1 0.5 64 100 1,note 1.5 0.5 64 100 1,note 2 0.5 64 100 1,note 2.5 0.5 60 100 1"
-random-seed 4
+random.seed 4
 midi.seq "C4 D4" | midi.humanize 0.1 10 | join , | equals "note 0 1 60 93 1,note 1.0442433810175333 1 62 105 1"
-random-seed 5
+random.seed 5
 repeat 4 { () midi.scale C4 | midi.walk 4 } | each { (ks) midi.seq $ks 0.25 } | midi.sequence | each { (n) midi.field $n 4 } | join , | equals 60,60,62,64,60,62,64,65,60,60,60,62,60,60,62,60
 # chance keeps the length; other kinds pass through.
 midi.seq "C4 D4" | with { (s) midi.cc 7 1 | midi.stack $s } | midi.chance 0 | join , | equals "cc 0 7 1 1,rest 0 1,rest 1 1"
 midi.seq "C4 D4" | midi.chance 1 | join , | equals "note 0 1 60 100 1,note 1 1 62 100 1"
 
 # Files keep every kind and the trailing rest.
-midi.program 5 | with { (p) midi.seq "C4 ." 0.5 | midi.stack $p } | with { (s) tmp a.mid | with { (f) midi.save $s $f 100 } } | midi.from-file | join , | equals "tempo 0 100,program 0 5 1,note 0 0.5 60 100 1,rest 0.5 0.5"
+midi.program 5 | with { (p) midi.seq "C4 ." 0.5 | midi.stack $p } | with { (s) tmp a.mid | with { (f) midi.write $s $f 100 } } | midi.read | join , | equals "tempo 0 100,program 0 5 1,note 0 0.5 60 100 1,rest 0.5 0.5"

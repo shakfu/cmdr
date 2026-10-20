@@ -18,7 +18,7 @@ Run `help` for the command list; it returns text, so `help | filter map` works. 
 
 The REPL edits lines with a vendored copy of linenoise, in [thirdparty/linenoise](thirdparty/linenoise). The prompt is light green, except on terminals without escape sequences (`dumb`, `cons25`, `emacs`). It colors commands, references, blocks, and strings, shows names bound by `as` in bold magenta, where bound and where used, and shows unknown commands in red. Tab completes command names. Up and Down recall history, saved in `~/.cmdr_history`, with a continued pipeline stored as one entry. Ctrl-C drops the current pipeline. Pasted lines run one at a time, each echoed after its prompt. Configure with `-DCMDR_EDITOR=OFF` to read plain lines instead.
 
-- `./cmdr -c 'PIPELINE'` evaluates one pipeline.
+- `./cmdr -c 'PIPELINE'` evaluates PIPELINE. Several lines run in turn, as a script's, and the first failure stops them: `cmdr -c $'import fs\nfs.exists /tmp'`. A newline inside quotes or a block stays in its pipeline.
 
 - `./cmdr FILE [ARG ...]` runs a script and stops at its first failing line, reporting `FILE:LINE:`. `script-args` in the script returns the ARGs as a list.
 
@@ -109,7 +109,7 @@ A block's parameter shadows a binding of the same name. `$MODULE.NAME` refers to
 
 ## Commands
 
-These are the primitives, in [src/primitives.c](src/primitives.c). Extensions add commands named after them, such as `re-find` and `num-seq`; see [Extensions](#extensions).
+These are the primitives, in [src/primitives.c](src/primitives.c). Extensions add modules of commands, used after `import`, such as `re.find` and `num.seq`; see [Extensions](#extensions).
 
 | Commands | Behavior |
 | --- | --- |
@@ -232,6 +232,19 @@ cmdr> in a.wav | rate 48000 | cut 0 1 | out b.wav
 b.wav
 ```
 
+A user imports an extension by its name: `import fs`. That module is the extension's `.cmdr` file, which imports the extension's C commands from `_fs` and re-exports them, with any definitions of its own. So after `import fs`, `fs.exists` is a C command, while `env.or` is a definition in `ext/env/env.cmdr`. `_fs` is private to `fs` by convention, as Python's `_socket` is to `socket`: scripts import `fs`, not `_fs`. cmdr does not enforce this. Nothing of an extension is visible before `import`, as in Python. A host's built-in modules are found before files, so a local `random.cmdr` cannot hide the built-in `random`; Python lets a local `random.py` do that.
+
+```text
+cmdr> import fs
+cmdr> fs.exists /tmp
+/tmp
+cmdr> from num import range
+cmdr> range 3 | join ,
+1,2,3
+```
+
+Inside a module, `from` binds names the module exports, as in Python; `import` binds names it keeps. An explicit `as` may shadow an existing name, which a module needs to re-export a command under a primitive's name: `ext/re/re.cmdr` has `from _re import split as split`, so `re.split` is the C command and `split` stays the primitive.
+
 A package finds its own files with `script-dir`. Design and departures from Python: [docs/dev/import.md](docs/dev/import.md).
 
 ## Adding commands
@@ -277,15 +290,15 @@ Allocation failure exits the process with status 1. `cmdr_set_out_of_memory` ins
 
 An extension adds C commands to the `cmdr` executable without editing `src/main.c`. Each is a directory `ext/NAME/`:
 
-- `*.c`: the commands. One file defines `const cmdr cmdr_ext_NAME`, with `-` in NAME as `_`.
+- `*.c`: the commands, the module `_NAME`. One file defines `const cmdr cmdr_ext_NAME`, with `-` in NAME as `_`.
 
-- `*.cmdr`: definitions, embedded by the build and run in name order.
+- `NAME.cmdr`: the module `NAME`, embedded by the build and run at its first `import`. Other `.cmdr` files are modules named after their files.
 
 - `README.md`: what the extension does. The build fails without it.
 
 - `tests/`: at least one `*.cmdr` or `*.c` file; configure fails without one. `make test` runs each `.cmdr` file with `cmdr`, in `tests/`, and fails at its first failing line. Each `.c` file is a program linked with the extension's sources and `libcmdr.a`, for checks a script cannot make, such as error messages. Configuring with `-DCMDR_BUILD_TESTS=OFF` skips both.
 
-`scripts/mk_ext.py NAME` creates `ext/NAME/` with these files and a command `NAME TEXT`, which returns TEXT. The skeleton builds and passes its tests, so edit from there. `--c-test` also creates `tests/test_NAME.c`. It refuses an existing directory. `make test` builds a fresh skeleton, so a template change that breaks it fails there.
+`scripts/mk_ext.py NAME` creates `ext/NAME/` with these files and a command `NAME.echo TEXT`, which returns TEXT. The skeleton builds and passes its tests, so edit from there. `--c-test` also creates `tests/test_NAME.c`. It refuses an existing directory. `make test` builds a fresh skeleton, so a template change that breaks it fails there.
 
 [ext/env](ext/env/README.md) is an example:
 
@@ -297,15 +310,19 @@ static const cmdr_command commands[] = {
 const cmdr cmdr_ext_env = {commands, sizeof(commands) / sizeof(commands[0]), NULL};
 ```
 
-Each command is named NAME or starts with `NAME-`, as `re-find` does. This keeps names from colliding with each other and with later primitives.
+The C commands have plain names, such as `exists`, in a module `_NAME` that only `NAME.cmdr` imports. `NAME.cmdr` is the module NAME, the one users import, which the build requires when there are C commands. It chooses what `import NAME` gives, as `ext/fs/fs.cmdr`'s one line does:
+
+```text
+from _fs import exists is-file is-dir dirs size mtime mkdir remove move
+```
 
 The extensions in `ext/`:
 
 | Extension | Commands |
 |-|-|
 | [env](ext/env/README.md) | Environment variables |
-| [fs](ext/fs/README.md) | Path tests, sizes, times, `fs-mkdir`, `fs-remove`, `fs-move` |
-| [num](ext/num/README.md) | `num-seq`, modulo, rounding |
+| [fs](ext/fs/README.md) | Path tests, sizes, times, `fs.mkdir`, `fs.remove`, `fs.move` |
+| [num](ext/num/README.md) | `num.seq`, modulo, rounding |
 | [random](ext/random/README.md) | Seeded random numbers, choices, shuffles, and samples, as Python's `random` |
 | [re](ext/re/README.md) | Regex extraction, splitting, and replacement |
 | [shlex](ext/shlex/README.md) | Shell-style word splitting and quoting, as Python's `shlex` |
@@ -316,9 +333,9 @@ Extension C code can use `cmdr_number`, `cmdr_number_value`, and `cmdr_natural` 
 
 `help` shows an extension's C commands with `ext/NAME:` before the docstring. Its definitions show their own docs.
 
-Extension names must be new. cmdr fails at startup if an extension command, in C or `.cmdr`, has the name of a built-in, a primitive, another extension's command, or a prelude definition. Prelude definitions bind names when defined, so a shadowed name would change them silently. A session `def` may still shadow an extension command.
+A C table that defines a name twice fails at `import`. Other names cannot collide: an extension's names are `NAME.DEF`, beside the primitives.
 
-Extension scripts run before the prelude, so they may use only primitives and extension commands. `--user` replaces the prelude, and a script that used it would fail only there. Extensions are part of the executable, not `libcmdr`; an embedding host adds commands as in [Adding commands](#adding-commands).
+A module runs at its first `import`, after the prelude. Extension modules use only primitives and other modules, since `--user` may replace the prelude. Extensions are part of the executable, not `libcmdr`; an embedding host adds commands as in [Adding commands](#adding-commands), and modules with `cmdr_session_add_module` and `cmdr_session_add_source`.
 
 ## Installing
 

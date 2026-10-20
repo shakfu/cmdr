@@ -44,6 +44,4 @@ foreach(test IN ITEMS ext_midi_test example_midi example_midi_demo)
   set_tests_properties(${test} PROPERTIES TIMEOUT 60
     ENVIRONMENT "MIDI_OUT=${CMAKE_CURRENT_BINARY_DIR}/${test}")
 endforeach()
-set_property(TEST example_midi APPEND PROPERTY ENVIRONMENT
-  "CMDR_PATH=${CMAKE_CURRENT_SOURCE_DIR}")
 add_dependencies(check cmdr-midi ext_midi_test_midi)

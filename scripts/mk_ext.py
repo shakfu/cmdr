@@ -18,25 +18,27 @@ C_SOURCE = """\
 
 #include <string.h>
 
-/* {name} TEXT: replace with the command's behaviour. */
-static int {id}_command(const cmdr *repl, void *user, size_t argc, const cmdr_value *argv,
-{pad}cmdr_value *result, char **error)
+/* {name}.echo TEXT: replace with the command's behaviour. */
+static int echo_command(const cmdr *repl, void *user, size_t argc, const cmdr_value *argv,
+                        cmdr_value *result, char **error)
 {{
-    if (argc != 1) return cmdr_error(error, "usage: {name} TEXT");
+    if (argc != 1) return cmdr_error(error, "usage: {name}.echo TEXT");
     *result = cmdr_text(argv[0].text, strlen(argv[0].text));
     return 0;
 }}
 
 static const cmdr_command commands[] = {{
-    {{.name = "{name}", .usage = "{name} TEXT", .docstring = "Return TEXT unchanged",
-     .run = {id}_command, .text = 1}},
+    {{.name = "echo", .usage = "echo TEXT", .docstring = "Return TEXT unchanged",
+     .run = echo_command, .text = 1}},
 }};
 const cmdr cmdr_ext_{id} = {{commands, sizeof(commands) / sizeof(commands[0]), NULL}};
 """
 
 CMDR_SOURCE = """\
-# Definitions for ext/{name}. Extension scripts run before the prelude, so
-# they may use only primitives and extension commands.
+# The {name} module: import {name}. It re-exports _{name}'s C commands and may
+# add definitions. Use only primitives and modules, since --user may replace
+# the prelude.
+from _{name} import echo
 """
 
 README = """\
@@ -46,14 +48,15 @@ TODO: what the extension does.
 
 | Command | Result |
 |-|-|
-| `{name} TEXT` | `TEXT`, unchanged. |
+| `{name}.echo TEXT` | `TEXT`, unchanged. |
 
 TODO: why this needs C, not a `def`.
 """
 
 TEST = """\
 # Each line must succeed; cmdr stops at the first that fails.
-{name} hello | equals hello
+import {name}
+{name}.echo hello | equals hello
 """
 
 C_TEST = """\
@@ -66,9 +69,9 @@ extern const cmdr cmdr_ext_{id};
 
 int main(void)
 {{
-    const cmdr table = {{cmdr_ext_{id}.commands, cmdr_ext_{id}.count, &cmdr_primitives}};
-    expect(&table, "{name} hello", "hello");
-    expect_error(&table, "{name}", 1, "usage: {name} TEXT");
+    const cmdr *table = ext_commands("{name}", &cmdr_ext_{id});
+    expect(table, "{name}.echo hello", "hello");
+    expect_error(table, "{name}.echo", 1, "usage: {name}.echo TEXT");
     puts("test_{name}: ok");
     return 0;
 }}
@@ -78,8 +81,7 @@ int main(void)
 def files(name, c_test=False):
     """Map each skeleton path, relative to ext/NAME/, to its contents."""
     id = name.replace("-", "_")
-    pad = " " * len(f"static int {id}_command(")
-    fields = {"name": name, "id": id, "pad": pad}
+    fields = {"name": name, "id": id}
     paths = {
         f"{name}.c": C_SOURCE.format(**fields),
         f"{name}.cmdr": CMDR_SOURCE.format(**fields),

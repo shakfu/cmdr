@@ -6,7 +6,7 @@ static int noop(const cmdr *repl, void *user, size_t argc, const cmdr_value *arg
     return 0;
 }
 
-/* A primitive, a built-in, a prelude definition, a duplicate, and one new name. */
+/* A primitive, a built-in, a prelude definition, and a duplicate, which import rejects. */
 static const cmdr_command commands[] = {
     {.name = "split", .run = noop},
     {.name = "help", .run = noop},

@@ -38,7 +38,7 @@
 
 - The build is split into three files: `CMakeLists.txt`, `cmake/CmdrExtensions.cmake` for code generation and `cmdr_add_binary`, and `tests/CMakeLists.txt`. The test fixture binaries now build in `build/tests/`.
 
-- `docs/dev/scenarios-of-use.md` marks regex capture and environment access done, through `ext/re` and `ext/env`, and shows D1 log triage with `re-groups`.
+- `docs/dev/scenarios-of-use.md` marks regex capture and environment access done, through `ext/re` and `ext/env`, and shows D1 log triage with `re.groups`.
 
 ### Added
 
@@ -56,7 +56,7 @@
 
 - **Script arguments.** `cmdr FILE [ARG ...]` and `load PATH [ARG ...]` pass arguments, which `script-args` returns as a list. It resolves as `script-file` does, so a loaded library sees its own arguments, not the top script's. A process-wide list, like Python's `sys.argv`, would let a library depend on its caller's command line. `cmdr_session_load_args` passes arguments from a host. See [docs/dev/run-with-script-push.md](docs/dev/run-with-script-push.md#script-args).
 
-- Extension `shlex`: `shlex-split`, `shlex-quote`, and `shlex-join`, as Python's `shlex` with `posix=True`. `shlex-split "git commit -m 'two words'"` gives four words, which `split` cannot, and nothing is expanded or run. See [ext/shlex](ext/shlex/README.md).
+- Extension `shlex`: `shlex.split`, `shlex.quote`, and `shlex.join`, as Python's `shlex` with `posix=True`. `shlex.split "git commit -m 'two words'"` gives four words, which `split` cannot, and nothing is expanded or run. See [ext/shlex](ext/shlex/README.md).
 
 - `path-join BASE PATH` joins two paths with one `/`, as Python's `os.path.join` does; an absolute PATH replaces BASE. `path-split PATH` returns `path-dirname` and `path-basename` of PATH, like `os.path.split` but with POSIX rules: `path-split c` gives `.` and `c`. Both are prelude `def`s, so `script-dir | path-join lib.cmdr | load` needs no `concat`.
 
@@ -68,11 +68,11 @@
 
 - `examples/midi`: MIDI generation in cmdr, on the vendored libremidi 5.4.3. The `midi` extension plays scores on MIDI output ports, reads and writes Standard MIDI Files, and makes Euclidean rhythms by Bjorklund's algorithm. The `midi` module builds scores from scales, chords, scale degrees, and rhythms; draws them by chance with `pick`, `walk`, `chance`, and `humanize`; and transposes, shifts, stretches, stacks, sequences, and loops them. A score is a list of items as text, `KIND START ...` in beats: notes, rests, controllers, programs, pitch bends, and tempo changes. Text over handles held in C, so scores print and pass through list commands. Rests count toward a score's length, so joining, looping, and files keep a trailing gap. Configure builds `cmdr-midi` only with a C++ compiler and CMake 3.22, so `cmdr` needs neither. See [examples/midi](examples/midi/README.md).
 
-- Extension `random`: `random-seed`, `random`, `random-int`, `random-uniform`, `random-gauss`, `random-choice`, `random-choices`, `random-shuffle`, and `random-sample`, as Python's `random`. It uses Python's Mersenne Twister and seeding, so after `random-seed N` each command returns what Python returns after `random.seed(N)`. Python's generator over a smaller one, so a seed means the same in both and results can be checked against Python.
+- Extension `random`: `random.seed`, `random`, `random.int`, `random.uniform`, `random.gauss`, `random.choice`, `random.choices`, `random.shuffle`, and `random.sample`, as Python's `random`. It uses Python's Mersenne Twister and seeding, so after `random.seed N` each command returns what Python returns after `random.seed(N)`. Python's generator over a smaller one, so a seed means the same in both and results can be checked against Python.
 
 - `-DCMDR_EXAMPLES=OFF` skips building `cmdr-snd` and `cmdr-midi` and their tests. It defaults to `ON`, so `make test` still runs the examples' tests.
 
-- `repeat N BLOCK [ARG ...]` calls a block N times with only ARGs and lists the results. A block must use each parameter it declares, so `num-range 8 | each { (i) random }` was an error, and repeated calls needed a counter. A count over 10,000,000 is an error, as in `num-seq`.
+- `repeat N BLOCK [ARG ...]` calls a block N times with only ARGs and lists the results. A block must use each parameter it declares, so `num.range 8 | each { (i) random }` was an error, and repeated calls needed a counter. A count over 10,000,000 is an error, as in `num.seq`.
 
 - `as VALUE NAME [DOC]` binds a value to a name for later lines: `snd.out $c a440.wav | as a440`. NAME is a command returning the value, with `def`'s rules: lexical, shadowable, and exported from modules. Like `def` and Python's assignment, `as` returns no value, so a binding prints nothing in a script. The REPL colors bound names bold magenta, a bold form of the reference color, since a binding is a named value. A constant over a variable, so a definition keeps the value it saw. `as` over `let`, because cmdr passes the value first: `as VALUE NAME` reads as Python's `with ... as name`, and `let VALUE NAME` reverses `let`'s usual order.
 
@@ -80,7 +80,16 @@
 
 - **Extensions in `ext/NAME/`.** Each holds C commands, `.cmdr` definitions, a `README.md`, and `tests/`, and the build compiles them into `cmdr`. `make test` runs each `tests/*.cmdr` with `cmdr` and builds each `tests/*.c` against the extension. `help` shows C commands with `ext/NAME:` before the docstring. An extension command that reuses an existing name stops startup. A shadowed name would silently change prelude definitions, which bind names when defined. Extension scripts run before the prelude, because `--user` replaces it. See [README.md](README.md#extensions) and [ext/env](ext/env/README.md).
 
-- Extensions `re`, `num`, `fs`, `time`, and `str`. Each covers a gap a `def` cannot fill: `matches` returns no captures, a `def` cannot loop N times, and no primitive calls `stat`. Every command starts with its extension's name, so a later primitive cannot collide with it. `time-local` and `time-utc` take `[EPOCH] FORMAT` over `FORMAT [EPOCH]`, so a piped time is formatted: `fs-mtime f | time-local %F`. See [README.md](README.md#extensions).
+- **A user imports an extension's `.cmdr` module, which imports its C commands.** `import fs` runs `ext/fs/fs.cmdr`, which imports the C commands from `_fs`, private to it, and re-exports them with `from`, with any definitions of its own. `import fs` gives `fs.exists`; before it, `fs.exists` is an unknown command. Before, extension commands were always loaded and named `NAME-DEF`, beside modules' `NAME.DEF`, and only modules supported `from`. Python's `_socket` under `socket`, over keeping extensions always loaded: one rule for every name, and an extension's names cannot collide with others, so the startup collision check is gone; a C table that defines a name twice fails at `import`. The cost is an `import` line per script. Breaking: the bare commands `env` and `random` are `env.get` and `random.random`, and the midi C command `euclid` is `bjorklund`.
+
+  Supporting changes:
+
+  - `from` inside a module binds names the module exports, as in Python. `from M import f as f` shadows an existing `f`, which a module needs to re-export `_re`'s `split`; without `as`, an existing name is still an error.
+  - A host's built-in modules are found before files, so a local `random.cmdr` cannot hide `random`. `cmdr_session_add_module` and `cmdr_session_add_source` add them.
+  - `-c` runs several lines, as a script does, so `cmdr -c $'import fs\nfs.exists /tmp'` works. A newline inside quotes or a block stays in its pipeline, as before.
+  - `examples/sox-dsl` and `examples/midi` keep their modules in `ext/snd/snd.cmdr` and `ext/midi/midi.cmdr`, built in, so they need no `CMDR_PATH`. `midi.play` and `midi.write` take BPM 120 by default.
+
+- Extensions `re`, `num`, `fs`, `time`, and `str`. Each covers a gap a `def` cannot fill: `matches` returns no captures, a `def` cannot loop N times, and no primitive calls `stat`. Every command starts with its extension's name, so a later primitive cannot collide with it. `time.local` and `time.utc` take `[EPOCH] FORMAT` over `FORMAT [EPOCH]`, so a piped time is formatted: `fs.mtime f | time.local %F`. See [README.md](README.md#extensions).
 
 - `cmdr_number`, `cmdr_number_value`, and `cmdr_natural` parse and print numbers as primitives do, for extension code.
 
@@ -143,7 +152,7 @@
 
 - Ctrl-C while a line runs exits cmdr by SIGINT after stopping the line's program. cmdr died at once from the default SIGINT, so a program that ignored SIGINT kept running, unreaped, after cmdr exited. The program now gets SIGTERM, then SIGKILL a second later, as with `run-with`'s timeout. Exiting by the signal, not with a status, lets a calling shell loop stop. Hosts get the same through `cmdr_interrupt` and `cmdr_interrupted`.
 
-- `shlex-join` uses the `lines` primitive. It called `lines` by name in the caller's scope, so a session `def lines` changed how it split text.
+- `shlex.join` uses the `lines` primitive. It called `lines` by name in the caller's scope, so a session `def lines` changed how it split text.
 
 - A value nested too deeply to copy no longer leaks a block's code. The depth check ran after the copy had retained the block's compiled code, and the failure path did not release it.
 

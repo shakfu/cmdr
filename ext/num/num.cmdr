@@ -1,3 +1,3 @@
-# Definitions for ext/num. Extension scripts run before the prelude, so
-# they may use only primitives and extension commands.
-def num-range { (n) num-seq 1 $n } "List 1 to N, or nothing if N is below 1"
+# The num module: import num. C commands come from _num.
+from _num import seq mod floor ceil round abs
+def range { (n) seq 1 $n } "List 1 to N, or nothing if N is below 1"

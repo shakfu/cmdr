@@ -47,7 +47,7 @@ $tones.hz                      # a module's binding, by its qualified name
 | Alternative | Rejected because |
 |-|-|
 | Resolve at run time, by name | A `def` would see later rebindings: dynamic scope, against `as`'s rule that a definition keeps the value it saw. Errors would move from compile time to run time. |
-| `$name` runs any zero-argument command, such as `$time-today` | `$` would run code, so a reference could have effects or fail mid-pipeline. A computed value is a stage: `time-today \| with { (t) ... }`. |
+| `$name` runs any zero-argument command, such as `$time-today` | `$` would run code, so a reference could have effects or fail mid-pipeline. A computed value is a stage: `time.today \| with { (t) ... }`. |
 | A second sigil for bindings, such as `@a` | Two syntaxes for "a value here", and a block could not shadow a binding. Python has one kind of name. |
 | Copy the value into each compiled program | Copies on every compile, for no gain: the value is constant and outlives the program. |
 | Keep `$` for parameters only | `list a b` stays a trap, and every combination of bindings needs one `with` per name. |

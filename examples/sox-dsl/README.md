@@ -1,11 +1,11 @@
 # Sox DSL
 
-sox in cmdr. The [snd](ext/snd/README.md) extension runs sox's effects chains in-process through libsox, and adds a `varispeed` effect on libsoxr. The extension commands, `snd-NAME`, are the low-level layer, as `_socket` is to Python's `socket`. The [snd](snd/__init__.cmdr) module definitions, `snd.NAME` after `import snd`, are the API scripts use. They build a chain as a list of sox's arguments.
+sox in cmdr. The [snd](ext/snd/README.md) extension runs sox's effects chains in-process through libsox, and adds a `varispeed` effect on libsoxr. `import snd` gives both: the C commands, such as `snd.run` and `snd.info`, from `_snd`, and the [module](ext/snd/snd.cmdr)'s definitions, such as `snd.out` and `snd.mix`, which build a chain as a list of sox's arguments. The module is `ext/snd/snd.cmdr`, built into `cmdr-snd`, so it needs no `CMDR_PATH`.
 
 | File | Contents |
 |-|-|
-| [ext/snd/](ext/snd/README.md) | `snd-run`, `snd-report`, `snd-info`, `snd-segments`, `snd-effects`, `snd-usage` |
-| [snd/](snd/__init__.cmdr) | The `snd` module: inputs, combining, effects, output, inspection, splitting, presets |
+| [ext/snd/](ext/snd/README.md) | `snd.run`, `snd.report`, `snd.info`, `snd.segments`, `snd.effects`, `snd.usage` |
+| [ext/snd/snd.cmdr](ext/snd/snd.cmdr) | The `snd` module: inputs, combining, effects, output, inspection, splitting, presets |
 | [demo.cmdr](demo.cmdr) | Synthesizes tones, then combines, processes, and splits them |
 | [tests/](tests) | Checks every `snd` module definition |
 | [CMakeLists.txt](CMakeLists.txt) | Builds `cmdr-snd` |
@@ -77,6 +77,6 @@ cmdr> def lofi { (c) snd.rate $c 11025 | snd.mono | snd.effect "overdrive 10" | 
 cmdr> files in | keep { ends-with .wav } | each { (f) snd.in $f | lofi | with { (c) path-basename $f | with { (b) path-join out $b } | with { (o) snd.out $c $o } } }
 ```
 
-`snd.play CHAIN` plays on the default audio device and Ctrl-C stops it. `snd.record 5 take.wav` records five seconds. What `snd-run` covers of sox, and what it does not, is in [ext/snd](ext/snd/README.md).
+`snd.play CHAIN` plays on the default audio device and Ctrl-C stops it. `snd.record 5 take.wav` records five seconds. What `snd.run` covers of sox, and what it does not, is in [ext/snd](ext/snd/README.md).
 
 Design decisions: [docs/dev/design.md](docs/dev/design.md).

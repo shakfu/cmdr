@@ -1,17 +1,20 @@
 # Each line must succeed; cmdr stops at the first that fails.
-shlex-split "git commit -m 'two words'" | count | equals 4
-shlex-split "git commit -m 'two words'" | nth 4 | equals "two words"
-shlex-split "a'b'c \"d e\"" | join , | equals "abc,d e"
-shlex-split "a\\ b ''" | join , | equals "a b,"
-shlex-split "  " | count | equals 0
-shlex-quote "it's" | equals "'it'\"'\"'s'"
-shlex-quote a/b.c | equals a/b.c
-shlex-quote "" | equals "''"
-list a "b c" "it's" "" | shlex-join | shlex-split | join , | equals "a,b c,it's,"
-text "a\nb c\n" | shlex-join | equals "a 'b c'"
-text "a\nb c" | shlex-join | equals "a 'b c'"
-text "a b" | shlex-join | equals "'a b'"
-list | shlex-join | equals ""
-# A later def of lines does not change shlex-join, which uses the primitive.
+
+import shlex
+
+shlex.split "git commit -m 'two words'" | count | equals 4
+shlex.split "git commit -m 'two words'" | nth 4 | equals "two words"
+shlex.split "a'b'c \"d e\"" | join , | equals "abc,d e"
+shlex.split "a\\ b ''" | join , | equals "a b,"
+shlex.split "  " | count | equals 0
+shlex.quote "it's" | equals "'it'\"'\"'s'"
+shlex.quote a/b.c | equals a/b.c
+shlex.quote "" | equals "''"
+list a "b c" "it's" "" | shlex.join | shlex.split | join , | equals "a,b c,it's,"
+text "a\nb c\n" | shlex.join | equals "a 'b c'"
+text "a\nb c" | shlex.join | equals "a 'b c'"
+text "a b" | shlex.join | equals "'a b'"
+list | shlex.join | equals ""
+# A later def of lines does not change shlex.join, which uses the primitive.
 def lines { (x) count $x }
-text "a b\nc" | shlex-join | equals "'a b' c"
+text "a b\nc" | shlex.join | equals "'a b' c"

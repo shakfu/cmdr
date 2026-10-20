@@ -150,6 +150,14 @@ int cmdr_session_load_args(cmdr_session *session, FILE *in, const char *path, si
  * path in messages. */
 int cmdr_session_source(cmdr_session *session, const char *source, const char *name,
                         char **error);
+/* Make commands importable as module NAME, as a C extension is: import NAME
+ * binds NAME.COMMAND for each, and from NAME import COMMAND binds COMMAND.
+ * commands must outlive the session. A host's module wins over a file. */
+void cmdr_session_add_module(cmdr_session *session, const char *name, const cmdr *commands);
+/* Make source importable as module NAME, as a file of that source would be.
+ * path names it in messages; both must outlive the session. */
+void cmdr_session_add_source(cmdr_session *session, const char *name, const char *source,
+                             const char *path);
 /* Load the standard prelude, embedded by the build: src/prelude.cmdr, then
  * src/prelude-effects.cmdr in a session with effects. */
 int cmdr_session_prelude(cmdr_session *session, char **error);

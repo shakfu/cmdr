@@ -1,0 +1,3 @@
+# The shlex module: import shlex. C commands come from _shlex; as names a
+# re-export that shadows a built-in name, which from otherwise refuses.
+from _shlex import split as split quote join as join

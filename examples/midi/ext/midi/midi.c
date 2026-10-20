@@ -22,6 +22,8 @@
 #define TPQ 480
 /* The largest delta time a file can hold, a 4-byte variable-length quantity. */
 #define MAX_TICK 0x0FFFFFFF
+/* The tempo when play or write is given none. */
+#define DEFAULT_BPM "120"
 /* The longest Euclidean pattern; longer is more likely a typo than a rhythm. */
 #define MAX_STEPS 4096
 
@@ -364,12 +366,12 @@ static int enumerate(port_search *s, midi_error *e)
 
 COMMAND(ports_command)
 {
-    if (argc) return cmdr_error(error, "usage: midi-ports");
+    if (argc) return cmdr_error(error, "usage: midi.ports");
     port_search s = {.names = {.kind = CMDR_LIST}};
     midi_error e = {""};
     if (enumerate(&s, &e)) {
         cmdr_free(&s.names);
-        return cmdr_error(error, "midi-ports: cannot list ports%s%s", *e.text ? ": " : "", e.text);
+        return cmdr_error(error, "midi.ports: cannot list ports%s%s", *e.text ? ": " : "", e.text);
     }
     *result = s.names;
     return 0;
@@ -408,7 +410,7 @@ static libremidi_midi_out_handle *open_output(const char *name, const char *want
     }
     if (!s.found) {
         if (*want)
-            cmdr_error(error, "%s: no output port named %s; midi-ports lists them", name, want);
+            cmdr_error(error, "%s: no output port named %s; midi.ports lists them", name, want);
         else
             cmdr_error(error, "%s: no MIDI output ports", name);
         return NULL;
@@ -433,15 +435,15 @@ static libremidi_midi_out_handle *open_output(const char *name, const char *want
 
 COMMAND(play_command)
 {
-    if (argc < 2 || argc > 3) return cmdr_error(error, "usage: midi-play SCORE BPM [PORT]");
-    if (argv[1].kind != CMDR_TEXT || (argc == 3 && argv[2].kind != CMDR_TEXT))
-        return cmdr_error(error, "midi-play: BPM and PORT are text");
+    if (argc < 1 || argc > 3) return cmdr_error(error, "usage: midi.play SCORE [BPM] [PORT]");
+    if ((argc > 1 && argv[1].kind != CMDR_TEXT) || (argc == 3 && argv[2].kind != CMDR_TEXT))
+        return cmdr_error(error, "midi.play: BPM and PORT are text");
     item *items;
     size_t count, n;
     double bpm;
-    if (parse_bpm("midi-play", argv[1].text, &bpm, error)) return 1;
-    if (parse_score("midi-play", &argv[0], &items, &count, error)) return 1;
-    libremidi_midi_out_handle *out = open_output("midi-play", argc == 3 ? argv[2].text : "", error);
+    if (parse_bpm("midi.play", argc > 1 ? argv[1].text : DEFAULT_BPM, &bpm, error)) return 1;
+    if (parse_score("midi.play", &argv[0], &items, &count, error)) return 1;
+    libremidi_midi_out_handle *out = open_output("midi.play", argc == 3 ? argv[2].text : "", error);
     if (!out) {
         free(items);
         return 1;
@@ -476,7 +478,7 @@ COMMAND(play_command)
             }
     free(events);
     libremidi_midi_out_free(out);
-    if (interrupted) return cmdr_error(error, "midi-play: interrupted");
+    if (interrupted) return cmdr_error(error, "midi.play: interrupted");
     return cmdr_clone(&argv[0], result, error);
 }
 
@@ -524,18 +526,18 @@ static long tick_of(double beat) { return (long)round(beat * TPQ); }
 
 COMMAND(write_command)
 {
-    if (argc != 3) return cmdr_error(error, "usage: midi-write SCORE PATH BPM");
-    if (argv[1].kind != CMDR_TEXT || argv[2].kind != CMDR_TEXT)
-        return cmdr_error(error, "midi-write: PATH and BPM are text");
+    if (argc < 2 || argc > 3) return cmdr_error(error, "usage: midi.write SCORE PATH [BPM]");
+    if (argv[1].kind != CMDR_TEXT || (argc == 3 && argv[2].kind != CMDR_TEXT))
+        return cmdr_error(error, "midi.write: PATH and BPM are text");
     item *items;
     size_t count, n;
     double bpm;
-    if (parse_bpm("midi-write", argv[2].text, &bpm, error)) return 1;
-    if (parse_score("midi-write", &argv[0], &items, &count, error)) return 1;
+    if (parse_bpm("midi.write", argc == 3 ? argv[2].text : DEFAULT_BPM, &bpm, error)) return 1;
+    if (parse_score("midi.write", &argv[0], &items, &count, error)) return 1;
     double end = score_end(items, count);
     if (round(end * TPQ) > MAX_TICK) {
         free(items);
-        return cmdr_error(error, "midi-write: the score ends at beat %g, past what a file holds",
+        return cmdr_error(error, "midi.write: the score ends at beat %g, past what a file holds",
                           end);
     }
     /* BPM is the tempo at beat 0, unless the score sets one there. */
@@ -561,8 +563,8 @@ COMMAND(write_command)
     size_t size;
     int status = smf_encode(out, used, TPQ, tick_of(end), &data, &size);
     free(out);
-    if (status) return cmdr_error(error, "midi-write: libremidi cannot encode the score");
-    status = write_file("midi-write", argv[1].text, data, size, error);
+    if (status) return cmdr_error(error, "midi.write: libremidi cannot encode the score");
+    status = write_file("midi.write", argv[1].text, data, size, error);
     free(data);
     if (status) return 1;
     *result = cmdr_text(argv[1].text, strlen(argv[1].text));
@@ -598,7 +600,7 @@ static unsigned char *read_file(const char *path, size_t *size, char **error)
 {
     FILE *f = fopen(path, "rb");
     if (!f) {
-        cmdr_error(error, "midi-read: cannot read %s: %s", path, strerror(errno));
+        cmdr_error(error, "midi.read: cannot read %s: %s", path, strerror(errno));
         return NULL;
     }
     unsigned char *data = NULL;
@@ -615,7 +617,7 @@ static unsigned char *read_file(const char *path, size_t *size, char **error)
     fclose(f);
     if (failed) {
         free(data);
-        cmdr_error(error, "midi-read: cannot read %s", path);
+        cmdr_error(error, "midi.read: cannot read %s", path);
         return NULL;
     }
     *size = used;
@@ -671,7 +673,7 @@ static cmdr_value item_text(const item *t)
  * out per channel and key. Notes still sounding end at the file's end. */
 COMMAND(read_command)
 {
-    if (argc != 1) return cmdr_error(error, "usage: midi-read PATH");
+    if (argc != 1) return cmdr_error(error, "usage: midi.read PATH");
     size_t size;
     unsigned char *data = read_file(argv[0].text, &size, error);
     if (!data) return 1;
@@ -682,7 +684,7 @@ COMMAND(read_command)
     int status = smf_decode(data, size, &events, &count, &tpq, &last);
     free(data);
     if (status)
-        return cmdr_error(error, "midi-read: %s is not a MIDI file timed in ticks per beat",
+        return cmdr_error(error, "midi.read: %s is not a MIDI file timed in ticks per beat",
                           argv[0].text);
     ordered *sorted = cmdr_realloc(NULL, count ? count : 1, sizeof(ordered));
     for (size_t i = 0; i < count; ++i) sorted[i] = (ordered){events[i], i};
@@ -755,10 +757,10 @@ COMMAND(read_command)
 
 COMMAND(key_command)
 {
-    if (argc != 1) return cmdr_error(error, "usage: midi-key KEY");
+    if (argc != 1) return cmdr_error(error, "usage: midi.key KEY");
     int key = parse_key(argv[0].text);
     if (key < 0)
-        return cmdr_error(error, "midi-key: %s is not 0 to 127 or a name such as C4", argv[0].text);
+        return cmdr_error(error, "midi.key: %s is not 0 to 127 or a name such as C4", argv[0].text);
     char text[4];
     *result = cmdr_text(text, (size_t)snprintf(text, sizeof(text), "%d", key));
     return 0;
@@ -785,12 +787,12 @@ static group join_groups(group a, group b)
  * second set has more than one group, so E(3,4) is 1011, not 1110. */
 COMMAND(euclid_command)
 {
-    if (argc != 2) return cmdr_error(error, "usage: midi-euclid K N");
+    if (argc != 2) return cmdr_error(error, "usage: midi.bjorklund K N");
     int k, n;
     if (integer(argv[1].text, 1, MAX_STEPS, &n))
-        return cmdr_error(error, "midi-euclid: N %s is not 1 to %d", argv[1].text, MAX_STEPS);
+        return cmdr_error(error, "midi.bjorklund: N %s is not 1 to %d", argv[1].text, MAX_STEPS);
     if (integer(argv[0].text, 0, n, &k))
-        return cmdr_error(error, "midi-euclid: K %s is not 0 to %d", argv[0].text, n);
+        return cmdr_error(error, "midi.bjorklund: K %s is not 0 to %d", argv[0].text, n);
     /* One array: the first set's na groups, then the second set's nb. */
     group *g = cmdr_realloc(NULL, (size_t)n, sizeof(group));
     size_t na = (size_t)k, nb = (size_t)(n - k);
@@ -819,15 +821,17 @@ COMMAND(euclid_command)
 
 #define TEXT(n, u, d, f) {.name = n, .usage = u, .docstring = d, .run = f, .text = 1}
 static const cmdr_command commands[] = {
-    TEXT("midi-key", "midi-key KEY", "Return KEY, a number or a name such as C4 or F#3, as 0 to 127",
+    TEXT("key", "key KEY", "Return KEY, a number or a name such as C4 or F#3, as 0 to 127",
          key_command),
-    TEXT("midi-euclid", "midi-euclid K N",
+    TEXT("bjorklund", "bjorklund K N",
          "List N steps, 1 on K of them spread evenly and 0 elsewhere", euclid_command),
-    TEXT("midi-ports", "midi-ports", "List MIDI output ports", ports_command),
-    {.name = "midi-play", .usage = "midi-play SCORE BPM [PORT]",
-     .docstring = "Play SCORE on PORT, or the first output port; return SCORE", .run = play_command},
-    {.name = "midi-write", .usage = "midi-write SCORE PATH BPM",
-     .docstring = "Write SCORE to the MIDI file PATH; return PATH", .run = write_command},
-    TEXT("midi-read", "midi-read PATH", "List the items of the MIDI file PATH", read_command),
+    TEXT("ports", "ports", "List MIDI output ports", ports_command),
+    {.name = "play", .usage = "play SCORE [BPM] [PORT]",
+     .docstring = "Play SCORE at BPM, default 120, on PORT, or the first output port; return SCORE",
+     .run = play_command},
+    {.name = "write", .usage = "write SCORE PATH [BPM]",
+     .docstring = "Write SCORE to the MIDI file PATH at BPM, default 120; return PATH",
+     .run = write_command},
+    TEXT("read", "read PATH", "List the items of the MIDI file PATH", read_command),
 };
 const cmdr cmdr_ext_midi = {commands, sizeof(commands) / sizeof(commands[0]), NULL};

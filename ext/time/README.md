@@ -4,17 +4,19 @@ The current time, and times formatted with strftime(3).
 
 | Command | Result |
 |-|-|
-| `time-now` | The current time, in whole seconds since the epoch. |
-| `time-local [EPOCH] FORMAT` | EPOCH, default now, formatted in local time. `TZ` sets the zone. |
-| `time-utc [EPOCH] FORMAT` | EPOCH, default now, formatted in UTC. |
-| `time-today` | Today's local date, as `YYYY-MM-DD`. |
+| `time.now` | The current time, in whole seconds since the epoch. |
+| `time.local [EPOCH] FORMAT` | EPOCH, default now, formatted in local time. `TZ` sets the zone. |
+| `time.utc [EPOCH] FORMAT` | EPOCH, default now, formatted in UTC. |
+| `time.today` | Today's local date, as `YYYY-MM-DD`. |
 
 EPOCH comes first, so a time can be piped in:
 
 ```text
-cmdr> fs-mtime README.md | time-local '%Y-%m-%d %H:%M'
+cmdr> import time
+cmdr> import fs
+cmdr> fs.mtime README.md | time.local '%Y-%m-%d %H:%M'
 2026-10-18 09:41
-cmdr> time-utc 0 %c
+cmdr> time.utc 0 %c
 Thu Jan  1 00:00:00 1970
 ```
 

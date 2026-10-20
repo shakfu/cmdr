@@ -14,11 +14,11 @@
 
 COMMAND(index_command)
 {
-    if (argc != 2) return cmdr_error(error, "usage: str-index TEXT SUBSTRING");
+    if (argc != 2) return cmdr_error(error, "usage: str.index TEXT SUBSTRING");
     const char *found = strstr(argv[0].text, argv[1].text);
     if (!found) {
         char *a = cmdr_describe(&argv[1]), *b = cmdr_describe(&argv[0]);
-        cmdr_error(error, "str-index: %s not found in %s", a, b);
+        cmdr_error(error, "str.index: %s not found in %s", a, b);
         free(a);
         free(b);
         return CMDR_MISMATCH;
@@ -36,11 +36,11 @@ static int limit(const char *name, size_t size, char **error)
 
 COMMAND(repeat_command)
 {
-    if (argc != 2) return cmdr_error(error, "usage: str-repeat TEXT N");
+    if (argc != 2) return cmdr_error(error, "usage: str.repeat TEXT N");
     size_t n = strlen(argv[0].text), count;
     if (cmdr_natural(&argv[1], &count, error)) return 1;
     /* Compare by division, so n * count cannot overflow. */
-    if (n && count > SIZE_LIMIT / n) return limit("str-repeat", SIZE_LIMIT + 1, error);
+    if (n && count > SIZE_LIMIT / n) return limit("str.repeat", SIZE_LIMIT + 1, error);
     char *text = cmdr_realloc(NULL, n * count + 1, 1);
     for (size_t i = 0; i < count; ++i) memcpy(text + i * n, argv[0].text, n);
     text[n * count] = '\0';
@@ -66,12 +66,12 @@ static int pad(int left, const char *name, size_t argc, const cmdr_value *argv,
     *result = (cmdr_value){.kind = CMDR_TEXT, .text = text};
     return 0;
 }
-COMMAND(pad_left_command) { return pad(1, "str-pad-left", argc, argv, result, error); }
-COMMAND(pad_right_command) { return pad(0, "str-pad-right", argc, argv, result, error); }
+COMMAND(pad_left_command) { return pad(1, "str.pad-left", argc, argv, result, error); }
+COMMAND(pad_right_command) { return pad(0, "str.pad-right", argc, argv, result, error); }
 
 COMMAND(chars_command)
 {
-    if (argc != 1) return cmdr_error(error, "usage: str-chars TEXT");
+    if (argc != 1) return cmdr_error(error, "usage: str.chars TEXT");
     *result = (cmdr_value){.kind = CMDR_LIST};
     for (const char *p = argv[0].text; *p; ++p) cmdr_push(result, cmdr_text(p, 1));
     return 0;
@@ -81,7 +81,7 @@ COMMAND(chars_command)
 COMMAND(reverse_command)
 {
     if (argc != 1 || argv[0].kind == CMDR_BLOCK || argv[0].kind == CMDR_NONE)
-        return cmdr_error(error, "usage: str-reverse LIST_OR_TEXT");
+        return cmdr_error(error, "usage: str.reverse LIST_OR_TEXT");
     if (argv[0].kind == CMDR_TEXT) {
         size_t n = strlen(argv[0].text);
         *result = cmdr_text(argv[0].text, n);
@@ -104,12 +104,12 @@ COMMAND(reverse_command)
 
 #define TEXT(n, u, d, f) {.name = n, .usage = u, .docstring = d, .run = f, .text = 1}
 static const cmdr_command commands[] = {
-    TEXT("str-index", "str-index TEXT SUBSTRING", "Return the byte offset of SUBSTRING", index_command),
-    TEXT("str-repeat", "str-repeat TEXT N", "Repeat TEXT N times", repeat_command),
-    TEXT("str-pad-left", "str-pad-left TEXT WIDTH [FILL]", "Pad on the left to WIDTH bytes", pad_left_command),
-    TEXT("str-pad-right", "str-pad-right TEXT WIDTH [FILL]", "Pad on the right to WIDTH bytes", pad_right_command),
-    TEXT("str-chars", "str-chars TEXT", "List the bytes of TEXT", chars_command),
-    {.name = "str-reverse", .usage = "str-reverse LIST_OR_TEXT",
+    TEXT("index", "index TEXT SUBSTRING", "Return the byte offset of SUBSTRING", index_command),
+    TEXT("repeat", "repeat TEXT N", "Repeat TEXT N times", repeat_command),
+    TEXT("pad-left", "pad-left TEXT WIDTH [FILL]", "Pad on the left to WIDTH bytes", pad_left_command),
+    TEXT("pad-right", "pad-right TEXT WIDTH [FILL]", "Pad on the right to WIDTH bytes", pad_right_command),
+    TEXT("chars", "chars TEXT", "List the bytes of TEXT", chars_command),
+    {.name = "reverse", .usage = "reverse LIST_OR_TEXT",
      .docstring = "Reverse the items of a list or the bytes of text", .run = reverse_command},
 };
 const cmdr cmdr_ext_str = {commands, sizeof(commands) / sizeof(commands[0]), NULL};

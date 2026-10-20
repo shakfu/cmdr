@@ -1,3 +1,3 @@
 # clash
 
-Commands that collide with existing ones, for test_extension_collisions.
+A C table that defines a name twice, for test_extension_namespaces: `import clash` fails.

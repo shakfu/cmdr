@@ -2,9 +2,14 @@
 # of steps. `import aw` binds these definitions as aw.NAME; see ../README.md.
 # Needs the env, fs, re, and time extensions.
 
+import env
+import fs
+import re
+import time
+
 script-dir | as home-dir "Directory holding actions/"
-def runs-dir { () env-or AW_RUNS agent-runs } "Directory for run logs"
-def agent-timeout { () env-or AW_TIMEOUT 1800 } "Seconds an agent may run"
+def runs-dir { () env.or AW_RUNS agent-runs } "Directory for run logs"
+def agent-timeout { () env.or AW_TIMEOUT 1800 } "Seconds an agent may run"
 
 # Agents. An adapter takes PROMPT DIR MODEL MODE and returns the agent's
 # final text. An empty MODEL selects the agent's default; MODE is read or write.
@@ -19,8 +24,8 @@ def check-sandbox { (args) list 0 "" "" | with { (ok) list | with { (o) or $args
 def agent-claude { (p d m mode) sandbox-probe | check-sandbox | $m | with { (x) opt --model $x } | with { (mf) by-mode $mode plan acceptEdits | with { (pm) list claude -p $mf --permission-mode $pm --permission-prompts none --safe-mode --settings $claude-sandbox $p | launch $d } } } "Run claude -p in its sandbox, without user CLAUDE.md"
 def agent-codex { (p d m mode) opt -m $m | with { (mf) by-mode $mode read-only workspace-write | with { (sb) list codex exec $mf -s $sb $p | launch $d } } } "Run codex exec"
 def agent-cursor { (p d m mode) opt --model $m | with { (mf) by-mode $mode --mode=plan --force | with { (f) list cursor-agent -p --output-format text --sandbox enabled $mf $f $p | launch $d } } } "Run cursor-agent -p"
-def llama-url { () env-or AW_LLAMA_URL http://127.0.0.1:8080 } "Base URL of llama-server"
-def llama-max { () env-or AW_LLAMA_MAX_BYTES 200000 } "Largest project text sent to llama"
+def llama-url { () env.or AW_LLAMA_URL http://127.0.0.1:8080 } "Base URL of llama-server"
+def llama-max { () env.or AW_LLAMA_MAX_BYTES 200000 } "Largest project text sent to llama"
 def llama-file { (d f) path-join $d $f | try { read } "(unreadable)" | with { (c) list "### " $f "\n```\n" $c "\n```" | concat } }
 def llama-context { (d) list dir $d | with { (o) run-with $o git ls-files } | agent-out | lines | each { (f) llama-file $d $f } | join "\n\n" | with { (c) llama-max | with { (n) check $c { length | le $n } "project exceeds AW_LLAMA_MAX_BYTES" | $c } } } "Every tracked file in DIR, under a heading"
 text "\n\nGive each change as an edit block: the file path alone on a line, then\n<<<<<<< SEARCH\nlines copied exactly from the file\n=======\nthe lines that replace them\n>>>>>>> REPLACE\nSEARCH must match exactly one place in the file. An empty SEARCH creates a new file." | as llama-format
@@ -31,21 +36,21 @@ def llama-chat { (q m) list jq -c -R -s --arg m $m '{messages: [{role: "user", c
 # Edit blocks: PATH, then SEARCH lines that must occur once in PATH, then their
 # replacement. Blocks apply to a staging copy; DIR changes only if all apply.
 text '^$|^/|/$|//|(^|/)[.][.]?(/|$)|(^|/)[.]git(/|$)' | as edit-unsafe "Paths an edit may not name"
-def edit-path-of { (c) split $c "<<<<<<< SEARCH\n" | first | lines | keep { not { starts-with "```" } } | keep { (l) trim $l | nonempty } | last | re-replace '^ *#+ +|[`*]' "" | trim | check { matches '^[^ ]+$' } "a file path" } "The path on the last line before C's SEARCH marker"
+def edit-path-of { (c) split $c "<<<<<<< SEARCH\n" | first | lines | keep { not { starts-with "```" } } | keep { (l) trim $l | nonempty } | last | re.replace '^ *#+ +|[`*]' "" | trim | check { matches '^[^ ]+$' } "a file path" } "The path on the last line before C's SEARCH marker"
 def edit-blocks { (r) split $r ">>>>>>> REPLACE" | with { (xs) count $xs | sub 1 | with { (k) head $xs $k } } | map replace "<<<<<<< SEARCH\n=======\n" "<<<<<<< SEARCH\n\n=======\n" | with { (cs) list | with { (none) fold $cs $none { (acc c) text "" | with { (e) or { () last $acc | edit-path-of } $e } | with { (pp) list $pp "\n" $c | concat } | with { (fixed) try { () edit-path-of $c | $c } $fixed } | with { (x) push $acc $x } } } } } "Each edit block in R, without its REPLACE marker; one without a path gets the previous block's"
 def edit-infer { (d o) nonempty $o | $o | with { (x) list "\n" $x "\n" | concat } | with { (o1) list dir $d | with { (op) run-with $op git ls-files } | agent-out | lines | keep { (f) path-join $d $f | try { read } "" | with { (x) list "\n" $x | concat } | contains $o1 } } | with { (fs) count $fs | check { equals 1 } "one file" | $fs | first } } "The one tracked file in DIR holding the SEARCH lines O"
 def edit-parse { (d c) split $c "<<<<<<< SEARCH\n" | with { (ps) count $ps | check { equals 2 } "one SEARCH" | $ps | nth 2 | split "\n=======\n" | with { (on) count $on | check { equals 2 } "one divider" | $on | with { (x) nth $x 1 | with { (o) nth $x 2 | with { (n) try { () edit-path-of $c } "" | with { (p0) try { () equals $p0 "" | $d | with { (y) edit-infer $y $o } } $p0 } | with { (p) text "no file path before SEARCH, and its lines are not in exactly one tracked file" | with { (m) or { () equals $p "" | $m } "" } | with { (r) list $p $o $n $r } } } } } } } } "PATH SEARCH REPLACE and why the block cannot apply; a missing PATH is the one tracked file holding SEARCH"
 def edit-prefixes { (p) list | with { (none) split $p / | fold $none { (acc c) or { () last $acc | with { (l) path-join $l $c } } $c | with { (x) push $acc $x } } } } "a, a/b, a/b/c for a/b/c"
 def edit-link { (d x) path-join $d $x | with { (y) list | with { (o) run-with $o test -L $y } } | nth 1 | check { not { equals 0 } } "a symbolic link" } "Fail if X in DIR is a symbolic link"
 def edit-safe { (d p) edit-unsafe | with { (re) check $p { not { matches $re } } "unsafe path" } | $p | edit-prefixes | each { (x) edit-link $d $x } } "Fail unless P is relative, inside DIR, outside .git, and free of symbolic links"
-def edit-source { (d stage p) path-join $stage $p | with { (s) path-join $d $p | with { (o) or { () fs-exists $s } $o } } } "P's staged copy if any, else P in DIR"
-def edit-why-new { (st) nth $st 1 | with { (src) text "" | with { (ok) nth $st 3 | with { (p) list $p " exists; copy SEARCH lines from it" | concat | with { (m) try { () not $src { fs-exists } | $ok } $m } } } } }
-def edit-why-old { (st) nth $st 1 | with { (src) nth $st 2 | with { (o1) text "" | with { (ok) nth $st 3 | with { (p) list "SEARCH must match exactly one place in " $p | concat | with { (ms) list "no such file: " $p | concat | with { (mn) or { () fs-exists $src | $ms } $mn } } | with { (m) try { () read $src | with { (x) list "\n" $x | concat } | with { (cur) replace $cur $o1 "" | length | with { (a) length $cur | sub $a } } | with { (k) length $o1 | equals $k } | $ok } $m } } } } } }
+def edit-source { (d stage p) path-join $stage $p | with { (s) path-join $d $p | with { (o) or { () fs.exists $s } $o } } } "P's staged copy if any, else P in DIR"
+def edit-why-new { (st) nth $st 1 | with { (src) text "" | with { (ok) nth $st 3 | with { (p) list $p " exists; copy SEARCH lines from it" | concat | with { (m) try { () not $src { fs.exists } | $ok } $m } } } } }
+def edit-why-old { (st) nth $st 1 | with { (src) nth $st 2 | with { (o1) text "" | with { (ok) nth $st 3 | with { (p) list "SEARCH must match exactly one place in " $p | concat | with { (ms) list "no such file: " $p | concat | with { (mn) or { () fs.exists $src | $ms } $mn } } | with { (m) try { () read $src | with { (x) list "\n" $x | concat } | with { (cur) replace $cur $o1 "" | length | with { (a) length $cur | sub $a } } | with { (k) length $o1 | equals $k } | $ok } $m } } } } } }
 def edit-why { (d stage p o) edit-source $d $stage $p | with { (src) list "\n" $o "\n" | concat | with { (o1) list $src $o1 $p } } | with { (st) text edit-why-new | with { (cr) or { () equals $o "" | $cr } edit-why-old } | with { (c) list $st | map $c | concat } } } "Empty text if SEARCH O applies to P, else the reason"
-def edit-put { (d stage p o n) edit-source $d $stage $p | with { (src) try { () read $src } "" } | with { (cur) list "\n" $o "\n" | concat | with { (o1) list "\n" $n | concat | with { (n1) list "\n" $cur | concat | replace $o1 $n1 | drop 1 | with { (mod) or { () equals $o "" | $n } $mod } } } } | with { (x) path-join $stage $p | with { (dst) path-dirname $dst | fs-mkdir | $x | write $dst } } } "Write P's edited text to the staging copy"
+def edit-put { (d stage p o n) edit-source $d $stage $p | with { (src) try { () read $src } "" } | with { (cur) list "\n" $o "\n" | concat | with { (o1) list "\n" $n | concat | with { (n1) list "\n" $cur | concat | replace $o1 $n1 | drop 1 | with { (mod) or { () equals $o "" | $n } $mod } } } } | with { (x) path-join $stage $p | with { (dst) path-dirname $dst | fs.mkdir | $x | write $dst } } } "Write P's edited text to the staging copy"
 def edit-stage { (d stage c) list "" "" "" "malformed edit block: expected a file path alone on a line, SEARCH, =======, and REPLACE" | with { (bad) try $c { (x) edit-parse $d $x } $bad } | with { (e) nth $e 1 | with { (p) nth $e 2 | with { (o) nth $e 3 | with { (n) nth $e 4 | with { (r1) text "" | with { (ok) list "unsafe path: " $p | concat | with { (m) try { () edit-safe $d $p | $ok } $m } } | with { (r2) try { () edit-why $d $stage $p $o } "unreadable" | with { (r3) list $r1 $r2 $r3 | keep { nonempty } | or { first } "" | with { (why) or { () equals $why "" | $d | with { (x) edit-put $x $stage $p $o $n } | $why } $why } } } } } } } } } "Stage edit block C for DIR; return empty text, or why it failed"
-def edit-commit { (d stage) list $stage / | concat | with { (pre) run find $stage -type f | lines | each { (f) strip-prefix $f $pre | with { (p) path-join $d $p | with { (dst) path-dirname $dst | fs-mkdir | $f | read | write $dst } } } } } "Copy the staging copy into DIR"
-def edit-apply { (r d) runs-dir | fs-mkdir | path-join llama-stage-XXXXXX | with { (t) run mktemp -d $t | trim } | with { (stage) edit-blocks $r | with { (bs) count $bs | with { (k) text "" | with { (ok) try { () gt $k 0 | $ok } "no edit blocks" } } | with { (r0) each $bs { (c) edit-stage $d $stage $c } | with { (rs) push $rs $r0 | keep { nonempty } | unlines } } } | with { (why) or { () equals $why "" | $d | with { (x) edit-commit $x $stage } | $stage | with { (x) run rm -rf $x } | $why } $why } } } "Apply R's edit blocks in DIR, then delete the staging copy; return empty text, or why none were applied"
+def edit-commit { (d stage) list $stage / | concat | with { (pre) run find $stage -type f | lines | each { (f) strip-prefix $f $pre | with { (p) path-join $d $p | with { (dst) path-dirname $dst | fs.mkdir | $f | read | write $dst } } } } } "Copy the staging copy into DIR"
+def edit-apply { (r d) runs-dir | fs.mkdir | path-join llama-stage-XXXXXX | with { (t) run mktemp -d $t | trim } | with { (stage) edit-blocks $r | with { (bs) count $bs | with { (k) text "" | with { (ok) try { () gt $k 0 | $ok } "no edit blocks" } } | with { (r0) each $bs { (c) edit-stage $d $stage $c } | with { (rs) push $rs $r0 | keep { nonempty } | unlines } } } | with { (why) or { () equals $why "" | $d | with { (x) edit-commit $x $stage } | $stage | with { (x) run rm -rf $x } | $why } $why } } } "Apply R's edit blocks in DIR, then delete the staging copy; return empty text, or why none were applied"
 
 # A llama state is a list of text: PROMPT DIR MODEL, then REPLY and why its
 # edits failed, empty if they applied.
@@ -59,7 +64,7 @@ list claude codex cursor llama dry | as agents "Known agent names: those with a 
 def agent { (name p d m mode) list agent- $name | concat | with { (c) list $p | map $c $d $m $mode | concat } } "Run agent NAME on PROMPT in DIR"
 
 # Targets: a list of KIND DIR BRIEF. BRIEF opens every prompt.
-def target { (kind d b) check $d { fs-is-dir } "not a directory" | with { (x) list $kind $x $b } }
+def target { (kind d b) check $d { fs.is-dir } "not a directory" | with { (x) list $kind $x $b } }
 def target-path { (d) text "Target: the project in the working directory." | with { (b) target path $d $b } } "Target the code in DIR"
 def target-bug { (r d) list "Target: a bug in the project in the working directory.\n\nBug report:\n" $r | concat | with { (b) target bug $d $b } } "Target the bug REPORT in DIR"
 def target-feature { (s d) list "Target: a feature for the project in the working directory.\n\nSpecification:\n" $s | concat | with { (b) target feature $d $b } } "Target the feature SPEC in DIR"
@@ -79,15 +84,15 @@ def history-last { (h) or { () last $h } "(none)" } "The last output, or (none)"
 def history-text { (h) join $h "\n\n" }
 def render { (tmpl t h) target-brief $t | with { (b) replace $tmpl "{{target}}" $b } | with { (s) history-last $h | with { (i) replace $s "{{input}}" $i } } | with { (s) history-text $h | with { (x) replace $s "{{history}}" $x } } }
 
-# Steps: ACTION@AGENT[:MODEL]. A parsed step is the re-groups list:
+# Steps: ACTION@AGENT[:MODEL]. A parsed step is the re.groups list:
 # spec, action, agent, ":MODEL", MODEL.
 text '^([a-z][a-z-]*)@([a-z]+)(:(.+))?$' | as step-re
-def parse-step { (s) step-re | with { (re) check $s { matches $re } "expected ACTION@AGENT[:MODEL]" | re-groups $re } }
+def parse-step { (s) step-re | with { (re) check $s { matches $re } "expected ACTION@AGENT[:MODEL]" | re.groups $re } }
 def step-spec { (p) nth $p 1 }
 def step-action { (p) nth $p 2 }
 def step-agent { (p) nth $p 3 }
 def step-model { (p) nth $p 5 }
-def check-step { (p) step-agent $p | with { (n) agents | check { any { equals $n } } "unknown agent" } | $p | step-action | action-file | check { fs-is-file } "unknown action" | $p | step-action | action-mode | $p } "Return STEP if its agent and action exist"
+def check-step { (p) step-agent $p | with { (n) agents | check { any { equals $n } } "unknown agent" } | $p | step-action | action-file | check { fs.is-file } "unknown action" | $p | step-action | action-mode | $p } "Return STEP if its agent and action exist"
 def run-step { (t p h) step-action $p | action-body | render $t $h | with { (q) step-action $p | action-mode | with { (mode) target-dir $t | with { (d) step-model $p | with { (m) step-agent $p | agent $q $d $m $mode } } } } }
 def heading { (p) step-spec $p | with { (s) list "## " $s | concat } }
 def log-append { (x log) list $x "\n\n" | concat | append $log | $x } "Append TEXT and a blank line to LOG"
@@ -95,7 +100,7 @@ def log-append { (x log) list $x "\n\n" | concat | append $log | $x } "Append TE
 # Chains. Every step is checked before the first agent runs. Each step gets
 # the previous output as {{input}} and every earlier one as {{history}}.
 # The log in AW_RUNS records the run; steps do not read it.
-def run-log { (t) runs-dir | fs-mkdir | with { (r) time-local "%Y%m%d-%H%M%S" | with { (s) list $s -XXXXXX | concat | with { (n) path-join $r $n | with { (p) run mktemp $p | trim } } } } | with { (log) target-brief $t | with { (b) list "# Run\n\n" $b "\n\n" | concat | write $log } | $log } }
+def run-log { (t) runs-dir | fs.mkdir | with { (r) time.local "%Y%m%d-%H%M%S" | with { (s) list $s -XXXXXX | concat | with { (n) path-join $r $n | with { (p) run mktemp $p | trim } } } } | with { (log) target-brief $t | with { (b) list "# Run\n\n" $b "\n\n" | concat | write $log } | $log } }
 def first-history { (input) list | with { (none) or $input { (x) nonempty $x | with { (y) list "## input" $y } } $none } } "History holding INPUT, or empty"
 def chain-step { (h t p log) heading $p | log-append $log | with { (head) run-step $t $p $h | log-append $log | with { (out) push $h $head $out } } }
 def chain-from { (t specs input) map $specs parse-step | map check-step | with { (steps) run-log $t | with { (log) first-history $input | with { (h0) fold $steps $h0 { (h p) chain-step $h $t $p $log } } } } | history-last } "Run STEPS on TARGET, the first with INPUT; return the last output"

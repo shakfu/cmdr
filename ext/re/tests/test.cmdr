@@ -1,15 +1,18 @@
 # Each line must succeed; cmdr stops at the first that fails.
-re-find "v1.22.3" '[0-9]+\.[0-9]+' | equals 1.22
-re-groups "key=value" '([a-z]+)=([a-z]+)' | join , | equals key=value,key,value
-re-groups "ab" '(a)(x)?(b)' | join , | equals ab,a,,b
-re-all "a1b22c333" '[0-9]+' | join , | equals 1,22,333
-re-all "abc" 'x*' | empty
-re-split "a, b,c" ', *' | join / | equals a/b/c
-re-split "" ',' | empty
-re-replace "2024-01-31" '([0-9]+)-([0-9]+)-([0-9]+)' '\3/\2/\1' | equals 31/01/2024
-re-replace "abc" 'x*' - | equals -a-b-c-
-re-replace "axb" 'x*' - | equals -a-b-
-re-replace "aaa" '^a' b | equals baa
-re-replace "" '^' '> ' | equals '> '
-re-replace "a.b" '\.' '\\' | equals 'a\b'
-not "abc" { re-find '[0-9]' }
+
+import re
+
+re.find "v1.22.3" '[0-9]+\.[0-9]+' | equals 1.22
+re.groups "key=value" '([a-z]+)=([a-z]+)' | join , | equals key=value,key,value
+re.groups "ab" '(a)(x)?(b)' | join , | equals ab,a,,b
+re.all "a1b22c333" '[0-9]+' | join , | equals 1,22,333
+re.all "abc" 'x*' | empty
+re.split "a, b,c" ', *' | join / | equals a/b/c
+re.split "" ',' | empty
+re.replace "2024-01-31" '([0-9]+)-([0-9]+)-([0-9]+)' '\3/\2/\1' | equals 31/01/2024
+re.replace "abc" 'x*' - | equals -a-b-c-
+re.replace "axb" 'x*' - | equals -a-b-
+re.replace "aaa" '^a' b | equals baa
+re.replace "" '^' '> ' | equals '> '
+re.replace "a.b" '\.' '\\' | equals 'a\b'
+not "abc" { re.find '[0-9]' }

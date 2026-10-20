@@ -151,9 +151,9 @@ static int items(const cmdr *repl, const cmdr_value *value, cmdr_value *list, ch
 
 COMMAND(seed_command)
 {
-    if (argc != 1 || argv[0].kind != CMDR_TEXT) return cmdr_error(error, "usage: random-seed N");
+    if (argc != 1 || argv[0].kind != CMDR_TEXT) return cmdr_error(error, "usage: random.seed N");
     int64_t n;
-    if (parse_integer("random-seed", "N", argv[0].text, &n, error)) return 1;
+    if (parse_integer("random.seed", "N", argv[0].text, &n, error)) return 1;
     uint64_t a = n < 0 ? (uint64_t)-n : (uint64_t)n;
     /* Python's key: the 32-bit words of |N|, least significant first. */
     uint32_t key[2] = {(uint32_t)a, (uint32_t)(a >> 32)};
@@ -164,19 +164,19 @@ COMMAND(seed_command)
 
 COMMAND(random_command)
 {
-    if (argc) return cmdr_error(error, "usage: random");
+    if (argc) return cmdr_error(error, "usage: random.random");
     *result = cmdr_number_value(random_double());
     return 0;
 }
 
 COMMAND(int_command)
 {
-    if (argc != 2) return cmdr_error(error, "usage: random-int A B");
+    if (argc != 2) return cmdr_error(error, "usage: random.int A B");
     int64_t a, b;
-    if (parse_integer("random-int", "A", argv[0].text, &a, error)
-        || parse_integer("random-int", "B", argv[1].text, &b, error))
+    if (parse_integer("random.int", "A", argv[0].text, &a, error)
+        || parse_integer("random.int", "B", argv[1].text, &b, error))
         return 1;
-    if (b < a) return cmdr_error(error, "random-int: empty range %s to %s", argv[0].text,
+    if (b < a) return cmdr_error(error, "random.int: empty range %s to %s", argv[0].text,
                                  argv[1].text);
     *result = integer_value(a + (int64_t)random_below((uint64_t)(b - a) + 1));
     return 0;
@@ -184,7 +184,7 @@ COMMAND(int_command)
 
 COMMAND(uniform_command)
 {
-    if (argc != 2) return cmdr_error(error, "usage: random-uniform A B");
+    if (argc != 2) return cmdr_error(error, "usage: random.uniform A B");
     double a, b;
     if (cmdr_number(argv[0].text, &a, error) || cmdr_number(argv[1].text, &b, error)) return 1;
     *result = cmdr_number_value(a + (b - a) * random_double());
@@ -194,7 +194,7 @@ COMMAND(uniform_command)
 /* random.gauss: Box-Muller, keeping the second value for the next call. */
 COMMAND(gauss_command)
 {
-    if (argc != 2) return cmdr_error(error, "usage: random-gauss MU SIGMA");
+    if (argc != 2) return cmdr_error(error, "usage: random.gauss MU SIGMA");
     double mu, sigma, z;
     if (cmdr_number(argv[0].text, &mu, error) || cmdr_number(argv[1].text, &sigma, error))
         return 1;
@@ -214,12 +214,12 @@ COMMAND(gauss_command)
 
 COMMAND(choice_command)
 {
-    if (argc != 1) return cmdr_error(error, "usage: random-choice LIST_OR_LINES");
+    if (argc != 1) return cmdr_error(error, "usage: random.choice LIST_OR_LINES");
     cmdr_value list;
     if (items(repl, &argv[0], &list, error)) return 1;
     int status = 0;
     if (!list.count)
-        status = cmdr_error(error, "random-choice: no items");
+        status = cmdr_error(error, "random.choice: no items");
     else
         status = cmdr_clone(&list.items[random_below(list.count)], result, error);
     cmdr_free(&list);
@@ -243,9 +243,9 @@ static int parse_count(const char *name, const cmdr_value *value, size_t *n, cha
 COMMAND(choices_command)
 {
     if (argc < 2 || argc > 3)
-        return cmdr_error(error, "usage: random-choices LIST_OR_LINES K [WEIGHTS]");
+        return cmdr_error(error, "usage: random.choices LIST_OR_LINES K [WEIGHTS]");
     size_t k;
-    if (parse_count("random-choices", &argv[1], &k, error)) return 1;
+    if (parse_count("random.choices", &argv[1], &k, error)) return 1;
     cmdr_value list, weights = {0};
     if (items(repl, &argv[0], &list, error)) return 1;
     if (argc == 3 && items(repl, &argv[2], &weights, error)) {
@@ -256,12 +256,12 @@ COMMAND(choices_command)
     int status = 0;
     size_t n = list.count;
     if (!n && k) {
-        status = cmdr_error(error, "random-choices: no items");
+        status = cmdr_error(error, "random.choices: no items");
         goto done;
     }
     if (argc == 3) {
         if (weights.count != n) {
-            status = cmdr_error(error, "random-choices: %zu weights for %zu items",
+            status = cmdr_error(error, "random.choices: %zu weights for %zu items",
                                 weights.count, n);
             goto done;
         }
@@ -270,14 +270,14 @@ COMMAND(choices_command)
         for (size_t i = 0; i < n; ++i) {
             double w;
             if (weights.items[i].kind != CMDR_TEXT) {
-                status = cmdr_error(error, "random-choices: weight %zu is not a number", i + 1);
+                status = cmdr_error(error, "random.choices: weight %zu is not a number", i + 1);
                 goto done;
             }
             if ((status = cmdr_number(weights.items[i].text, &w, error))) goto done;
             sums[i] = total += w;
         }
         if (n && !(total > 0 && isfinite(total))) {
-            status = cmdr_error(error, "random-choices: the weights total %g, not a positive number", total);
+            status = cmdr_error(error, "random.choices: the weights total %g, not a positive number", total);
             goto done;
         }
     }
@@ -313,7 +313,7 @@ done:
 /* random.shuffle, returning a new list. */
 COMMAND(shuffle_command)
 {
-    if (argc != 1) return cmdr_error(error, "usage: random-shuffle LIST_OR_LINES");
+    if (argc != 1) return cmdr_error(error, "usage: random.shuffle LIST_OR_LINES");
     if (items(repl, &argv[0], result, error)) return 1;
     for (size_t i = result->count; i > 1; --i) {
         size_t j = random_below(i);
@@ -328,15 +328,15 @@ COMMAND(shuffle_command)
  * else by redrawing indices already taken. */
 COMMAND(sample_command)
 {
-    if (argc != 2) return cmdr_error(error, "usage: random-sample LIST_OR_LINES K");
+    if (argc != 2) return cmdr_error(error, "usage: random.sample LIST_OR_LINES K");
     size_t k;
-    if (parse_count("random-sample", &argv[1], &k, error)) return 1;
+    if (parse_count("random.sample", &argv[1], &k, error)) return 1;
     cmdr_value list;
     if (items(repl, &argv[0], &list, error)) return 1;
     size_t n = list.count;
     if (k > n) {
         cmdr_free(&list);
-        return cmdr_error(error, "random-sample: K %zu exceeds %zu items", k, n);
+        return cmdr_error(error, "random.sample: K %zu exceeds %zu items", k, n);
     }
     size_t setsize = 21;
     if (k > 5) setsize += (size_t)pow(4, ceil(log((double)k * 3) / log(4)));
@@ -376,20 +376,20 @@ COMMAND(sample_command)
 #define TEXT(n, u, d, f) {.name = n, .usage = u, .docstring = d, .run = f, .text = 1}
 #define VALUE(n, u, d, f) {.name = n, .usage = u, .docstring = d, .run = f}
 static const cmdr_command commands[] = {
-    TEXT("random-seed", "random-seed N", "Seed the generator, as Python's random.seed(N)",
+    TEXT("seed", "seed N", "Seed the generator, as Python's random.seed(N)",
          seed_command),
     TEXT("random", "random", "Return a number in [0, 1)", random_command),
-    TEXT("random-int", "random-int A B", "Return an integer from A to B inclusive", int_command),
-    TEXT("random-uniform", "random-uniform A B", "Return a number between A and B",
+    TEXT("int", "int A B", "Return an integer from A to B inclusive", int_command),
+    TEXT("uniform", "uniform A B", "Return a number between A and B",
          uniform_command),
-    TEXT("random-gauss", "random-gauss MU SIGMA",
+    TEXT("gauss", "gauss MU SIGMA",
          "Return a normally distributed number with mean MU", gauss_command),
-    VALUE("random-choice", "random-choice LIST_OR_LINES", "Return one item", choice_command),
-    VALUE("random-choices", "random-choices LIST_OR_LINES K [WEIGHTS]",
+    VALUE("choice", "choice LIST_OR_LINES", "Return one item", choice_command),
+    VALUE("choices", "choices LIST_OR_LINES K [WEIGHTS]",
           "List K items, with replacement, in proportion to WEIGHTS", choices_command),
-    VALUE("random-shuffle", "random-shuffle LIST_OR_LINES", "List the items in random order",
+    VALUE("shuffle", "shuffle LIST_OR_LINES", "List the items in random order",
           shuffle_command),
-    VALUE("random-sample", "random-sample LIST_OR_LINES K", "List K distinct items",
+    VALUE("sample", "sample LIST_OR_LINES K", "List K distinct items",
           sample_command),
 };
 const cmdr cmdr_ext_random = {commands, sizeof(commands) / sizeof(commands[0]), NULL};

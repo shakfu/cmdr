@@ -4,14 +4,15 @@ Read environment variables.
 
 | Command | Result |
 |-|-|
-| `env NAME` | The value of `NAME`. A mismatch if `NAME` is unset, so `or` and `not` can test it. |
-| `env-or NAME FALLBACK` | The value of `NAME`, or `FALLBACK` if unset. |
-| `env-path-dirs` | The directories in `PATH`, as a list. |
+| `env.get NAME` | The value of `NAME`. A mismatch if `NAME` is unset, so `or` and `not` can test it. |
+| `env.or NAME FALLBACK` | The value of `NAME`, or `FALLBACK` if unset. |
+| `env.path-dirs` | The directories in `PATH`, as a list. |
 
 ```text
-cmdr> env-or EDITOR vi
+cmdr> import env
+cmdr> env.or EDITOR vi
 vi
-cmdr> env-path-dirs | count
+cmdr> env.path-dirs | count
 7
 ```
 

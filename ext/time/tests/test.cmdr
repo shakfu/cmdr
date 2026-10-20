@@ -1,9 +1,12 @@
 # Each line must succeed; cmdr stops at the first that fails.
-time-utc 0 '%Y-%m-%d %H:%M:%S' | equals '1970-01-01 00:00:00'
-time-utc -1 '%Y-%m-%d %H:%M:%S' | equals '1969-12-31 23:59:59'
-time-utc 86399 %H:%M | equals 23:59
-time-utc 0 '' | equals ''
-time-now | gt 1700000000
-time-now | time-utc %Y | ge 2025
-time-utc %Y | ge 2025
-time-today | matches '^[0-9]{4}-[0-9]{2}-[0-9]{2}$'
+
+import time
+
+time.utc 0 '%Y-%m-%d %H:%M:%S' | equals '1970-01-01 00:00:00'
+time.utc -1 '%Y-%m-%d %H:%M:%S' | equals '1969-12-31 23:59:59'
+time.utc 86399 %H:%M | equals 23:59
+time.utc 0 '' | equals ''
+time.now | gt 1700000000
+time.now | time.utc %Y | ge 2025
+time.utc %Y | ge 2025
+time.today | matches '^[0-9]{4}-[0-9]{2}-[0-9]{2}$'

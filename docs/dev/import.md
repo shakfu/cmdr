@@ -6,7 +6,7 @@ Decision record, 2026-10-19. `script-dir | path-join workflows.cmdr | load` work
 
 `import NAME [as ALIAS]` follows Python's `import`, except where noted.
 
-- **Search.** For each directory, in order, the first of `DIR/NAME/__init__.cmdr` and `DIR/NAME.cmdr` that exists is the module:
+- **Search.** A built-in module the host provides, such as an extension's `_fs` or `fs`, comes first. Then, for each directory, in order, the first of `DIR/NAME/__init__.cmdr` and `DIR/NAME.cmdr` that exists is the module:
   1. The directory of the file in which `import` is written. In the REPL and `-c`, the current directory.
 
   2. Each entry of `CMDR_PATH`, separated by `:`.
@@ -36,7 +36,8 @@ Decision record, 2026-10-19. `script-dir | path-join workflows.cmdr | load` work
 | `sys.path[0]` is the main script's directory | The importing file's directory | Each file finds the modules next to it. This matches `script-file`, which resolves to the file in which it is written |
 | A circular import yields a partly initialized module | An error | cmdr has no module object to fill in |
 | `import a.b` loads a submodule | A dot in NAME is an error | Nothing needs submodules yet; adding them later breaks no import that works now |
-| `from M import f` shadows any earlier `f` | `from M import f` fails if `f` exists, unless it is the same definition | A shadowed name changes what later lines call without warning, as the extension rules prevent at startup. `as` renames instead |
+| `from M import f` shadows any earlier `f` | `from M import f` fails if `f` exists, unless it is the same definition; `from M import f as f` shadows | A shadowed name changes what later lines call without warning. An explicit `as` states the intent, which a module re-exporting `_re`'s `split` needs |
+| A local `random.py` hides the standard `random` | A host's built-in modules, such as the extensions, are found before files | One file named after a built-in module would break every script that imports it |
 | `from M import *` | Absent | cmdr exports every definition, with no `__all__` or `_` convention, so `*` would also bind a module's helpers |
 
 ## Alternatives

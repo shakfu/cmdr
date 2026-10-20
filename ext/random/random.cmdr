@@ -1,0 +1,2 @@
+# The random module: import random. C commands come from _random.
+from _random import seed random int uniform gauss choice choices shuffle sample

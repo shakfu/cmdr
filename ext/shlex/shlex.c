@@ -37,7 +37,7 @@ static int space(char c)
  * a backslash escapes only " and \, as in Python. */
 COMMAND(split_command)
 {
-    if (argc != 1) return cmdr_error(error, "usage: shlex-split TEXT");
+    if (argc != 1) return cmdr_error(error, "usage: shlex.split TEXT");
     const char *p = argv[0].text;
     *result = (cmdr_value){.kind = CMDR_LIST};
     buffer word = {0};
@@ -53,12 +53,12 @@ COMMAND(split_command)
         }
         in_word = 1;
         if (c == '\\') {
-            if (!*p) { free(word.data); cmdr_free(result); return cmdr_error(error, "shlex-split: no escaped character"); }
+            if (!*p) { free(word.data); cmdr_free(result); return cmdr_error(error, "shlex.split: no escaped character"); }
             put(&word, *p++);
         } else if (c == '\'' || c == '"') {
             for (;;) {
                 char q = *p++;
-                if (!q) { free(word.data); cmdr_free(result); return cmdr_error(error, "shlex-split: no closing quotation"); }
+                if (!q) { free(word.data); cmdr_free(result); return cmdr_error(error, "shlex.split: no closing quotation"); }
                 if (q == c) break;
                 if (c == '"' && q == '\\' && (*p == '"' || *p == '\\')) q = *p++;
                 put(&word, q);
@@ -94,7 +94,7 @@ static void quote(buffer *b, const char *text)
 
 COMMAND(quote_command)
 {
-    if (argc != 1) return cmdr_error(error, "usage: shlex-quote TEXT");
+    if (argc != 1) return cmdr_error(error, "usage: shlex.quote TEXT");
     buffer b = {0};
     quote(&b, argv[0].text);
     *result = (cmdr_value){.kind = CMDR_TEXT, .text = b.data};
@@ -104,7 +104,7 @@ COMMAND(quote_command)
 /* Text is split into lines, as list primitives do, never into words. */
 COMMAND(join_command)
 {
-    if (argc != 1 || argv[0].kind == CMDR_BLOCK) return cmdr_error(error, "usage: shlex-join LIST_OR_LINES");
+    if (argc != 1 || argv[0].kind == CMDR_BLOCK) return cmdr_error(error, "usage: shlex.join LIST_OR_LINES");
     cmdr_value lines = {0};
     /* The primitive itself: repl is the caller's scope, where lines may be redefined. */
     if (argv[0].kind == CMDR_TEXT && cmdr_call(&cmdr_pure, "lines", 1, argv, &lines, error)) return 1;
@@ -113,7 +113,7 @@ COMMAND(join_command)
     int status = 0;
     for (size_t i = 0; i < list->count && !status; ++i) {
         const cmdr_value *item = &list->items[i];
-        if (item->kind != CMDR_TEXT) { status = cmdr_error(error, "shlex-join: expected text items"); break; }
+        if (item->kind != CMDR_TEXT) { status = cmdr_error(error, "shlex.join: expected text items"); break; }
         if (i) put(&b, ' ');
         quote(&b, item->text);
     }
@@ -124,13 +124,13 @@ COMMAND(join_command)
 }
 
 static const cmdr_command commands[] = {
-    {.name = "shlex-split", .usage = "shlex-split TEXT",
+    {.name = "split", .usage = "split TEXT",
      .docstring = "Split TEXT into words by POSIX shell quoting, without expansion",
      .run = split_command, .text = 1},
-    {.name = "shlex-quote", .usage = "shlex-quote TEXT",
+    {.name = "quote", .usage = "quote TEXT",
      .docstring = "Quote TEXT so a shell reads it as one word", .run = quote_command, .text = 1},
-    {.name = "shlex-join", .usage = "shlex-join LIST_OR_LINES",
-     .docstring = "Quote each item and join with spaces; shlex-split reverses it",
+    {.name = "join", .usage = "join LIST_OR_LINES",
+     .docstring = "Quote each item and join with spaces; shlex.split reverses it",
      .run = join_command},
 };
 const cmdr cmdr_ext_shlex = {commands, sizeof(commands) / sizeof(commands[0]), NULL};

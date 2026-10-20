@@ -377,7 +377,7 @@ class Commands(unittest.TestCase):
             ("repeat 10000001 { () text x }", 'repeat: 10000001 exceeds 10000000'),
             ("repeat 2 { () add 1 x }", 'repeat call 1: invalid finite number: x'),
             ("repeat 3 { () equals a b }", 'repeat call 1: '),
-            ("repeat 2 { () random-seed 1 }", 'repeat call 1: block returned no value'),
+            ("import random\nrepeat 2 { () random.seed 1 }", 'repeat call 1: block returned no value'),
             ("list 1 x | fold 0 { (a x) add $a $x }", 'fold item 2: invalid finite number: x'),
             ("list nonexistent | fold 0 { (a x) read $x | text $a }", 'fold item 1: read nonexistent'),
             # An error is not a mismatch, so or does not hide it.
@@ -634,29 +634,24 @@ class Commands(unittest.TestCase):
 
     @unittest.skipUnless(PROBE, 'CMDR_PROBE_BIN is not set')
     def test_extensions(self):
-        # tests/ext/probe: a C command, and a definition built on it.
+        # tests/ext/probe: module probe re-exports _probe's C command and adds
+        # a definition. Nothing is visible before import.
         def run(*args, env=None):
             return subprocess.run([PROBE, *args], capture_output=True, text=True,
                                   timeout=20, env=env)
-        result = run('-c', 'probe-twice')
-        self.assertEqual((result.returncode, result.stdout), (0, 'probed probed\n'), result.stderr)
-        # help tags C commands with their extension; definitions keep their docs.
+        result = run('-c', 'import probe\nprobe.twice\nhelp probe.probe')
+        self.assertEqual((result.returncode, result.stdout),
+                         (0, 'probed probed\nprobe.probe\nReturn probed\n'), result.stderr)
+        result = run('-c', 'probe')
+        self.assertIn('unknown command: probe', result.stderr)
         result = run('-c', 'help')
-        self.assertRegex(result.stdout, r'(?m)^probe +ext/probe: Return probed$')
-        self.assertRegex(result.stdout, r'(?m)^probe-twice +Return probed twice$')
-        self.assertRegex(result.stdout, r'(?m)^split TEXT SEPARATOR +Split into a list$')
-        # Extension commands follow the built-ins, ending with from, and precede
-        # primitives; their definitions precede the prelude's.
-        names = [line.split()[0] for line in result.stdout.splitlines()[:-3]]
-        self.assertEqual(names[names.index('from') + 1], 'probe')
-        self.assertLess(names.index('run-in'), names.index('probe-twice'))
-        self.assertLess(names.index('probe-twice'), names.index('first'))
-        # Extension scripts do not depend on the prelude, which --user replaces.
+        self.assertNotRegex(result.stdout, r'(?m)^probe')
+        # Extension modules use only primitives, so --user's prelude does not matter.
         with tempfile.TemporaryDirectory() as home:
             prelude = Path(home) / '.cmdr' / 'prelude.cmdr'
             prelude.parent.mkdir()
             prelude.write_text('')
-            result = run('--user', '-c', 'probe-twice', env={**os.environ, 'HOME': home})
+            result = run('--user', '-c', 'import probe\nprobe.twice', env={**os.environ, 'HOME': home})
             self.assertEqual((result.returncode, result.stdout), (0, 'probed probed\n'), result.stderr)
 
     def test_mk_ext(self):
@@ -692,18 +687,18 @@ class Commands(unittest.TestCase):
                     self.assertFalse((Path(root) / name).exists())
 
     @unittest.skipUnless(CLASH, 'CMDR_CLASH_BIN is not set')
-    def test_extension_collisions(self):
-        result = subprocess.run([CLASH, '-c', 'text ran'], capture_output=True,
+    def test_extension_namespaces(self):
+        # An extension's names are NAME.DEF, so tests/ext/probe may reuse the
+        # prelude's first and the primitive take.
+        result = subprocess.run([PROBE, '-c', 'import probe\nprobe.first a\nfirst x\nprobe.take b'],
+                                capture_output=True, text=True, timeout=20)
+        self.assertEqual((result.returncode, result.stdout), (0, 'A\nx\nB\n'), result.stderr)
+        # tests/ext/clash: a C table that defines a name twice fails when its
+        # module imports it.
+        result = subprocess.run([CLASH, '-c', 'import clash'], capture_output=True,
                                 text=True, timeout=20)
-        self.assertEqual((result.returncode, result.stdout), (1, ''))
-        self.assertEqual(result.stderr.splitlines(), [
-            "cmdr: ext/clash: 'split' is already a command",
-            "cmdr: ext/clash: 'help' is already a command",
-            "cmdr: ext/clash: 'last' is already a command",
-            "cmdr: ext/clash: 'fresh' is already a command",
-            "cmdr: ext/clash/clash.cmdr: 'take' is already a command",
-            "cmdr: ext/clash/clash.cmdr: 'first' is already a command",
-        ])
+        self.assertEqual(result.returncode, 1)
+        self.assertIn('import clash: ext/clash/clash.cmdr:3: from _clash: fresh is defined twice', result.stderr)
 
     def test_load(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -1042,6 +1037,50 @@ class Commands(unittest.TestCase):
                                     capture_output=True, text=True, timeout=20, env=env)
             self.assertEqual(result.stdout, '440\ntones.hz\nConcert A\n880\n880\n', result.stderr)
 
+    def test_import_extensions(self):
+        # import NAME runs the extension's .cmdr module, which imports its C
+        # commands from _NAME and re-exports them. Nothing is visible before.
+        result = self.run_input(
+            "import fs\n"
+            "fs.exists /\n"
+            "help fs.exists\n"
+            "from fs import exists\n"
+            "exists /\n"
+            "from env import or as fallback\n"     # A definition in ext/env/env.cmdr.
+            "fallback CMDR_NO_SUCH_VARIABLE none\n"
+            "import num as n\n"
+            "n.seq 1 2 | join ,\n"
+            "n.range 3 | join ,\n"
+            "import str\n"                         # A C command re-exported over a primitive's name.
+            "str.repeat ab 2\n"
+            "import re\n"                          # Re-exported over a primitive's name.
+            "re.split a1b [0-9] | join +\n"
+            "split a,b , | join +\n"
+            "from re import split as split\n"      # An explicit as may shadow.
+            "split a1b [0-9] | join +\n"
+            "from fs import exists\n")             # The same binding again is fine.
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, '/\nfs.exists PATH\nReturn PATH if it exists\n/\n'
+                                        'none\n1,2\n1,2,3\nabab\na+b\na+b\na+b\n')
+        for source, error in [
+            ('fs.exists /', 'unknown command: fs.exists'),
+            ('from fs import bogus', 'from fs import bogus: fs has no definition bogus'),
+            ('from nosuch import x', 'from nosuch: not found'),
+            ('from re import split', 'from re import split: split already exists; bind it with as'),
+        ]:
+            with self.subTest(source=source):
+                result = self.run_input(source + '\n')
+                self.assertEqual(result.returncode, 1)
+                self.assertIn(error, result.stderr)
+        # A built-in module wins over a file of the same name.
+        with tempfile.TemporaryDirectory() as directory:
+            lib = Path(directory).resolve()
+            (lib / 'fs.cmdr').write_text('def exists { upper }\n')
+            env = {**os.environ, 'CMDR_PATH': str(lib)}
+            result = subprocess.run([str(BINARY)], input='import fs\nfs.exists /\n',
+                                    capture_output=True, text=True, timeout=20, env=env)
+            self.assertEqual(result.stdout, '/\n', result.stderr)
+
     def test_import(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()
@@ -1218,7 +1257,7 @@ class Commands(unittest.TestCase):
                   "def shout { (s) upper $s | text \"a\\tb\" 'x y' }\n"
                   "list 1 -2.5 a1 | each { gt 0 }\n"
                   "text a#b \\| c\n"
-                  "num-seq 1 3 | re-replace x '(a)' '\\1' | str-pad-left 3 0\n")
+                  "num.seq 1 3 | re.replace x '(a)' '\\1' | str.pad-left 3 0\n")
         expected = [
             [('# note | x', 'cmdrComment')],
             [('def', 'cmdrKeyword'), ('shout', 'cmdrDefName'), ('s', 'cmdrParam'),
@@ -1229,8 +1268,8 @@ class Commands(unittest.TestCase):
              ('a1', ''), ('each', 'cmdrCommand'), ('gt', 'cmdrCommand'), ('0', 'cmdrNumber')],
             [('text', 'cmdrCommand'), ('a#b', ''), ('\\|', 'cmdrEscape'), ('c', '')],
             # Extension commands are hyphenated; single quotes keep backslashes.
-            [('num-seq', 'cmdrCommand'), ('1', 'cmdrNumber'), ('re-replace', 'cmdrCommand'),
-             ("'(a)'", 'cmdrString'), ("'\\1'", 'cmdrString'), ('str-pad-left', 'cmdrCommand'),
+            [('num.seq', 'cmdrCommand'), ('1', 'cmdrNumber'), ('re.replace', 'cmdrCommand'),
+             ("'(a)'", 'cmdrString'), ("'\\1'", 'cmdrString'), ('str.pad-left', 'cmdrCommand'),
              ('3', 'cmdrNumber')],
         ]
         with tempfile.TemporaryDirectory() as directory:
@@ -1387,8 +1426,8 @@ class Commands(unittest.TestCase):
             history = (Path(home) / '.cmdr_history').read_text().splitlines()
             self.assertEqual(history, ['text before', run])
             loop = (b"run sh -c 'echo loo\"\"ping >&2' | length | with { (n) try { () "
-                    b"num-seq 1 100000 | each { (i) num-seq $n 1000 | push $i | count } | count } caught }\r")
-            code, out = self.pty_session([loop, (b"looping", b"\x03")], home)
+                    b"num.seq 1 100000 | each { (i) num.seq $n 1000 | push $i | count } | count } caught }\r")
+            code, out = self.pty_session([b"import num\r", loop, (b"looping", b"\x03")], home)
             self.assertEqual(code, -2, out)
             self.assertIn(b"interrupted", out)
             self.assertNotIn(b"\ncaught", out)

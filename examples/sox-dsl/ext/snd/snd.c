@@ -854,7 +854,7 @@ static cmdr_value slurp(FILE *file)
     return v;
 }
 
-/* snd-run and snd-report: OUT, then sox's arguments after its output file. */
+/* snd.run and snd.report: OUT, then sox's arguments after its output file. */
 static int run_or_report(const char *name, int report, size_t argc, const cmdr_value *argv,
                          cmdr_value *result, char **error)
 {
@@ -898,8 +898,8 @@ static int run_or_report(const char *name, int report, size_t argc, const cmdr_v
     return status;
 }
 
-COMMAND(run_command) { return run_or_report("snd-run", 0, argc, argv, result, error); }
-COMMAND(report_command) { return run_or_report("snd-report", 1, argc, argv, result, error); }
+COMMAND(run_command) { return run_or_report("snd.run", 0, argc, argv, result, error); }
+COMMAND(report_command) { return run_or_report("snd.report", 1, argc, argv, result, error); }
 
 static void push_line(cmdr_value *list, const char *name, const char *value)
 {
@@ -927,9 +927,9 @@ static sox_format_t *open_input(const char *name, const char *path, char **error
 
 COMMAND(info_command)
 {
-    if (argc != 1) return cmdr_error(error, "usage: snd-info PATH");
-    if (enter("snd-info", error)) return 1;
-    sox_format_t *ft = open_input("snd-info", argv[0].text, error);
+    if (argc != 1) return cmdr_error(error, "usage: snd.info PATH");
+    if (enter("snd.info", error)) return 1;
+    sox_format_t *ft = open_input("snd.info", argv[0].text, error);
     if (!ft) {
         leave();
         return 1;
@@ -958,17 +958,17 @@ static void push_segment(cmdr_value *list, sox_uint64_t start, sox_uint64_t end,
     cmdr_push(list, cmdr_text(line, strlen(line)));
 }
 
-/* snd-segments PATH DB SECONDS: the sounding parts of PATH, split where it
+/* snd.segments PATH DB SECONDS: the sounding parts of PATH, split where it
  * stays at or below DB dBFS for at least SECONDS. */
 COMMAND(segments_command)
 {
-    if (argc != 3) return cmdr_error(error, "usage: snd-segments PATH DB SECONDS");
+    if (argc != 3) return cmdr_error(error, "usage: snd.segments PATH DB SECONDS");
     double db, seconds;
     if (cmdr_number(argv[1].text, &db, error) || cmdr_number(argv[2].text, &seconds, error))
         return 1;
-    if (seconds < 0) return cmdr_error(error, "snd-segments: SECONDS must be nonnegative");
-    if (enter("snd-segments", error)) return 1;
-    sox_format_t *ft = open_input("snd-segments", argv[0].text, error);
+    if (seconds < 0) return cmdr_error(error, "snd.segments: SECONDS must be nonnegative");
+    if (enter("snd.segments", error)) return 1;
+    sox_format_t *ft = open_input("snd.segments", argv[0].text, error);
     if (!ft) {
         leave();
         return 1;
@@ -997,7 +997,7 @@ COMMAND(segments_command)
     int status = 0;
     if (ft->sox_errno) {
         cmdr_free(result);
-        status = fail(error, "snd-segments", ft->sox_errstr);
+        status = fail(error, "snd.segments", ft->sox_errstr);
     }
     free(buf);
     sox_close(ft);
@@ -1007,8 +1007,8 @@ COMMAND(segments_command)
 
 COMMAND(effects_command)
 {
-    if (argc) return cmdr_error(error, "usage: snd-effects");
-    if (enter("snd-effects", error)) return 1;
+    if (argc) return cmdr_error(error, "usage: snd.effects");
+    if (enter("snd.effects", error)) return 1;
     *result = (cmdr_value){.kind = CMDR_LIST};
     for (const sox_effect_fn_t *fn = sox_get_effect_fns(); *fn; ++fn) {
         const sox_effect_handler_t *h = (*fn)();
@@ -1022,12 +1022,12 @@ COMMAND(effects_command)
 
 COMMAND(usage_command)
 {
-    if (argc != 1) return cmdr_error(error, "usage: snd-usage EFFECT");
-    if (enter("snd-usage", error)) return 1;
+    if (argc != 1) return cmdr_error(error, "usage: snd.usage EFFECT");
+    if (enter("snd.usage", error)) return 1;
     const sox_effect_handler_t *h = find_effect(argv[0].text);
     int status = 0;
     if (!h || (h->flags & SOX_EFF_INTERNAL)) {
-        status = cmdr_error(error, "snd-usage: unknown effect: %s", argv[0].text);
+        status = cmdr_error(error, "snd.usage: unknown effect: %s", argv[0].text);
     } else {
         const char *usage = h->usage ? h->usage : "";
         size_t size = strlen(h->name) + strlen(usage) + 2;
@@ -1042,16 +1042,16 @@ COMMAND(usage_command)
 
 #define TEXT(n, u, d, f) {.name = n, .usage = u, .docstring = d, .run = f, .text = 1}
 static const cmdr_command commands[] = {
-    {.name = "snd-run", .usage = "snd-run OUT [[OPTION ...] IN ...] [EFFECT [ARG ...] ...]",
+    {.name = "run", .usage = "run OUT [[OPTION ...] IN ...] [EFFECT [ARG ...] ...]",
      .docstring = "Run sox's arguments, writing OUT; return OUT", .run = run_command},
-    {.name = "snd-report", .usage = "snd-report OUT [[OPTION ...] IN ...] [EFFECT [ARG ...] ...]",
-     .docstring = "As snd-run, but return what the effects print, as stats does",
+    {.name = "report", .usage = "report OUT [[OPTION ...] IN ...] [EFFECT [ARG ...] ...]",
+     .docstring = "As snd.run, but return what the effects print, as stats does",
      .run = report_command},
-    TEXT("snd-info", "snd-info PATH", "List type, rate, channels, frames, seconds, bits, encoding",
+    TEXT("info", "info PATH", "List type, rate, channels, frames, seconds, bits, encoding",
          info_command),
-    TEXT("snd-segments", "snd-segments PATH DB SECONDS",
+    TEXT("segments", "segments PATH DB SECONDS",
          "List START LENGTH of each part between silences at or below DB dBFS", segments_command),
-    TEXT("snd-effects", "snd-effects", "List the effects: libsox's, and varispeed", effects_command),
-    TEXT("snd-usage", "snd-usage EFFECT", "Return EFFECT's name and arguments", usage_command),
+    TEXT("effects", "effects", "List the effects: libsox's, and varispeed", effects_command),
+    TEXT("usage", "usage EFFECT", "Return EFFECT's name and arguments", usage_command),
 };
 const cmdr cmdr_ext_snd = {commands, sizeof(commands) / sizeof(commands[0]), NULL};

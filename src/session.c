@@ -26,6 +26,7 @@ typedef struct definition {
     cmdr_value value;
     char *path;
     cmdr_value args;
+    int exported; /* Made by def, as, or from, so a module exports it. */
     struct definition *next; /* The session's previous node. */
 } definition;
 
@@ -36,6 +37,14 @@ typedef struct {
     const cmdr_command **exports;
     size_t count;
 } module;
+
+/* A module the host provides: a table of C commands, or a script's source.
+ * import finds these before files. */
+typedef struct {
+    char *name;
+    const cmdr *commands;
+    const char *source, *path;
+} builtin_module;
 
 /* Names resolve through head.parent: each def pushes a one-command layer in
  * front of base, which holds the built-ins and then the host's commands.
@@ -50,6 +59,8 @@ struct cmdr_session {
     definition *nodes;
     module **modules;
     size_t nmodules;
+    builtin_module *builtin_modules;
+    size_t nbuiltin_modules;
 };
 
 /* script-file, script-dir, and script-args start here in builtins. */
@@ -113,11 +124,29 @@ static int script_args_command(const cmdr *repl, void *user, size_t argc,
     return !node || cmdr_clone(&node->args, result, error);
 }
 
-/* A def, an as binding, or an alias of either, which owns its strings. */
+/* An alias of a C command, such as from fs import mkdir: user is the
+ * command, which a host table or extension owns. */
+static int forward_command(const cmdr *repl, void *user, size_t argc, const cmdr_value *argv,
+                           cmdr_value *result, char **error)
+{
+    const cmdr_command *command = user;
+    return command->run(repl, command->user, argc, argv, result, error);
+}
+
+/* A def, an as binding, or an alias, which owns its strings. */
 static int defined(const cmdr_command *command)
 {
-    return command->block || command->value;
+    return command->block || command->value || command->run == forward_command;
 }
+
+/* What command runs: an alias and its target are the same. */
+static const void *target_of(const cmdr_command *command)
+{
+    if (command->block) return command->block;
+    if (command->value) return command->value;
+    return command->run == forward_command ? command->user : (const void *)command;
+}
+
 
 static int script_command(const cmdr_command *command)
 {
@@ -280,6 +309,7 @@ static int def_command(const cmdr *repl, void *user, size_t argc, const cmdr_val
     if (cmdr_clone(&argv[1], &block, error)) { free(docstring); return 1; }
     definition *node = new_node(session);
     node->block = block;
+    node->exported = 1;
     /* The block resolves names where its line compiled, before this layer,
      * so naming itself calls the command it shadows. */
     node->commands[0] = (cmdr_command){.name = cmdr_strndup(name, strlen(name)),
@@ -316,6 +346,7 @@ static int as_command(const cmdr *repl, void *user, size_t argc, const cmdr_valu
     }
     definition *node = new_node(session);
     node->value = value;
+    node->exported = 1;
     node->commands[0] = (cmdr_command){.name = cmdr_strndup(name, strlen(name)),
                                        .usage = cmdr_strndup(name, strlen(name)),
                                        .docstring = docstring,
@@ -447,23 +478,26 @@ static char *find_module(const cmdr *repl, const char *verb, const char *name, c
 }
 
 /* Run the module at path, record its definitions, and hide its names. */
-static int run_module(cmdr_session *session, module *m, const char *verb, const char *name,
-                      char **error)
+/* Run a module's file, or source when the host provides it. */
+static int run_module(cmdr_session *session, module *m, const char *source, const char *verb,
+                      const char *name, char **error)
 {
-    FILE *in = open_script(m->path);
-    if (!in) return cmdr_error(error, "%s %s: %s: %s", verb, name, m->path, strerror(errno));
+    FILE *in = source ? NULL : open_script(m->path);
+    if (!source && !in)
+        return cmdr_error(error, "%s %s: %s: %s", verb, name, m->path, strerror(errno));
     const cmdr *before = session->head.parent;
     FILE *out = session->out;
     session->out = NULL; /* As in Python, a module's values are not printed. */
     char *inner;
-    int status = cmdr_session_load_args(session, in, m->path, 0, NULL, &inner);
+    int status = source ? cmdr_session_source(session, source, m->path, &inner)
+                        : cmdr_session_load_args(session, in, m->path, 0, NULL, &inner);
     session->out = out;
-    fclose(in);
+    if (in) fclose(in);
     /* Newest first, so the first definition of a name is its latest. */
     for (const cmdr *layer = session->head.parent; !status && layer != before; layer = layer->parent) {
         const definition *node = (const definition *)layer;
-        /* Script layers and aliases own neither a block nor a value. */
-        if (node->block.kind != CMDR_BLOCK && node->value.kind == CMDR_NONE) continue;
+        /* What def, as, and from bound; not script layers or import's aliases. */
+        if (!node->exported) continue;
         size_t i = 0;
         while (i < m->count && strcmp(m->exports[i]->name, node->commands[0].name)) ++i;
         if (i < m->count) continue;
@@ -482,14 +516,22 @@ static int run_module(cmdr_session *session, module *m, const char *verb, const 
 }
 
 /* Push an alias layer that calls command as name; usage and name are owned. */
-static void bind(cmdr_session *session, const cmdr_command *command, char *name, char *usage)
+static definition *bind(cmdr_session *session, const cmdr_command *command, char *name,
+                        char *usage)
 {
     const char *doc = command->docstring ? command->docstring : "";
     definition *node = new_node(session);
     node->commands[0] = (cmdr_command){.name = name, .usage = usage,
                                        .docstring = cmdr_strndup(doc, strlen(doc)),
-                                       .block = command->block, .value = command->value};
+                                       .block = command->block, .value = command->value,
+                                       .text = command->text};
+    if (command->run) {
+        node->commands[0].run = forward_command;
+        node->commands[0].user = (void *)(command->run == forward_command ? command->user
+                                                                          : command);
+    }
     push_node(session, node, 1);
+    return node;
 }
 
 /* Push ALIAS.NAME for each of the module's definitions. */
@@ -515,11 +557,22 @@ static void free_module(module *m)
 }
 
 /* Find module name for code compiled in repl, running it on first use. */
+/* Find module name for code compiled in repl, running it on first use. A
+ * host's module wins over files of the same name. */
 static module *load_module(const cmdr *repl, cmdr_session *session, const char *verb,
                            const char *name, char **error)
 {
-    char *path = find_module(repl, verb, name, error);
-    if (!path) return NULL;
+    const builtin_module *builtin = NULL;
+    for (size_t i = 0; i < session->nbuiltin_modules && !builtin; ++i)
+        if (!strcmp(session->builtin_modules[i].name, name)) builtin = &session->builtin_modules[i];
+    char *path;
+    if (builtin) {
+        /* Files' paths are absolute, so these keys cannot collide with them. */
+        const char *key = builtin->path ? builtin->path : builtin->name;
+        path = cmdr_strndup(key, strlen(key));
+    } else if (!(path = find_module(repl, verb, name, error))) {
+        return NULL;
+    }
     module *m = NULL;
     for (size_t i = 0; i < session->nmodules && !m; ++i)
         if (!strcmp(session->modules[i]->path, path)) m = session->modules[i];
@@ -535,7 +588,26 @@ static module *load_module(const cmdr *repl, cmdr_session *session, const char *
         session->modules = cmdr_realloc(session->modules, session->nmodules + 1,
                                         sizeof(*session->modules));
         session->modules[session->nmodules++] = m;
-        if (run_module(session, m, verb, name, error)) {
+        const cmdr *table = builtin ? builtin->commands : NULL;
+        const char *twice = NULL; /* A C table's name defined twice, which import would hide. */
+        for (size_t i = 0; table && i < table->count && !twice; ++i)
+            for (size_t j = 0; j < i && !twice; ++j)
+                if (!strcmp(table->commands[i].name, table->commands[j].name))
+                    twice = table->commands[i].name;
+        if (twice) {
+            cmdr_error(error, "%s %s: %s is defined twice", verb, name, twice);
+            size_t i = 0;
+            while (session->modules[i] != m) ++i;
+            memmove(&session->modules[i], &session->modules[i + 1],
+                    (--session->nmodules - i) * sizeof(*session->modules));
+            free_module(m);
+            return NULL;
+        }
+        if (table) { /* A C table: its commands are its exports. */
+            m->count = builtin->commands->count;
+            m->exports = cmdr_realloc(NULL, m->count ? m->count : 1, sizeof(*m->exports));
+            for (size_t i = 0; i < m->count; ++i) m->exports[i] = &builtin->commands->commands[i];
+        } else if (run_module(session, m, builtin ? builtin->source : NULL, verb, name, error)) {
             /* Not recorded, so the next import runs the module again. */
             size_t i = 0;
             while (session->modules[i] != m) ++i;
@@ -549,6 +621,7 @@ static module *load_module(const cmdr *repl, cmdr_session *session, const char *
     free(path);
     return m;
 }
+
 
 static int import_command(const cmdr *repl, void *user, size_t argc, const cmdr_value *argv,
                           cmdr_value *result, char **error)
@@ -577,12 +650,14 @@ static int from_command(const cmdr *repl, void *user, size_t argc, const cmdr_va
     if (argc < 3 || strcmp(argv[1].text, "import")) return cmdr_error(error, usage);
     const char *name = argv[0].text;
     if (!module_name(name)) return cmdr_error(error, "from: invalid module name '%s'", name);
-    /* Pairs of DEF and the name it is bound as. */
+    /* Pairs of DEF and the name it is bound as; explicit if named with as. */
     const char **pairs = cmdr_realloc(NULL, 2 * argc, sizeof(*pairs));
+    int *explicit = cmdr_realloc(NULL, argc, sizeof(*explicit));
     size_t n = 0;
     int status = 0;
     for (size_t i = 2; i < argc && !status; ++n) {
         const char *def = argv[i].text, *alias = def;
+        explicit[n] = i + 1 < argc && !strcmp(argv[i + 1].text, "as");
         if (!strcmp(def, "as")) status = cmdr_error(error, usage);
         else if (i + 1 < argc && !strcmp(argv[i + 1].text, "as")) {
             if (i + 2 >= argc) status = cmdr_error(error, usage);
@@ -598,6 +673,7 @@ static int from_command(const cmdr *repl, void *user, size_t argc, const cmdr_va
     module *m = status ? NULL : load_module(repl, session, "from", name, error);
     if (!m) {
         free(pairs);
+        free(explicit);
         return 1;
     }
     const cmdr_command **found = cmdr_realloc(NULL, n, sizeof(*found));
@@ -611,7 +687,9 @@ static int from_command(const cmdr *repl, void *user, size_t argc, const cmdr_va
         if (!found[k]) {
             status = cmdr_error(error, "from %s import %s: %s has no definition %s", name, def,
                                 name, def);
-        } else if (existing && existing->block != found[k]->block) {
+        } else if (existing && target_of(existing) != target_of(found[k]) && !explicit[k]) {
+            /* Naming it with as shadows on purpose, as a module re-exporting
+             * _midi's write over the primitive does. */
             status = cmdr_error(error, "from %s import %s: %s already exists; bind it with as",
                                 name, def, alias);
         }
@@ -623,7 +701,7 @@ static int from_command(const cmdr *repl, void *user, size_t argc, const cmdr_va
     for (size_t k = 0; k < n && !status; ++k) {
         const char *alias = pairs[2 * k + 1];
         const cmdr_command *existing = cmdr_find(names, alias);
-        if (existing) continue; /* Already bound to this definition. */
+        if (existing && target_of(existing) == target_of(found[k])) continue; /* Already bound. */
         /* Usage begins with the definition's name; swap in the alias. */
         const cmdr_command *command = found[k];
         const char *u = command->usage ? command->usage : command->name;
@@ -631,10 +709,11 @@ static int from_command(const cmdr *repl, void *user, size_t argc, const cmdr_va
         const char *rest = !strncmp(u, command->name, len) ? u + len : "";
         char *bound_usage = cmdr_realloc(NULL, strlen(alias) + strlen(rest) + 1, 1);
         sprintf(bound_usage, "%s%s", alias, rest);
-        bind(session, command, cmdr_strndup(alias, strlen(alias)), bound_usage);
+        bind(session, command, cmdr_strndup(alias, strlen(alias)), bound_usage)->exported = 1;
     }
     free(found);
     free(pairs);
+    free(explicit);
     return status;
 }
 
@@ -679,6 +758,27 @@ cmdr_session *cmdr_session_open(const cmdr *commands, int effects, FILE *out)
     return s;
 }
 
+static void add_builtin(cmdr_session *session, builtin_module module)
+{
+    session->builtin_modules = cmdr_realloc(session->builtin_modules,
+                                            session->nbuiltin_modules + 1,
+                                            sizeof(*session->builtin_modules));
+    session->builtin_modules[session->nbuiltin_modules++] = module;
+}
+
+void cmdr_session_add_module(cmdr_session *session, const char *name, const cmdr *commands)
+{
+    add_builtin(session, (builtin_module){.name = cmdr_strndup(name, strlen(name)),
+                                          .commands = commands});
+}
+
+void cmdr_session_add_source(cmdr_session *session, const char *name, const char *source,
+                             const char *path)
+{
+    add_builtin(session, (builtin_module){.name = cmdr_strndup(name, strlen(name)),
+                                          .source = source, .path = path});
+}
+
 void cmdr_session_close(cmdr_session *session)
 {
     if (!session) return;
@@ -697,6 +797,8 @@ void cmdr_session_close(cmdr_session *session)
     }
     for (size_t i = 0; i < session->nmodules; ++i) free_module(session->modules[i]);
     free(session->modules);
+    for (size_t i = 0; i < session->nbuiltin_modules; ++i) free(session->builtin_modules[i].name);
+    free(session->builtin_modules);
     free(session);
 }
 

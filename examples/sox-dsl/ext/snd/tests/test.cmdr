@@ -1,24 +1,29 @@
 # Each line must succeed; cmdr stops at the first that fails. Files go in
 # SND_OUT, which CTest sets to a directory under build/.
-env SND_OUT | fs-mkdir | as out-dir "The test directory"
+
+import env
+import fs
+import snd
+
+env.get SND_OUT | fs.mkdir | as out-dir "The test directory"
 def tmp { (p) out-dir | path-join $p } "Path P in the test directory"
-def apply { (in p e) tmp $p | with { (o) words $e | with { (w) snd-run $o $in $w } } } "Apply the effect words E to IN, writing P"
-def field { (p k) snd-info $p | filter $k | first | words | nth 2 } "Field K of snd-info P"
-def peak { (p) snd-report -n $p stats | lines | filter "Pk lev dB" | first | words | nth 4 } "Peak level of P in dBFS"
+def apply { (in p e) tmp $p | with { (o) words $e | with { (w) snd.run $o $in $w } } } "Apply the effect words E to IN, writing P"
+def field { (p k) snd.info $p | filter $k | first | words | nth 2 } "Field K of snd.info P"
+def peak { (p) snd.report -n $p stats | lines | filter "Pk lev dB" | first | words | nth 4 } "Peak level of P in dBFS"
 
 # The null file and synth make test tones; options before a file set its format.
-tmp a.wav | snd-run -r 44100 -n synth 1 sine 440 gain -6 | snd-info | join , | equals "type wav,rate 44100,channels 1,frames 44100,seconds 1,bits 32,encoding Signed Integer PCM"
+tmp a.wav | snd.run -r 44100 -n synth 1 sine 440 gain -6 | snd.info | join , | equals "type wav,rate 44100,channels 1,frames 44100,seconds 1,bits 32,encoding Signed Integer PCM"
 tmp a.wav | peak | equals -6.00
-tmp b.wav | with { (p) list -b 16 $p } | snd-run -r 44100 -n synth 2 sine 220 gain -6 | field bits | equals 16
+tmp b.wav | with { (p) list -b 16 $p } | snd.run -r 44100 -n synth 2 sine 220 gain -6 | field bits | equals 16
 tmp b.wav | field seconds | equals 2
-snd-effects | count | equals 63
-snd-effects | filter reverb | count | equals 1
-snd-effects | last | equals varispeed
-snd-usage varispeed | equals "varispeed FROM TO"
-snd-usage trim | equals "trim {position}"
+snd.effects | count | equals 63
+snd.effects | filter reverb | count | equals 1
+snd.effects | last | equals varispeed
+snd.usage varispeed | equals "varispeed FROM TO"
+snd.usage trim | equals "trim {position}"
 
 # Effects, with sox's own arguments.
-tmp a.wav | apply c.wav "rate 22050" | snd-info | filter frames | join "" | equals "frames 22050"
+tmp a.wav | apply c.wav "rate 22050" | snd.info | filter frames | join "" | equals "frames 22050"
 tmp a.wav | apply c.wav "speed 2" | field seconds | equals 0.5
 tmp a.wav | apply c.wav "tempo 2" | field seconds | between 0.49 0.51
 tmp a.wav | apply c.wav "gain -6" | peak | equals -12.00
@@ -36,52 +41,52 @@ tmp a.wav | apply c.wav "varispeed 1 0.5" | field frames | equals 58800
 tmp a.wav | apply c.wav "varispeed 2 2" | field frames | equals 22050
 tmp a.wav | apply c.wav "varispeed 0.5 2" | field frames | equals 35280
 tmp a.wav | apply c.wav "varispeed 1 1" | field frames | equals 44100
-tmp a.wav | apply c.wav "channels 2 varispeed 1 0.1 fade 0 -0 0.05" | snd-info | filter frames | join "" | equals "frames 80182"
+tmp a.wav | apply c.wav "channels 2 varispeed 1 0.1 fade 0 -0 0.05" | snd.info | filter frames | join "" | equals "frames 80182"
 tmp a.wav | apply c.wav "varispeed 1 0.25 trim 0 0.1" | peak | between -6.1 -5.9
 
 # Combining: concatenate by default; mix sums at 1/N each, unless any input
 # has -v; -M merges channels; -T multiplies.
-tmp a.wav | with { (a) tmp c.wav | snd-run $a $a } | field seconds | equals 2
-tmp a.wav | with { (a) tmp b.wav | with { (b) tmp c.wav | snd-run --combine mix $a $b } } | field seconds | equals 2
+tmp a.wav | with { (a) tmp c.wav | snd.run $a $a } | field seconds | equals 2
+tmp a.wav | with { (a) tmp b.wav | with { (b) tmp c.wav | snd.run --combine mix $a $b } } | field seconds | equals 2
 tmp c.wav | peak | equals -7.11
-tmp a.wav | with { (a) tmp c.wav | snd-run -v 1 $a -v 0 $a -m } | peak | equals -6.00
-tmp a.wav | with { (a) tmp b.wav | with { (b) tmp c.wav | snd-run -M $a $b } } | field channels | equals 2
-tmp a.wav | with { (a) tmp c.wav | snd-run -T $a $a } | peak | between -12.1 -11.9
+tmp a.wav | with { (a) tmp c.wav | snd.run -v 1 $a -v 0 $a -m } | peak | equals -6.00
+tmp a.wav | with { (a) tmp b.wav | with { (b) tmp c.wav | snd.run -M $a $b } } | field channels | equals 2
+tmp a.wav | with { (a) tmp c.wav | snd.run -T $a $a } | peak | between -12.1 -11.9
 
 # Output options: bits, encoding, rate, channels, and type; input options read raw audio.
-tmp a.wav | with { (a) tmp c.wav | with { (p) list -b 8 -e unsigned-integer $p | snd-run $a } } | snd-info | filter encoding | join "" | equals "encoding Unsigned Integer PCM"
-tmp a.wav | with { (a) tmp c.wav | with { (p) list -r 8k -c 2 $p | snd-run $a } } | snd-info | head 3 | join , | equals "type wav,rate 8000,channels 2"
-tmp a.wav | with { (a) tmp c.raw | with { (p) list -t raw -e signed-integer -b 16 $p | snd-run $a } } | with { (p) list -t raw -r 44100 -c 1 -e signed-integer -b 16 $p | with { (i) tmp d.wav | snd-run $i } } | field frames | equals 44100
+tmp a.wav | with { (a) tmp c.wav | with { (p) list -b 8 -e unsigned-integer $p | snd.run $a } } | snd.info | filter encoding | join "" | equals "encoding Unsigned Integer PCM"
+tmp a.wav | with { (a) tmp c.wav | with { (p) list -r 8k -c 2 $p | snd.run $a } } | snd.info | head 3 | join , | equals "type wav,rate 8000,channels 2"
+tmp a.wav | with { (a) tmp c.raw | with { (p) list -t raw -e signed-integer -b 16 $p | snd.run $a } } | with { (p) list -t raw -r 44100 -c 1 -e signed-integer -b 16 $p | with { (i) tmp d.wav | snd.run $i } } | field frames | equals 44100
 tmp a.wav | apply c.flac "gain 0" | field type | equals flac
 
-# snd-segments: the sounding parts between silences. A sine starts at 0, so
+# snd.segments: the sounding parts between silences. A sine starts at 0, so
 # each part starts one sample late.
-tmp a.wav | apply c.wav "pad 0 0.5 repeat 2" | snd-segments -40 0.3 | count | equals 3
-tmp c.wav | snd-segments -40 0.3 | last | equals "3.000023 0.999977"
-tmp c.wav | snd-segments -40 2 | count | equals 1
+tmp a.wav | apply c.wav "pad 0 0.5 repeat 2" | snd.segments -40 0.3 | count | equals 3
+tmp c.wav | snd.segments -40 0.3 | last | equals "3.000023 0.999977"
+tmp c.wav | snd.segments -40 2 | count | equals 1
 
 # OUT may be IN: it is written to a temporary file and renamed.
-tmp a.wav | with { (a) tmp e.wav | snd-run $a | with { (e) snd-run $e $e speed 2 } } | field seconds | equals 0.5
+tmp a.wav | with { (a) tmp e.wav | snd.run $a | with { (e) snd.run $e $e speed 2 } } | field seconds | equals 0.5
 
 # Bad arguments fail, and a failure writes nothing.
-tmp a.wav | try { (p) snd-run $p $p echo-not 1 } failed | equals failed
-tmp a.wav | try { (p) snd-run $p $p gain x } failed | equals failed
-tmp a.wav | try { (p) snd-run $p $p fade } failed | equals failed
-tmp a.wav | try { (p) snd-run $p $p varispeed 1 } failed | equals failed
-tmp a.wav | try { (p) snd-run $p $p varispeed 1 64 } failed | equals failed
-tmp a.wav | try { (p) snd-run $p $p varispeed 0 1 } failed | equals failed
-tmp a.wav | try { (p) snd-run $p -n varispeed 1 0.5 } failed | equals failed
-tmp a.wav | try { (p) snd-run $p $p : newfile } failed | equals failed
-tmp a.wav | try { (p) snd-run $p $p { upper } } failed | equals failed
-tmp a.wav | try { (p) snd-run $p --combine nope $p } failed | equals failed
-tmp a.wav | try { (p) snd-run $p -m $p } failed | equals failed
-tmp a.wav | try { (p) snd-run $p -e nope $p } failed | equals failed
-tmp a.wav | try { (p) snd-run $p $p -r } failed | equals failed
-tmp a.wav | try { (p) list -v 2 $p | snd-run $p } failed | equals failed
-tmp a.wav | apply c.wav "channels 2" | with { (c) tmp a.wav | with { (a) tmp n.wav | try { (o) snd-run $o $a $c } failed } } | equals failed
-tmp n.wav | not { fs-exists }
-tmp none | try { (o) tmp a.wav | snd-run $o } failed | equals failed
-tmp none | not { fs-exists }
-tmp none.wav | try { (o) tmp missing.wav | snd-run $o } failed | equals failed
-tmp none.wav | not { fs-exists }
-try { () snd-usage echo-not } failed | equals failed
+tmp a.wav | try { (p) snd.run $p $p echo-not 1 } failed | equals failed
+tmp a.wav | try { (p) snd.run $p $p gain x } failed | equals failed
+tmp a.wav | try { (p) snd.run $p $p fade } failed | equals failed
+tmp a.wav | try { (p) snd.run $p $p varispeed 1 } failed | equals failed
+tmp a.wav | try { (p) snd.run $p $p varispeed 1 64 } failed | equals failed
+tmp a.wav | try { (p) snd.run $p $p varispeed 0 1 } failed | equals failed
+tmp a.wav | try { (p) snd.run $p -n varispeed 1 0.5 } failed | equals failed
+tmp a.wav | try { (p) snd.run $p $p : newfile } failed | equals failed
+tmp a.wav | try { (p) snd.run $p $p { upper } } failed | equals failed
+tmp a.wav | try { (p) snd.run $p --combine nope $p } failed | equals failed
+tmp a.wav | try { (p) snd.run $p -m $p } failed | equals failed
+tmp a.wav | try { (p) snd.run $p -e nope $p } failed | equals failed
+tmp a.wav | try { (p) snd.run $p $p -r } failed | equals failed
+tmp a.wav | try { (p) list -v 2 $p | snd.run $p } failed | equals failed
+tmp a.wav | apply c.wav "channels 2" | with { (c) tmp a.wav | with { (a) tmp n.wav | try { (o) snd.run $o $a $c } failed } } | equals failed
+tmp n.wav | not { fs.exists }
+tmp none | try { (o) tmp a.wav | snd.run $o } failed | equals failed
+tmp none | not { fs.exists }
+tmp none.wav | try { (o) tmp missing.wav | snd.run $o } failed | equals failed
+tmp none.wav | not { fs.exists }
+try { () snd.usage echo-not } failed | equals failed

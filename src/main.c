@@ -47,87 +47,63 @@ static int load(cmdr_session *session, const char *path, size_t argc, char **arg
     return status;
 }
 
-/* Each extension's commands as a layer, in front of the next and then the
- * primitives. Copies put "ext/NAME: " before docstrings, so help tells them
- * from primitives. */
-static cmdr *chain_extensions(void)
+/* Make each extension importable: its C commands as module _NAME, and each
+ * of its scripts as a module named after the file, which imports _NAME.
+ * Returns the names, which the session borrows until it closes. */
+static char **add_extensions(cmdr_session *session)
 {
-    size_t n = 0;
+    size_t n = 0, k = 0;
     while (cmdr_extensions[n].commands) ++n;
-    cmdr *layers = cmdr_realloc(NULL, n + 1, sizeof(*layers));
+    while (cmdr_extension_scripts[k].path) ++k;
+    char **names = cmdr_realloc(NULL, n + k + 1, sizeof(*names));
     for (size_t i = 0; i < n; ++i) {
-        const cmdr *table = cmdr_extensions[i].commands;
-        const char *origin = cmdr_extensions[i].origin;
-        cmdr_command *commands = cmdr_realloc(NULL, table->count, sizeof(*commands));
-        for (size_t j = 0; j < table->count; ++j) {
-            const char *doc = table->commands[j].docstring ? table->commands[j].docstring : "";
-            char *tagged = cmdr_realloc(NULL, strlen(origin) + strlen(doc) + sizeof(": "), 1);
-            sprintf(tagged, "%s: %s", origin, doc);
-            commands[j] = table->commands[j];
-            commands[j].docstring = tagged;
-        }
-        layers[i] = (cmdr){commands, table->count, &layers[i + 1]};
+        const char *origin = strrchr(cmdr_extensions[i].origin, '/') + 1; /* "ext/NAME" */
+        names[i] = cmdr_realloc(NULL, strlen(origin) + 2, 1);
+        sprintf(names[i], "_%s", origin);
+        cmdr_session_add_module(session, names[i], cmdr_extensions[i].commands);
     }
-    layers[n] = cmdr_primitives;
-    return layers;
+    for (size_t i = 0; i < k; ++i) {
+        const char *path = cmdr_extension_scripts[i].path, *base = strrchr(path, '/') + 1;
+        names[n + i] = cmdr_strndup(base, strlen(base) - strlen(".cmdr"));
+        cmdr_session_add_source(session, names[n + i], cmdr_extension_scripts[i].source, path);
+    }
+    names[n + k] = NULL;
+    return names;
 }
 
-static void free_extensions(cmdr *layers)
+/* Where -c's current line ends: the first newline outside quotes and blocks,
+ * so a quoted newline stays in its pipeline, as it did when -c took one. */
+static size_t line_length(const char *text)
 {
-    for (size_t i = 0; cmdr_extensions[i].commands; ++i) {
-        for (size_t j = 0; j < layers[i].count; ++j)
-            free((char *)layers[i].commands[j].docstring);
-        free((cmdr_command *)layers[i].commands);
+    char quote = 0;
+    size_t depth = 0, i = 0;
+    for (; text[i] && (quote || depth || text[i] != '\n'); ++i) {
+        char c = text[i];
+        if (c == '\\' && quote != '\'' && text[i + 1]) ++i;
+        else if (quote) quote = c == quote ? 0 : quote;
+        else if (c == '\'' || c == '"') quote = c;
+        else if (c == '{') ++depth;
+        else if (c == '}' && depth) --depth;
     }
-    free(layers);
+    return i;
 }
 
-/* Run the ext/ scripts before the prelude, which --user replaces, so they
- * cannot depend on it. ends[k + 1] is the newest definition after script k. */
-static int load_extensions(cmdr_session *session, const cmdr ***ends)
+/* Evaluate -c's lines in turn, as a script's, stopping at the first failure. */
+static int evaluate_lines(cmdr_session *session, const char *text)
 {
-    size_t n = 0;
-    while (cmdr_extension_scripts[n].path) ++n;
-    *ends = cmdr_realloc(NULL, n + 1, sizeof(**ends));
-    (*ends)[0] = cmdr_session_commands(session)->parent;
-    for (size_t k = 0; k < n; ++k) {
-        char *error;
-        int status = cmdr_session_source(session, cmdr_extension_scripts[k].source,
-                                         cmdr_extension_scripts[k].path, &error);
-        fflush(stdout);
-        if (status) fprintf(stderr, "cmdr: %s\n", error);
-        free(error);
-        if (status) return 1;
-        (*ends)[k + 1] = cmdr_session_commands(session)->parent;
-    }
-    return 0;
-}
-
-/* Fail on a command whose name is also in front of it or behind it, since
- * prelude definitions would bind to the wrong one. */
-static int check(cmdr_session *session, const cmdr *layer, const char *origin)
-{
+    char *pipeline = NULL;
+    size_t used = 0;
     int status = 0;
-    for (size_t i = 0; i < layer->count; ++i) {
-        const cmdr_command *command = &layer->commands[i];
-        if (cmdr_find(cmdr_session_commands(session), command->name) != command
-            || cmdr_find(layer->parent, command->name)) {
-            fprintf(stderr, "cmdr: %s: '%s' is already a command\n", origin, command->name);
-            status = 1;
+    while (!status && *text) {
+        size_t n = line_length(text);
+        if (!cmdr_join(&pipeline, &used, text, n) && used) {
+            used = 0;
+            status = evaluate(session, pipeline);
         }
+        text += n + (text[n] == '\n');
     }
-    return status;
-}
-
-/* Check the ext/ C commands, then each script's definitions, after the prelude. */
-static int check_extensions(cmdr_session *session, const cmdr *layers, const cmdr **ends)
-{
-    int status = 0;
-    for (size_t i = 0; cmdr_extensions[i].commands; ++i)
-        status |= check(session, &layers[i], cmdr_extensions[i].origin);
-    for (size_t k = 0; cmdr_extension_scripts[k].path; ++k)
-        for (const cmdr *layer = ends[k + 1]; layer != ends[k]; layer = layer->parent)
-            status |= check(session, layer, cmdr_extension_scripts[k].path);
+    if (!status && used) status = evaluate(session, pipeline); /* Ends in a continuation. */
+    free(pipeline);
     return status;
 }
 
@@ -224,14 +200,12 @@ int main(int argc, char **argv)
     struct sigaction action = {.sa_handler = interrupt};
     sigemptyset(&action.sa_mask);
     sigaction(SIGINT, &action, NULL);
-    cmdr *layers = chain_extensions();
-    cmdr_session *session = cmdr_session_open(layers, 1, stdout);
-    const cmdr **ends = NULL;
-    int status = load_extensions(session, &ends) || load(session, path, 0, NULL)
-        || check_extensions(session, layers, ends);
+    cmdr_session *session = cmdr_session_open(&cmdr_primitives, 1, stdout);
+    char **modules = add_extensions(session);
+    int status = load(session, path, 0, NULL);
     if (!status) {
         if (command) {
-            status = evaluate(session, argv[2]);
+            status = evaluate_lines(session, argv[2]);
         } else if (argc == 1) {
             const char *prelude = path ? path : "standard";
             char *banner = cmdr_realloc(NULL, strlen(prelude) + sizeof("cmdr  (prelude: )") + strlen(CMDR_VERSION), 1);
@@ -243,8 +217,8 @@ int main(int argc, char **argv)
         }
     }
     cmdr_session_close(session);
-    free_extensions(layers);
-    free(ends);
+    for (char **name = modules; *name; ++name) free(*name);
+    free(modules);
     free(path);
     if (cmdr_interrupted()) { /* So a calling shell sees the interrupt and stops. */
         fflush(stdout);

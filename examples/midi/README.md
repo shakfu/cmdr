@@ -1,11 +1,11 @@
 # MIDI
 
-MIDI generation in cmdr. The [midi](ext/midi/README.md) extension plays scores on MIDI ports, reads and writes Standard MIDI Files through the vendored [libremidi](../../thirdparty/libremidi-5.4.3) 5.4.3, and makes Bjorklund's Euclidean rhythms. Its commands, `midi-NAME`, are the low-level layer. The [midi](midi/__init__.cmdr) module, `midi.NAME` after `import midi`, builds, changes, and randomizes scores. Its chance definitions draw from [ext/random](../../ext/random/README.md), so `random-seed N` repeats a piece.
+MIDI generation in cmdr. The [midi](ext/midi/README.md) extension plays scores on MIDI ports, reads and writes Standard MIDI Files through the vendored [libremidi](../../thirdparty/libremidi-5.4.3) 5.4.3, and makes Bjorklund's Euclidean rhythms. The [midi](ext/midi/midi.cmdr) module builds, changes, and randomizes scores. `import midi` gives both the C commands from `_midi`, such as `midi.read`, and the module's definitions, such as `midi.seq`. The module is built into `cmdr-midi`, so it needs no `CMDR_PATH`. Its chance definitions draw from [ext/random](../../ext/random/README.md), so `random.seed N` repeats a piece.
 
 | File | Contents |
 |-|-|
-| [ext/midi/](ext/midi/README.md) | `midi-key`, `midi-euclid`, `midi-ports`, `midi-play`, `midi-write`, `midi-read` |
-| [midi/](midi/__init__.cmdr) | The `midi` module: items, scales and chords, rhythm, chance, transforms, output |
+| [ext/midi/](ext/midi/README.md) | `midi.key`, `midi.bjorklund`, `midi.ports`, `midi.play`, `midi.write`, `midi.read` |
+| [ext/midi/midi.cmdr](ext/midi/midi.cmdr) | The `midi` module: items, scales and chords, rhythm, chance, transforms, output |
 | [demo.cmdr](demo.cmdr) | Builds bass, pads, drums, and a random melody, and writes them as MIDI files |
 | [tests/](tests) | Checks every `midi` module definition |
 | [CMakeLists.txt](CMakeLists.txt) | Builds `cmdr-midi` |
@@ -39,9 +39,9 @@ note 0 0.5 60 100 1
 note 0.5 0.5 64 100 1
 rest 1 0.5
 note 1.5 0.5 72 100 1
-cmdr> midi.scale A2 minor | midi.degrees "1 4 5" | midi.seq 2 | midi.transpose 12 | midi.save bass.mid 96
+cmdr> midi.scale A2 minor | midi.degrees "1 4 5" | midi.seq 2 | midi.transpose 12 | midi.write bass.mid 96
 bass.mid
-cmdr> random-seed 7
+cmdr> random.seed 7
 cmdr> midi.scale A4 minor-pentatonic 2 | midi.walk 16 | midi.pick 16 0.25 | midi.chance 0.8 | midi.play 120 "IAC Driver Bus 1"
 ```
 
@@ -55,7 +55,7 @@ cmdr> midi.scale A4 minor-pentatonic 2 | midi.walk 16 | midi.pick 16 0.25 | midi
 | Changing | `transpose`, `shift BEATS`, `stretch FACTOR`, `velocity`, `channel`, `end` |
 | Combining | `stack A B` plays together; `then A B` plays B after A; `sequence SCORES` plays a list in order; `loop SCORE N` |
 | Fields | `field ITEM I`, `put ITEM I V`, `edit SCORE KIND I BLOCK` on field I of items of KIND; field 1 is the kind, 2 the start |
-| Output | `play SCORE [BPM PORT]`, `ports`, `save SCORE PATH [BPM]`, `from-file PATH` |
+| Output | `play SCORE [BPM PORT]`, `write SCORE PATH [BPM]`, `read PATH`, `ports`: the C commands, with BPM 120 by default |
 
 `help midi.NAME` gives a definition's arguments and defaults.
 

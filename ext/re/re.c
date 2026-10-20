@@ -54,8 +54,8 @@ static int first(int groups, const char *name, size_t argc, const cmdr_value *ar
     free(m);
     return status;
 }
-COMMAND(find_command) { return first(0, "re-find", argc, argv, result, error); }
-COMMAND(groups_command) { return first(1, "re-groups", argc, argv, result, error); }
+COMMAND(find_command) { return first(0, "re.find", argc, argv, result, error); }
+COMMAND(groups_command) { return first(1, "re.groups", argc, argv, result, error); }
 
 /* Fail unless replacement uses only \0 to \9, up to the groups in re, and \\. */
 static int check_replacement(const char *replacement, size_t groups, char **error)
@@ -65,9 +65,9 @@ static int check_replacement(const char *replacement, size_t groups, char **erro
         ++p;
         if (*p == '\\') continue;
         if (*p < '0' || *p > '9')
-            return cmdr_error(error, "re-replace: use \\0 to \\9 or \\\\ in REPLACEMENT");
+            return cmdr_error(error, "re.replace: use \\0 to \\9 or \\\\ in REPLACEMENT");
         if ((size_t)(*p - '0') > groups)
-            return cmdr_error(error, "re-replace: \\%c refers past %zu group%s", *p, groups,
+            return cmdr_error(error, "re.replace: \\%c refers past %zu group%s", *p, groups,
                               groups == 1 ? "" : "s");
     }
     return 0;
@@ -141,29 +141,29 @@ static int scan(enum mode mode, const char *name, const char *text, const char *
 
 COMMAND(all_command)
 {
-    if (argc != 2) return cmdr_error(error, "usage: re-all TEXT REGEX");
-    return scan(ALL, "re-all", argv[0].text, argv[1].text, NULL, result, error);
+    if (argc != 2) return cmdr_error(error, "usage: re.all TEXT REGEX");
+    return scan(ALL, "re.all", argv[0].text, argv[1].text, NULL, result, error);
 }
 
 COMMAND(split_command)
 {
-    if (argc != 2) return cmdr_error(error, "usage: re-split TEXT REGEX");
-    return scan(SPLIT, "re-split", argv[0].text, argv[1].text, NULL, result, error);
+    if (argc != 2) return cmdr_error(error, "usage: re.split TEXT REGEX");
+    return scan(SPLIT, "re.split", argv[0].text, argv[1].text, NULL, result, error);
 }
 
 COMMAND(replace_command)
 {
-    if (argc != 3) return cmdr_error(error, "usage: re-replace TEXT REGEX REPLACEMENT");
-    return scan(REPLACE, "re-replace", argv[0].text, argv[1].text, argv[2].text, result, error);
+    if (argc != 3) return cmdr_error(error, "usage: re.replace TEXT REGEX REPLACEMENT");
+    return scan(REPLACE, "re.replace", argv[0].text, argv[1].text, argv[2].text, result, error);
 }
 
 #define TEXT(n, u, d, f) {.name = n, .usage = u, .docstring = d, .run = f, .text = 1}
 static const cmdr_command commands[] = {
-    TEXT("re-find", "re-find TEXT REGEX", "Return the first match", find_command),
-    TEXT("re-groups", "re-groups TEXT REGEX", "List the first match and its groups", groups_command),
-    TEXT("re-all", "re-all TEXT REGEX", "List all nonempty matches", all_command),
-    TEXT("re-split", "re-split TEXT REGEX", "Split at nonempty matches", split_command),
-    TEXT("re-replace", "re-replace TEXT REGEX REPLACEMENT",
+    TEXT("find", "find TEXT REGEX", "Return the first match", find_command),
+    TEXT("groups", "groups TEXT REGEX", "List the first match and its groups", groups_command),
+    TEXT("all", "all TEXT REGEX", "List all nonempty matches", all_command),
+    TEXT("split", "split TEXT REGEX", "Split at nonempty matches", split_command),
+    TEXT("replace", "replace TEXT REGEX REPLACEMENT",
          "Replace all matches; \\1 inserts group 1", replace_command),
 };
 const cmdr cmdr_ext_re = {commands, sizeof(commands) / sizeof(commands[0]), NULL};

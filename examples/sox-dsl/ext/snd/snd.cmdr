@@ -1,8 +1,13 @@
-# Sox in cmdr. A chain is a list of sox's arguments after its output file:
-# options and input files, then effects. Definitions that build a chain only
-# add words; out, play, stats, and the splits run it with snd-run. snd-* are
-# the C commands; these are the API. `import snd` binds them as snd.NAME; see
-# ../README.md. Needs a cmdr built with ext/snd: build/examples/sox-dsl/cmdr-snd.
+# The snd module: import snd. A chain is a list of sox's arguments after its
+# output file: options and input files, then effects. Definitions that build a
+# chain only add words; out, play, stats, and the splits run it with _snd.run.
+# The C commands come from _snd, and the last line re-exports them, so _snd.run
+# and snd.out share one namespace. See ../../README.md. Needs cmdr-snd.
+
+import _snd
+import fs
+import num
+import str
 
 # Inputs. Format options go before a file, as in sox: -t raw -r 8k -c 1 PATH.
 def in { (path) list $path } "Start a chain that reads PATH"
@@ -19,7 +24,7 @@ def merge { (paths) combine merge $paths } "Start a chain with the channels of P
 def multiply { (paths) combine multiply $paths } "Start a chain that multiplies PATHS sample by sample"
 
 # Effects: each takes a chain and returns it with an effect appended.
-# effect takes any of sox's effects, or varispeed; snd.effects lists them.
+# effect takes any of sox's effects, or varispeed; _snd.effects lists them.
 def effect { (chain spec) words $spec | fold $chain { (c w) push $c $w } } "Append the sox effect SPEC, such as \"reverb 50 50 100\""
 def rate { (chain hz) push $chain rate $hz } "Resample to HZ"
 def speed { (chain factor) push $chain speed $factor } "Play FACTOR times as fast, shifting pitch with it"
@@ -42,29 +47,26 @@ def remix { (chain spec) push $chain remix | effect $spec } "Build channels from
 def swap { (chain) push $chain swap } "Swap pairs of channels"
 
 # Running. A device is -d; a file's extension selects its type.
-def out { (chain path) snd-run $path $chain } "Run CHAIN, writing PATH; return PATH"
-def out-as { (chain opts path) words $opts | push $path | with { (o) snd-run $o $chain } } "Run CHAIN, writing PATH with format OPTIONS, such as \"-b 16 -r 48k\"; return PATH"
-def play { (chain) snd-run -d $chain } "Play CHAIN on the default audio device"
-def record { (seconds path) snd-run $path -d trim 0 $seconds } "Record SECONDS from the default audio device to PATH; return PATH"
+def out { (chain path) _snd.run $path $chain } "Run CHAIN, writing PATH; return PATH"
+def out-as { (chain opts path) words $opts | push $path | with { (o) _snd.run $o $chain } } "Run CHAIN, writing PATH with format OPTIONS, such as \"-b 16 -r 48k\"; return PATH"
+def play { (chain) _snd.run -d $chain } "Play CHAIN on the default audio device"
+def record { (seconds path) _snd.run $path -d trim 0 $seconds } "Record SECONDS from the default audio device to PATH; return PATH"
 
 # Inspecting.
-def info { (path) snd-info $path } "List type, rate, channels, frames, seconds, bits, and encoding of PATH"
 def field { (ls name) list $name " " | concat | with { (pre) keep $ls { (l) starts-with $l $pre } | first | strip-prefix $pre | trim } } "The rest of the line in LINES that starts with NAME"
-def info-field { (path name) snd-info $path | field $name } "Field NAME of info PATH"
-def stats { (chain) snd-report -n $chain stats } "sox's stats for CHAIN's audio"
+def info-field { (path name) _snd.info $path | field $name } "Field NAME of info PATH"
+def stats { (chain) _snd.report -n $chain stats } "sox's stats for CHAIN's audio"
 def stats-field { (chain name) stats $chain | lines | field $name | words | first } "The overall value of row NAME of stats, such as \"Pk lev dB\""
-def effects { () snd-effects } "List sox's effects"
-def usage { (name) snd-usage $name } "Return effect NAME's arguments"
 
 # Splitting. Each split runs the chain once into a temporary file, writes
 # each part as PATH numbered from 1, as sox's newfile does: out001.wav, and
 # returns the paths written.
-def numbered { (path i) str-pad-left $i 3 0 | with { (n) path-basename $path | length | with { (k) length $path | sub $k | with { (d) take $path $d } } | with { (dir) path-stem $path | with { (s) path-ext $path | with { (e) list $dir $s $n . $e | concat } } } } } "PATH with I in 3 digits before its extension"
+def numbered { (path i) str.pad-left $i 3 0 | with { (n) path-basename $path | length | with { (k) length $path | sub $k | with { (d) take $path $d } } | with { (dir) path-stem $path | with { (s) path-ext $path | with { (e) list $dir $s $n . $e | concat } } } } } "PATH with I in 3 digits before its extension"
 def render { (chain path) numbered $path 0 | with { (t) out $chain $t } } "Run CHAIN into PATH numbered 0"
-def cut { (whole path cuts) count $cuts | num-range | each { (i) nth $cuts $i | words | with { (e) numbered $path $i | with { (o) snd-run $o $whole $e } } } | with { (written) fs-remove $whole | $written } } "Apply effect item I of CUTS to WHOLE, writing PATH numbered I; delete WHOLE"
-def split-at { (chain points path) words $points | with { (ps) list 0 | with { (z) fold $ps $z { (c p) push $c $p } } | with { (starts) count $ps | num-range | each { (i) nth $starts $i | with { (s) nth $ps $i | with { (e) list "trim " $s " =" $e | concat } } } | with { (cuts) last $ps | with { (p) list "trim " $p | concat | with { (x) push $cuts $x } } } } } | with { (cuts) render $chain $path | with { (w) cut $w $path $cuts } } } "Split CHAIN's audio at POINTS, seconds in order such as \"1.5 3\""
-def split-silence { (chain db seconds path) render $chain $path | with { (w) snd-segments $w $db $seconds | prefix "trim " | with { (cuts) cut $w $path $cuts } } } "Split CHAIN's audio at each silence at or below DB dBFS lasting SECONDS, dropping the silences"
-def split-channels { (chain path) render $chain $path | with { (w) info-field $w channels | num-range | prefix "remix " | with { (cuts) cut $w $path $cuts } } } "Write each channel of CHAIN's audio to its own file"
+def cut { (whole path cuts) count $cuts | num.range | each { (i) nth $cuts $i | words | with { (e) numbered $path $i | with { (o) _snd.run $o $whole $e } } } | with { (written) fs.remove $whole | $written } } "Apply effect item I of CUTS to WHOLE, writing PATH numbered I; delete WHOLE"
+def split-at { (chain points path) words $points | with { (ps) list 0 | with { (z) fold $ps $z { (c p) push $c $p } } | with { (starts) count $ps | num.range | each { (i) nth $starts $i | with { (s) nth $ps $i | with { (e) list "trim " $s " =" $e | concat } } } | with { (cuts) last $ps | with { (p) list "trim " $p | concat | with { (x) push $cuts $x } } } } } | with { (cuts) render $chain $path | with { (w) cut $w $path $cuts } } } "Split CHAIN's audio at POINTS, seconds in order such as \"1.5 3\""
+def split-silence { (chain db seconds path) render $chain $path | with { (w) _snd.segments $w $db $seconds | prefix "trim " | with { (cuts) cut $w $path $cuts } } } "Split CHAIN's audio at each silence at or below DB dBFS lasting SECONDS, dropping the silences"
+def split-channels { (chain path) render $chain $path | with { (w) info-field $w channels | num.range | prefix "remix " | with { (cuts) cut $w $path $cuts } } } "Write each channel of CHAIN's audio to its own file"
 
 # Presets: definitions from chain to chain.
 def telephone { (chain) highpass $chain 300 | lowpass 3400 | rate 8000 | mono | norm -3 } "Band-limit to 300-3400 Hz, mono at 8 kHz"
@@ -72,3 +74,6 @@ def tape-stop { (chain) varispeed $chain 1 0.1 | fade 0 0.05 } "Slow to a tenth 
 
 # Last, since it shadows the trim primitive, which field uses.
 def trim { (chain start length) push $chain trim $start $length } "Keep LENGTH seconds from START"
+
+# The C commands, as snd.NAME for importers.
+from _snd import run as run report info segments effects usage

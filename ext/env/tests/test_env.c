@@ -7,12 +7,12 @@ extern const cmdr cmdr_ext_env;
 
 int main(void)
 {
-    const cmdr table = {cmdr_ext_env.commands, cmdr_ext_env.count, &cmdr_primitives};
+    const cmdr *table = ext_commands("env", &cmdr_ext_env);
     CHECK(!setenv("CMDR_TEST_ENV", "", 1));
-    expect(&table, "env CMDR_TEST_ENV | length", "0");
+    expect(table, "env.get CMDR_TEST_ENV | length", "0");
     CHECK(!unsetenv("CMDR_TEST_ENV"));
-    expect_error(&table, "env CMDR_TEST_ENV", CMDR_MISMATCH, "env: CMDR_TEST_ENV is not set");
-    expect_error(&table, "env A B", 1, "usage: env NAME");
+    expect_error(table, "env.get CMDR_TEST_ENV", CMDR_MISMATCH, "env.get: CMDR_TEST_ENV is not set");
+    expect_error(table, "env.get A B", 1, "usage: env.get NAME");
     puts("test_env: ok");
     return 0;
 }

@@ -16,8 +16,9 @@ function(cmdr_generate path content)
 endfunction()
 
 # Build each extension directory NAME/ into TARGET: its .c files, which define
-# `const cmdr cmdr_ext_NAME`, and its .cmdr files, embedded in name order.
-# See README.md, "Extensions".
+# `const cmdr cmdr_ext_NAME`, importable as module _NAME, and its .cmdr files,
+# each importable as the module its file names. NAME.cmdr is the module NAME,
+# which imports _NAME. See README.md, "Extensions".
 function(cmdr_add_extensions target)
   set(code "#include \"extensions.h\"\n")
   set(layers "")
@@ -29,6 +30,9 @@ function(cmdr_add_extensions target)
     endif()
     string(MAKE_C_IDENTIFIER "${name}" id)
     file(GLOB sources CONFIGURE_DEPENDS "${dir}/*.c")
+    if(sources AND NOT EXISTS "${dir}/${name}.cmdr")
+      message(FATAL_ERROR "ext/${name}: missing ${name}.cmdr, the module that imports _${name}")
+    endif()
     if(sources)
       target_sources(${target} PRIVATE ${sources})
       string(APPEND code "extern const cmdr cmdr_ext_${id};\n")
