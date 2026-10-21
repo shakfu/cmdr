@@ -24,8 +24,16 @@ static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
 static int ready;
 /* The last failure libsox reported, for the error message. */
 static char message[512];
-/* Set by SIGINT during a run; the flow callback then stops the chain. */
-static volatile sig_atomic_t interrupted;
+/* Outputs get this mode, as open(2) would give. umask is read only by setting
+ * it; 077 meanwhile makes other threads' new files stricter, not looser. */
+static mode_t file_mode;
+static pthread_once_t file_mode_once = PTHREAD_ONCE_INIT;
+static void read_umask(void)
+{
+    mode_t mask = umask(077);
+    umask(mask);
+    file_mode = 0666 & ~mask;
+}
 
 static void on_message(unsigned level, const char *file, const char *format, va_list ap)
 {
@@ -632,13 +640,14 @@ static int auto_effect(sox_effects_chain_t *chain, const char *name, sox_signali
 static int on_flow(sox_bool all_done, void *data)
 {
     (void)all_done, (void)data;
-    return interrupted ? SOX_EOF : SOX_SUCCESS;
+    return cmdr_interrupted() ? SOX_EOF : SOX_SUCCESS;
 }
 
+/* Set cmdr's flag, so try cannot catch the interrupt and cmdr exits by SIGINT. */
 static void on_interrupt(int sig)
 {
     (void)sig;
-    interrupted = 1;
+    cmdr_interrupt(1);
 }
 
 static int failed_on(char **error, const char *name, const char *what, const char *path)
@@ -674,7 +683,8 @@ static sox_format_t *open_output(run *r, const sox_signalinfo_t *signal, char **
             free(*temp), *temp = NULL;
             return NULL;
         }
-        fchmod(fd, 0644); /* mkstemp creates 0600. */
+        pthread_once(&file_mode_once, read_umask);
+        fchmod(fd, file_mode); /* mkstemp creates 0600. */
         close(fd);
         path = *temp;
     }
@@ -792,10 +802,11 @@ static int execute(run *r, char **error)
         goto done;
     }
 
-    interrupted = 0;
     struct sigaction action = {.sa_handler = on_interrupt}, previous;
     sigemptyset(&action.sa_mask);
-    sigaction(SIGINT, &action, &previous);
+    sigaction(SIGINT, NULL, &previous);
+    /* An ignored SIGINT, as in a background job, stays ignored. */
+    if (previous.sa_handler != SIG_IGN) sigaction(SIGINT, &action, NULL);
     /* SOX_EOF from the flow is normal when an effect such as trim ends the
      * audio early, so failures are the streams' errors or a logged failure. */
     sox_flow_effects(chain, on_flow, NULL);
@@ -803,7 +814,7 @@ static int execute(run *r, char **error)
     const sox_format_t *bad = out->sox_errno ? out : NULL;
     for (size_t k = 0; !bad && k < r->input_count; ++k)
         if (r->inputs[k].ft->sox_errno) bad = r->inputs[k].ft;
-    if (interrupted)
+    if (cmdr_interrupted())
         cmdr_error(error, "%s: interrupted", name);
     else if (bad)
         failed_on(error, name, bad->sox_errstr, bad->filename);

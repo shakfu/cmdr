@@ -7,7 +7,7 @@ Test, inspect, create, move, and delete paths.
 | `fs.exists PATH` | PATH if it exists, following links. A mismatch if not. |
 | `fs.is-file PATH` | PATH if it is a regular file. A mismatch if not. |
 | `fs.is-dir PATH` | PATH if it is a directory. A mismatch if not. |
-| `fs.dirs [DIRECTORY]` | The subdirectories of DIRECTORY (default `.`), sorted by path, as `files` lists files. |
+| `fs.dirs [DIRECTORY]` | The subdirectories of DIRECTORY (default `.`), sorted by path, as `files` lists files. Links to directories are not listed, as with `find -type d`. |
 | `fs.size PATH` | The size in bytes. |
 | `fs.mtime PATH` | The modification time, in seconds since the epoch. |
 | `fs.mkdir PATH` | Create PATH and missing parents, as `mkdir -p` does, and return PATH. |

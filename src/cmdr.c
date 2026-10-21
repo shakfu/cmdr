@@ -6,11 +6,15 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* Recursion limits: composed commands and block literals nest at most
- * MAX_CALL_DEPTH deep, and cmdr_clone rejects values nested more than
+/* Recursion limits: calls and sub-pipelines together, and block literals,
+ * nest at most MAX_CALL_DEPTH deep, and cmdr_clone rejects values nested more than
  * MAX_VALUE_DEPTH deep. Every stage clones its input or builds flat lists, so
  * value depth stays bounded. */
 enum { MAX_CALL_DEPTH = 128, MAX_VALUE_DEPTH = 1024 };
+
+/* Calls and sub-pipelines in progress on this thread. Both recurse through
+ * evaluate, so one count bounds the stack. */
+static _Thread_local unsigned call_depth;
 
 static void (*out_of_memory)(void *data, size_t size);
 static void *out_of_memory_data;
@@ -729,6 +733,8 @@ static int evaluate(const cmdr *repl, const program *pg, const char *name, int l
     int status = have ? cmdr_clone(input, result, error) : 0;
     for (size_t i = 0; !status && i < pg->count && pg->stages[i].count; ++i) {
         const stage *s = &pg->stages[i];
+        /* Value stages call nothing, so cmdr_call's check would not run. */
+        if (cmdr_interrupted()) { status = cmdr_error(error, "interrupted"); break; }
         if (value_stage(s)) {
             cmdr_free(result);
             const word *w = &s->words[0];
@@ -751,7 +757,13 @@ static int evaluate(const cmdr *repl, const program *pg, const char *name, int l
         for (size_t j = 1; !status && j < s->count; ++j) {
             const word *w = &s->words[j];
             if (w->sub) { /* Left to right, before the call. */
+                if (call_depth >= MAX_CALL_DEPTH) {
+                    status = cmdr_error(error, "$(%s) is nested too deeply", w->text);
+                    break;
+                }
+                ++call_depth;
                 status = evaluate(repl, w->pipeline, NULL, 0, NULL, env, envc, &subs[nsubs], error);
+                --call_depth;
                 if (!status && subs[nsubs].kind == CMDR_NONE)
                     status = cmdr_error(error, "$(%s) returned no value", w->text);
                 if (status) break;
@@ -860,8 +872,6 @@ int cmdr_run(const cmdr_value *block, size_t argc, const cmdr_value *argv,
 int cmdr_call(const cmdr *repl, const char *name, size_t argc,
               const cmdr_value *argv, cmdr_value *result, char **error)
 {
-    /* Per thread, since it bounds this thread's stack. */
-    static _Thread_local unsigned depth;
     *result = (cmdr_value){0};
     *error = NULL;
     if (cmdr_interrupted()) return cmdr_error(error, "interrupted");
@@ -872,16 +882,16 @@ int cmdr_call(const cmdr *repl, const char *name, size_t argc,
             return cmdr_error(error, "command '%s' expects text; use map or join for lists", name);
         else if (argv[i].kind != CMDR_TEXT)
             return cmdr_error(error, "command '%s' expects text, got a block", name);
-    if (depth >= MAX_CALL_DEPTH)
+    if (call_depth >= MAX_CALL_DEPTH)
         return cmdr_error(error, "command '%s' is nested too deeply "
                           "(possible cycle in composed commands)", name);
     if (command->value)
         return argc ? cmdr_error(error, "%s takes no arguments", name)
                     : cmdr_clone(command->value, result, error);
-    ++depth;
+    ++call_depth;
     int status = command->run ? command->run(repl, command->user, argc, argv, result, error)
         : call_block(command->block, name, argc, argv, result, error);
-    --depth;
+    --call_depth;
     if (status) cmdr_free(result);
     return status;
 }

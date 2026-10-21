@@ -7,12 +7,24 @@
 #include <ctype.h>
 #include <errno.h>
 #include <math.h>
+#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
+
+/* Outputs get this mode, as open(2) would give. umask is read only by setting
+ * it; 077 meanwhile makes other threads' new files stricter, not looser. */
+static mode_t file_mode;
+static pthread_once_t file_mode_once = PTHREAD_ONCE_INIT;
+static void read_umask(void)
+{
+    mode_t mask = umask(077);
+    umask(mask);
+    file_mode = 0666 & ~mask;
+}
 
 #define COMMAND(name) \
     static int name(const cmdr *repl, void *user, size_t argc, const cmdr_value *argv, \
@@ -452,8 +464,7 @@ COMMAND(play_command)
     event *events = events_of(items, count, &n);
     free(items);
     /* Notes struck and not yet released, so an interrupt can release them. */
-    static unsigned short sounding[16][128];
-    memset(sounding, 0, sizeof(sounding));
+    unsigned short sounding[16][128] = {{0}};
     tempo_map map = {0, now(), 60.0 / bpm};
     int interrupted = 0;
     for (size_t i = 0; i < n && !interrupted; ++i) {
@@ -505,7 +516,8 @@ static int write_file(const char *name, const char *path, const unsigned char *d
         if (w < 0 && errno != EINTR) status = errno;
         if (w > 0) done += (size_t)w;
     }
-    if (!status && fchmod(fd, 0644)) status = errno;
+    pthread_once(&file_mode_once, read_umask);
+    if (!status && fchmod(fd, file_mode)) status = errno;
     if (close(fd) && !status) status = errno;
     if (!status && rename(temp, path)) status = errno;
     if (status) {
@@ -697,9 +709,8 @@ COMMAND(read_command)
     size_t made = 0, *next = cmdr_realloc(NULL, count + 1, sizeof(size_t));
     /* Per channel and key, the open notes as a queue linked through next,
      * with indices stored plus 1, so 0 is empty. */
-    static size_t head[16][128], tail[16][128];
-    memset(head, 0, sizeof(head));
-    memset(tail, 0, sizeof(tail));
+    size_t (*head)[128] = cmdr_realloc(NULL, 32, sizeof(*head)), (*tail)[128] = head + 16;
+    memset(head, 0, 32 * sizeof(*head));
     for (size_t i = 0; i < count; ++i) {
         const unsigned char *b = sorted[i].e.bytes;
         double at = (double)sorted[i].e.tick;
@@ -735,6 +746,7 @@ COMMAND(read_command)
     }
     free(sorted);
     free(next);
+    free(head);
     double end = 0;
     for (size_t i = 0; i < made; ++i) {
         item *t = &items[i];

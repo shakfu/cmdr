@@ -3,6 +3,7 @@
 
 #include <dirent.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -82,7 +83,8 @@ static int by_text(const void *a, const void *b)
     return strcmp(((const cmdr_value *)a)->text, ((const cmdr_value *)b)->text);
 }
 
-/* As files does, but directories other than . and .. */
+/* As files does, but directories other than . and .., not following links,
+ * as find -type d does. A link to an ancestor would make a walk loop. */
 COMMAND(dirs_command)
 {
     if (argc > 1) return cmdr_error(error, "usage: fs.dirs [DIRECTORY]");
@@ -102,8 +104,8 @@ COMMAND(dirs_command)
         }
         if (!strcmp(entry->d_name, ".") || !strcmp(entry->d_name, "..")) continue;
         struct stat info;
-        if (fstatat(dirfd(directory), entry->d_name, &info, 0)) {
-            if (errno == ENOENT) continue; /* A dangling link, or removed while listing. */
+        if (fstatat(dirfd(directory), entry->d_name, &info, AT_SYMLINK_NOFOLLOW)) {
+            if (errno == ENOENT) continue; /* Removed while listing. */
             status = cmdr_error(error, "fs.dirs %s/%s: %s", path, entry->d_name, strerror(errno));
             break;
         }

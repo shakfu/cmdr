@@ -14,11 +14,16 @@
     } \
 } while (0)
 
+static cmdr_session *ext_session;
+
+static void ext_close(void) { cmdr_session_close(ext_session); }
+
 /* An extension's table, bound as import _NAME as NAME binds it, in a session
- * that lives until the program exits. */
+ * closed at exit so LeakSanitizer reports only real leaks. */
 static inline const cmdr *ext_commands(const char *name, const cmdr *table)
 {
-    cmdr_session *session = cmdr_session_open(&cmdr_primitives, 1, NULL);
+    cmdr_session *session = ext_session = cmdr_session_open(&cmdr_primitives, 1, NULL);
+    atexit(ext_close);
     char module[64], line[160];
     snprintf(module, sizeof(module), "_%s", name);
     snprintf(line, sizeof(line), "import %s as %s", module, name);

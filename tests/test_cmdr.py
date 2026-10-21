@@ -42,6 +42,9 @@ class Commands(unittest.TestCase):
             # The fewest digits that read back as the same double.
             ('div 1 3', '0.3333333333333333\n'), ('add 0.1 0.2', '0.30000000000000004\n'),
             ('mul 1e300 10', '1e+301\n'), ('add +1 1e2', '101\n'),
+            # Subnormal results read back; glibc sets ERANGE for them.
+            ('div 1e-300 1e10 | add 0', '9.99999999999997e-311\n'),
+            ('mul -1 0', '0\n'), ('mul -1 0 | equals 0', '0\n'),
             ('text "" | length', '0\n'),
             ('text "hello world" | take 5', 'hello\n'),
             ('text "hello world" | drop 6', 'world\n'),
@@ -1009,6 +1012,15 @@ class Commands(unittest.TestCase):
         result = self.run_input(defs + "d129 x\n")
         self.assertEqual(result.returncode, 1)
         self.assertIn('nested too deeply', result.stderr)
+        # Sub-pipelines count with calls: 3 calls of 60 nested $( each passed
+        # both limits, and used about 16k stack frames at worst.
+        nest = lambda inner: '$(text ' * 59 + '$(' + inner + ')' * 60
+        defs = "def s0 { () text x }\n" + "".join(
+            f"def s{i} {{ () text {nest(f's{i - 1}')} }}\n" for i in range(1, 4))
+        self.run_input(defs + "s1\n")
+        result = self.run_input(defs + "s3\n")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn('nested too deeply', result.stderr)
 
     def test_numeric_predicates(self):
         cases = [
@@ -1121,6 +1133,28 @@ class Commands(unittest.TestCase):
         self.run_line('run-with a pwd', error='usage: run-with OPTIONS PROGRAM')
         self.run_line('list | with { (o) run-with $o }', error='usage: run-with')
         self.run_line('list | with { (o) list | with { (e) run-with $o $e } }', error='usage: run-with')
+        self.run_line(run('group 2', 'pwd'), error='group must be 0 or 1')
+        # group 1 signals the program's children on a timeout too.
+        with tempfile.TemporaryDirectory() as directory:
+            pidfile = Path(directory) / 'pid'
+            self.run_line(run('timeout 0.3 group 1', f'sh -c "sleep 30 & echo $! > {pidfile}; wait"')
+                          + ' | first', 'timeout\n')
+            self.assert_gone(int(pidfile.read_text()))
+
+    def test_signal_state(self):
+        # A shell starts background jobs with SIGINT ignored; cmdr keeps that.
+        ignore = lambda sig: lambda: signal.signal(sig, signal.SIG_IGN)
+        proc = subprocess.Popen([str(BINARY), '-c', 'run sh -c "sleep 1; echo done"'],
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                                preexec_fn=ignore(signal.SIGINT))
+        time.sleep(0.3)
+        proc.send_signal(signal.SIGINT)
+        out, err = proc.communicate(timeout=10)
+        self.assertEqual((proc.returncode, out), (0, 'done\n'), err)
+        # An inherited ignored SIGCHLD made the kernel reap programs: ECHILD.
+        result = subprocess.run([str(BINARY), '-c', 'run echo hi'], capture_output=True,
+                                text=True, timeout=20, preexec_fn=ignore(signal.SIGCHLD))
+        self.assertEqual((result.returncode, result.stdout), (0, 'hi\n'), result.stderr)
 
     def test_script_file(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -1445,7 +1479,8 @@ class Commands(unittest.TestCase):
                                     ('from util import shout shout', 'shout is bound twice'),
                                     ('from util import shout as s pair as s', 's is bound twice'),
                                     ('from nosuch import x', 'from nosuch: not found in'),
-                                    ('from util import shout as a.b', "from util: invalid name 'a.b'")]:
+                                    ('from util import shout as a.b', "from util: invalid name 'a.b'"),
+                                    ('from util import shout as def', 'from: cannot redefine def')]:
                 with self.subTest(source=source):
                     self.assertIn(message, run(source).stderr)
         for source in ['from a', 'from a b c', 'from a import', 'from a import x as',

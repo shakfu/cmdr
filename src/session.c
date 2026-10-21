@@ -256,6 +256,14 @@ static int valid_name(const char *name)
     return 1;
 }
 
+/* Check that def, as, or from may bind name: callable, and not def itself. */
+static int check_name(const char *verb, const char *name, char **error)
+{
+    if (!valid_name(name)) return cmdr_error(error, "%s: invalid name '%s'", verb, name);
+    if (!strcmp(name, "def")) return cmdr_error(error, "%s: cannot redefine def", verb);
+    return 0;
+}
+
 /* Help syntax from the block: "NAME A [B=1]" for { (a b=1) ... }, "NAME VALUE"
  * for { ... }, which takes one piped input. The block's line compiled it, so
  * its parameter list is valid. */
@@ -296,8 +304,7 @@ static int def_command(const cmdr *repl, void *user, size_t argc, const cmdr_val
         || (argc == 3 && argv[2].kind != CMDR_TEXT))
         return cmdr_error(error, "usage: def NAME BLOCK [DOC]");
     const char *name = argv[0].text, *body = argv[1].text;
-    if (!valid_name(name)) return cmdr_error(error, "def: invalid name '%s'", name);
-    if (!strcmp(name, "def")) return cmdr_error(error, "def: cannot redefine def");
+    if (check_name("def", name, error)) return 1;
     /* Its line checked the block; a block inside another captures names. */
     if (argv[1].count) return cmdr_error(error, "def %s: block uses enclosing parameters", name);
     const char *p = body;
@@ -339,8 +346,7 @@ static int as_command(const cmdr *repl, void *user, size_t argc, const cmdr_valu
         || (argc == 3 && argv[2].kind != CMDR_TEXT))
         return cmdr_error(error, "usage: as VALUE NAME [DOC]");
     const char *name = argv[1].text;
-    if (!valid_name(name)) return cmdr_error(error, "as: invalid name '%s'", name);
-    if (!strcmp(name, "def")) return cmdr_error(error, "as: cannot redefine def");
+    if (check_name("as", name, error)) return 1;
     if (argv[0].kind == CMDR_BLOCK) return cmdr_error(error, "as %s: VALUE is a block; use def", name);
     cmdr_value value;
     if (cmdr_clone(&argv[0], &value, error)) return 1;
@@ -485,7 +491,6 @@ static char *find_module(const cmdr *repl, const char *verb, const char *name, c
     return found;
 }
 
-/* Run the module at path, record its definitions, and hide its names. */
 static definition *push_script(cmdr_session *session, const definition *user);
 
 /* Run a module's file, or source when the host provides it. */
@@ -569,7 +574,16 @@ static void free_module(module *m)
     free(m);
 }
 
-/* Find module name for code compiled in repl, running it on first use. */
+/* Remove m from the session's modules and free it. */
+static void forget_module(cmdr_session *session, module *m)
+{
+    size_t i = 0;
+    while (session->modules[i] != m) ++i;
+    memmove(&session->modules[i], &session->modules[i + 1],
+            (--session->nmodules - i) * sizeof(*session->modules));
+    free_module(m);
+}
+
 /* Find module name for code compiled in repl, running it on first use. A
  * host's module wins over files of the same name. */
 static module *load_module(const cmdr *repl, cmdr_session *session, const char *verb,
@@ -609,11 +623,7 @@ static module *load_module(const cmdr *repl, cmdr_session *session, const char *
                     twice = table->commands[i].name;
         if (twice) {
             cmdr_error(error, "%s %s: %s is defined twice", verb, name, twice);
-            size_t i = 0;
-            while (session->modules[i] != m) ++i;
-            memmove(&session->modules[i], &session->modules[i + 1],
-                    (--session->nmodules - i) * sizeof(*session->modules));
-            free_module(m);
+            forget_module(session, m);
             return NULL;
         }
         if (table) { /* A C table: its commands are its exports. */
@@ -622,11 +632,7 @@ static module *load_module(const cmdr *repl, cmdr_session *session, const char *
             for (size_t i = 0; i < m->count; ++i) m->exports[i] = &builtin->commands->commands[i];
         } else if (run_module(session, m, builtin ? builtin->source : NULL, verb, name, error)) {
             /* Not recorded, so the next import runs the module again. */
-            size_t i = 0;
-            while (session->modules[i] != m) ++i;
-            memmove(&session->modules[i], &session->modules[i + 1],
-                    (--session->nmodules - i) * sizeof(*session->modules));
-            free_module(m);
+            forget_module(session, m);
             return NULL;
         }
         m->loading = 0;
@@ -672,7 +678,7 @@ static int from_command(const cmdr *repl, void *user, size_t argc, const cmdr_va
         const char *def = argv[i].text, *alias = def;
         explicit[n] = i + 1 < argc && !strcmp(argv[i + 1].text, "as");
         if (!strcmp(def, "as")) status = cmdr_error(error, usage);
-        else if (i + 1 < argc && !strcmp(argv[i + 1].text, "as")) {
+        else if (explicit[n]) {
             if (i + 2 >= argc) status = cmdr_error(error, usage);
             else alias = argv[i + 2].text;
             i += 3;
@@ -681,6 +687,8 @@ static int from_command(const cmdr *repl, void *user, size_t argc, const cmdr_va
         }
         if (!status && !module_name(alias))
             status = cmdr_error(error, "from %s: invalid name '%s'", name, alias);
+        else if (!status)
+            status = check_name("from", alias, error);
         pairs[2 * n] = def, pairs[2 * n + 1] = alias;
     }
     module *m = status ? NULL : load_module(repl, session, "from", name, error);

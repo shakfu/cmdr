@@ -16,7 +16,8 @@ tmp a.wav | snd.run -r 44100 -n synth 1 sine 440 gain -6 | snd.info | join , | e
 tmp a.wav | peak | equals -6.00
 list -b 16 $(tmp b.wav) | snd.run -r 44100 -n synth 2 sine 220 gain -6 | field bits | equals 16
 tmp b.wav | field seconds | equals 2
-snd.effects | count | equals 63
+# The count depends on libsox build options, such as ladspa and spectrogram.
+snd.effects | count | ge 60
 snd.effects | filter reverb | count | equals 1
 snd.effects | last | equals varispeed
 snd.usage varispeed | equals "varispeed FROM TO"

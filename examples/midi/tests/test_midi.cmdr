@@ -89,3 +89,7 @@ midi.seq "C4 D4" | midi.chance 1 | join , | equals "note 0 1 60 100 1,note 1 1 6
 
 # Files keep every kind and the trailing rest.
 midi.seq "C4 ." 0.5 | midi.stack $(midi.program 5) | midi.write $(tmp a.mid) 100 | midi.read | join , | equals "tempo 0 100,program 0 5 1,note 0 0.5 60 100 1,rest 0.5 0.5"
+# Outputs get mode 0666 less the umask, as a new shell file does. CTest
+# runs this under umask 027.
+def same-mode { (f) out-dir | path-join umask-ref | with { (r) run sh -c 'rm -f "$2"; : > "$2"; ls -l "$1" "$2" | cut -c1-10 | uniq | wc -l' sh $f $r } | trim | check { equals 1 } "the output's mode ignored the umask" } "Fail unless F has a new file's mode"
+tmp a.mid | same-mode

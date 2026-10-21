@@ -345,6 +345,11 @@ static void interrupts(void)
     expect_error(session, "try { () stop | upper } caught", 1, "interrupted");
     cmdr_interrupt(0);
     expect(session, "try { () text a | equals b } caught", "caught\n");
+    /* A value stage calls no command, so it checks the flag itself. */
+    expect(session, "text a | as v", "");
+    cmdr_interrupt(1);
+    expect_error(session, "$v", 1, "interrupted");
+    cmdr_interrupt(0);
     cmdr_session_close(session);
 }
 

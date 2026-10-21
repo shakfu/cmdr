@@ -38,7 +38,9 @@ cmdr_add_extension_tests(cmdr-midi "${CMDR_MIDI_EXT}")
 target_sources(ext_midi_test_midi PRIVATE "${CMDR_MIDI_EXT}/smf.cpp")
 target_link_libraries(ext_midi_test_midi PRIVATE libremidi)
 set_tests_properties(ext_midi_test_midi PROPERTIES SKIP_RETURN_CODE 77)
-add_test(NAME example_midi COMMAND cmdr-midi "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_midi.cmdr")
+# Under umask 027, so the test sees outputs follow the umask.
+add_test(NAME example_midi COMMAND sh -c "umask 027 && exec \"$0\" \"$1\""
+  $<TARGET_FILE:cmdr-midi> "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_midi.cmdr")
 add_test(NAME example_midi_demo COMMAND cmdr-midi "${CMAKE_CURRENT_SOURCE_DIR}/demo.cmdr")
 foreach(test IN ITEMS ext_midi_test example_midi example_midi_demo)
   set_tests_properties(${test} PROPERTIES TIMEOUT 60

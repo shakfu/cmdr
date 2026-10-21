@@ -34,7 +34,7 @@ make
 
 Run code in three ways:
 
-- `./build/cmdr` starts the REPL. `help` lists the commands; `quit`, `exit`, or Ctrl-D leaves.
+- `./build/cmdr` starts the REPL. `help` lists the commands; `quit`, `exit`, or Ctrl-D leaves. `quit` and `exit` work only on a terminal; piped input ends at end of file.
 
 - `./build/cmdr FILE [ARG ...]` runs a script.
 
@@ -75,7 +75,7 @@ List commands accept lists or newline-separated text; in text, a final newline e
 
 - A line ending in an unescaped `|` continues on the next line. Blank and comment lines inside a continuation are skipped.
 
-- Quotes and blocks cannot span lines otherwise. Write a newline as `\n`, and end a line inside a block with `|` to continue it.
+- Quotes and blocks cannot span lines otherwise. Write a newline as `\n`, and end a line inside a block with `|` to continue it. A block's first stage starts on the line that opens the block: `{ (s) |` alone is an error.
 
 ### Sub-pipelines
 
@@ -261,6 +261,8 @@ Use `format` when the result reads as a sentence, or the template is data, as fr
 
 Text is bytes in the C locale; `length`, `take`, and `drop` count bytes. Files and program output containing NUL bytes are rejected. Numbers are decimal, such as `-1.5e3`; hex and surrounding spaces are rejected. Results print with the fewest digits that read back exactly: `div 1 3` gives `0.3333333333333333`.
 
+`matches` and the `re` extension pass REGEX to the system's `regcomp`, which bounds neither memory nor time. On glibc, `((a{255}){255}){255}` took 3.5 GB, and the 18-byte `(^|$|\b|\B|\<|\>)*` did not finish in 20 s. Do not take REGEX from untrusted input; search such input as TEXT.
+
 ### Programs
 
 **`run PROGRAM [ARG ...]`** resolves PROGRAM through PATH, passes arguments unchanged, and returns stdout after the program exits.
@@ -278,9 +280,9 @@ HELLO WORLD
 
 **`run-with OPTIONS PROGRAM [ARG ...]`** captures stderr and returns the exit status as data: `STATUS STDOUT STDERR`.
 
-- OPTIONS is a list of NAME VALUE pairs: `dir` sets the working directory, `stdin` the input, and `timeout` a limit in seconds.
+- OPTIONS is a list of NAME VALUE pairs: `dir` sets the working directory, `stdin` the input, `timeout` a limit in seconds, and `group 1` runs the program in its own process group.
 
-- Past the limit the program gets SIGTERM, then SIGKILL a second later; its own children are not signalled.
+- Past the limit the program gets SIGTERM, then SIGKILL a second later. Its own children are signalled only with `group 1`. A program in its own group does not get Ctrl-C from the terminal, and cannot read the terminal.
 
 - STATUS is the exit status, 128 plus the signal number, or `timeout`.
 

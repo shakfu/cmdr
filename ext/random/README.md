@@ -22,6 +22,10 @@ cmdr> repeat 8 { () random.int 1 6 } | join ,
 cmdr> list kick snare hat | random.choices 4 "1\n1\n2"
 ```
 
+N, A, and B are decimal integers within 2^53. `1e3` and `2.0` are errors, as in Python's `randint`. Python's `random.seed` hashes a float instead.
+
+The generator is not for secrets: 624 outputs reveal its state. Read `/dev/urandom` for keys and tokens, as Python's `secrets` module does.
+
 Without `random.seed`, each thread seeds its own generator from `/dev/urandom` on first use. Sessions on one thread share it. Selections return lists, and items may be lists. `repeat N { () ... }` makes N draws, as `[f() for _ in range(n)]` does in Python.
 
 Python's seeding over a smaller generator such as xorshift: scripts can be checked against Python, and a seed means the same in both.

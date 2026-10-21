@@ -16,3 +16,8 @@ re.replace "aaa" '^a' b | equals baa
 re.replace "" '^' '> ' | equals '> '
 re.replace "a.b" '\.' '\\' | equals 'a\b'
 not "abc" { re.find '[0-9]' }
+
+# Later searches see the byte before them, so word anchors hold.
+re.replace aa '\<a' X | equals Xa
+re.all aaa '\<a' | count | equals 1
+re.all foofoo '\bfoo' | count | equals 1

@@ -4,6 +4,8 @@
 
 ### Added
 
+- `run-with`'s `group 1` option runs the program in its own process group, so a timeout signals its children too. Before, a shell or build the program started kept running past the timeout. An option, not the default, because a program in its own group loses Ctrl-C and terminal input.
+
 - A tree-sitter grammar, `editors/tree-sitter-cmdr`, with highlight queries. Helix and Zed now highlight cmdr: `editors/helix` builds the grammar, and `editors/zed` is an extension. `make test` runs the grammar's corpus and highlight tests and parses every `.cmdr` file in the repository, if the `tree-sitter` CLI is installed.
 
 - `cmdr_scan` splits source into tokens with the parser's rules, tolerating unfinished input. The REPL's highlighting and completion, `-c` line splitting, and line continuation now use it. Each had its own copy of the quoting rules, and copies drift from the parser.
@@ -13,6 +15,54 @@
 - `scripts/flatten_with.py`. It converted this repository's `with` blocks to `$(...)`, and that conversion is done.
 
 ### Fixed
+
+- Sub-pipelines did not count toward the call-depth limit, since they run before their stage's call. 128 calls each nesting 128 `$(...)` reached about 16k stack frames and crashed with a 2 MB stack. Calls and sub-pipelines now share one limit of 128.
+
+- `from M import X as def` replaced `def`, which `def` and `as` refuse. One name check now serves all three.
+
+- A `run-with` timeout could be lost on Linux. The loop read the clock twice; if the deadline passed between the reads, `poll` got a negative timeout, which means none, and waited for the program to exit.
+
+- With SIGCHLD ignored by the parent process, every `run` failed with `wait: No child processes`: an ignored SIGCHLD survives `exec` and makes the kernel reap children. `cmdr` resets it; `include/cmdr.h` states the requirement for hosts.
+
+- `cmdr` replaced an ignored SIGINT with its handler, so `sh script &` and `nohup` jobs died on Ctrl-C. It now keeps the ignored disposition, as `sh` does.
+
+- Arithmetic printed subnormal results, such as `div 1e-300 1e10`, that it then rejected as input: glibc sets `ERANGE` for finite subnormals. Only infinite values are rejected now.
+
+- `mul -1 0` printed `-0`, which `equals 0` rejected. Negative zero prints as `0`.
+
+- A block whose stages are all values, such as `{ (x) $x }`, ignored Ctrl-C, since only command calls checked the flag. Each stage now checks it.
+
+- On Linux, the interrupt pipe is created with close-on-exec set, so a program spawned by another thread meanwhile cannot inherit it. macOS lacks `pipe2` and keeps the window.
+
+- `cmdr_interrupt` kept both pipe ends in one `atomic_llong`, which is not lock-free on some 32-bit targets, so the signal handler could deadlock. Each end is now an `atomic_int`.
+
+- `matches` and `re` document that a REGEX from untrusted input can make `regcomp` take gigabytes or minutes. A check before `regcomp` was dropped: it took 119 lines, was tuned to glibc alone, and rejected valid patterns such as `(\bfoo\b ){9}`. No pattern in this repository comes from untrusted input.
+
+- `re.all`, `re.split`, and `re.replace` misapplied `\<`, `\b`, and `\B` after the first match: each search started at the previous match's end, out of sight of the byte before it. `re.replace aa '\<a' X` gave `XX`. Searches now use `REG_STARTEND` over the whole text where it exists.
+
+- A trailing `%` in a `time.utc` or `time.local` format merged with the appended sentinel byte: `time.utc 0 'a%'` gave `a01/01/7`. The sentinel now goes first.
+
+- `random.int` and `random.seed` parsed integers through a double, so 2^53+1 rounded to 2^53 and passed the range check. They now accept only decimal digits within 2^53. Breaking: `random.seed 1e3` is an error. Python hashes a float seed, with cases such as `seed(-1.0)` equal to `seed(2)`; rejecting it is simpler than copying that.
+
+- `random` opens `/dev/urandom` with `O_CLOEXEC`. `/dev/urandom` over `getrandom(2)`, which is Linux-only.
+
+- `fs.dirs` listed links to directories, so a walk over `self -> .` never ended. It now skips links, as `find -type d` does.
+
+- `aw` runs every `git` command with `core.fsmonitor=false` and `core.hooksPath=/dev/null`. A target's `.git/config` could run any command when the `llama` agent listed files.
+
+- The `llama` agent sent tracked files reached through a symbolic link, such as a committed link to `~/.ssh/id_ed25519`, to `AW_LLAMA_URL`. It now reads only regular files not under a link. The check uses the files on disk, not the index mode, which an unpacked tree can set to a regular file for a link.
+
+- `aw` read a path from an edit block after rejecting it, so a FIFO named in a block blocked `aw`. Edits to existing files that are not regular files are now rejected too.
+
+- `aw` rejected `.git` path components only in lower case. `.GIT/hooks/pre-commit` passed, which writes a git hook on case-insensitive file systems. It also rejects non-ASCII in components that start with a dot, which HFS+ may ignore.
+
+- Ctrl-C during `snd.run` or `snd.report` raised an ordinary error, which `try` caught, and the script went on. The handler now sets cmdr's interrupt flag, and keeps an ignored SIGINT ignored.
+
+- `snd` and `midi` outputs got mode 0644 regardless of the umask. They now get 0666 less the umask, read once at the first write. Reading the umask means setting it for the whole process, so it is set to 077 meanwhile: a file another thread creates then gets a stricter mode, not a looser one. A constructor before `main` avoided that window but is not standard C.
+
+- `midi.play` and `midi.read` kept note state in function statics, shared by concurrent calls on other threads. The state is now per call.
+
+- The `snd` tests expected exactly 63 sox effects. The count depends on libsox's build options; Ubuntu's has 64.
 
 - `-c` split a line at a newline inside `$(...)`, which it did not do inside a block or quotes.
 

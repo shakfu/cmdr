@@ -72,7 +72,8 @@ char *cmdr_strndup(const char *text, size_t n);
 /* Set or clear the interrupt flag. While it is set, cmdr_call fails with
  * "interrupted", try does not catch it, and run stops its program with
  * SIGTERM, then SIGKILL a second later. It is process-wide, and safe to call
- * from a signal handler. The host clears it. */
+ * from a signal handler. The host clears it. run, run-in, and run-with need
+ * SIGCHLD not ignored, and no host handler that reaps their children. */
 void cmdr_interrupt(int on);
 int cmdr_interrupted(void);
 

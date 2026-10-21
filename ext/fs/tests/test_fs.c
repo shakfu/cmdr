@@ -35,6 +35,10 @@ int main(void)
     expect(table, at("fs.size %s/a/f.txt"), "5");
     expect(table, at("fs.dirs %s/a"), at("%s/a/b\n"));
     expect(table, at("fs.dirs %s/a/"), at("%s/a/b\n"));
+    /* Links to directories are not listed, so a link to . cannot loop a walk. */
+    CHECK(!symlink(".", at("%s/a/self")));
+    expect(table, at("fs.dirs %s/a"), at("%s/a/b\n"));
+    CHECK(!unlink(at("%s/a/self")));
     expect_error(table, at("fs.mkdir %s/a/f.txt/x"), 1, "Not a directory");
     expect_error(table, at("fs.mkdir %s/a/f.txt"), 1, "Not a directory");
     expect_error(table, at("fs.is-dir %s/a/f.txt"), CMDR_MISMATCH, "is not a directory");

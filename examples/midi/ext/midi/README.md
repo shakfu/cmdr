@@ -17,7 +17,7 @@ At equal times, items are sent in this order: tempo, program, cc, bend, note-off
 
 `midi.play` follows `tempo` items, and BPM sets the tempo until the first. It returns after the score's end, so a trailing rest delays the next command. Ctrl-C stops it: it sends a note-off for each note still sounding, then fails with `interrupted`.
 
-`midi.write` writes BPM as the tempo at tick 0, unless SCORE has a `tempo` at beat 0. It rounds times to 1/480 beat and ends the track at the score's end. It writes to a temporary file beside PATH, then renames it, so a failure leaves PATH unchanged. The file gets mode 0644. BPM, here and in `tempo` items, is from 3.6 to 60,000,000, the range of a file's tempo field.
+`midi.write` writes BPM as the tempo at tick 0, unless SCORE has a `tempo` at beat 0. It rounds times to 1/480 beat and ends the track at the score's end. It writes to a temporary file beside PATH, then renames it, so a failure leaves PATH unchanged. The file gets mode 0666 less the umask, as a new file does; the umask is read once, at the first write. BPM, here and in `tempo` items, is from 3.6 to 60,000,000, the range of a file's tempo field.
 
 `midi.read` returns notes, controllers, programs, bends, and tempos. It drops other events, such as aftertouch, SysEx, and text. A note-on pairs with the next note-off, or note-on of velocity 0, of its channel and key, first in, first out. A note never released ends at the file's end. If the file ends after its last item, a `rest` fills the gap; gaps within a score are implied by starts. A tempo prints with the fewest digits that give the file's value, as `96.5` rather than `96.49996`. Files timed in SMPTE frames, and truncated files, are errors.
 

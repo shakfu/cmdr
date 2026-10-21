@@ -1,6 +1,8 @@
 #define _POSIX_C_SOURCE 200809L
 #include "cmdr.h"
 
+#include <ctype.h>
+#include <errno.h>
 #include <fcntl.h>
 #include <math.h>
 #include <stdint.h>
@@ -58,7 +60,7 @@ static void init_by_array(const uint32_t *key, size_t length)
 static void seed_from_system(void)
 {
     uint32_t key[N];
-    int fd = open("/dev/urandom", O_RDONLY);
+    int fd = open("/dev/urandom", O_RDONLY | O_CLOEXEC);
     ssize_t got = fd < 0 ? -1 : read(fd, key, sizeof(key));
     if (fd >= 0) close(fd);
     if (got != (ssize_t)sizeof(key)) {
@@ -123,16 +125,20 @@ static uint64_t random_below(uint64_t n)
 }
 
 /* Integers are exact up to 2^53 as numbers. */
-#define MAX_INTEGER 9007199254740992.0
+#define MAX_INTEGER 9007199254740992LL
 
+/* Decimal digits with an optional -, parsed exactly. Python's randint rejects
+ * a float, so 1e3 and 2.0 are not integers here either. */
 static int parse_integer(const char *name, const char *what, const char *text, int64_t *out,
                          char **error)
 {
-    double x;
-    if (cmdr_number(text, &x, error)) return 1;
-    if (x != floor(x) || fabs(x) > MAX_INTEGER)
+    char *end;
+    errno = 0;
+    long long n = strtoll(text, &end, 10);
+    if (!(isdigit((unsigned char)text[0]) || (text[0] == '-' && isdigit((unsigned char)text[1])))
+        || *end || errno || n > MAX_INTEGER || n < -MAX_INTEGER)
         return cmdr_error(error, "%s: %s %s is not an integer within 2^53", name, what, text);
-    *out = (int64_t)x;
+    *out = n;
     return 0;
 }
 

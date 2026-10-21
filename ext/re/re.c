@@ -108,14 +108,25 @@ static int scan(enum mode mode, const char *name, const char *text, const char *
     if (mode != REPLACE) *result = (cmdr_value){.kind = CMDR_LIST};
     const char *p = text, *piece = text, *previous = NULL;
     int flags = 0, rc;
-    while ((rc = regexec(&re, p, n, m, flags)) == 0) {
-        const char *start = p + m[0].rm_so, *stop = p + m[0].rm_eo;
+#ifdef REG_STARTEND
+    regoff_t length = (regoff_t)strlen(text);
+#endif
+    for (;;) {
+        const char *base = p;
+#ifdef REG_STARTEND /* Search all of text from p, so \< and \b see the byte before p. */
+        base = text;
+        m[0].rm_so = (regoff_t)(p - text);
+        m[0].rm_eo = length;
+        flags |= REG_STARTEND;
+#endif
+        if ((rc = regexec(&re, base, n, m, flags))) break;
+        const char *start = base + m[0].rm_so, *stop = base + m[0].rm_eo;
         if (start != stop || (mode == REPLACE && start != previous)) {
             if (mode == ALL) cmdr_push(result, cmdr_text(start, (size_t)(stop - start)));
             else if (mode == SPLIT) cmdr_push(result, cmdr_text(piece, (size_t)(start - piece)));
             else {
                 fwrite(piece, 1, (size_t)(start - piece), out);
-                expand(out, replacement, p, m);
+                expand(out, replacement, base, m);
             }
             piece = previous = stop;
         }

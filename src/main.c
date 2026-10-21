@@ -209,9 +209,14 @@ int main(int argc, char **argv)
         path = cmdr_realloc(NULL, strlen(home) + sizeof("/.cmdr/prelude.cmdr"), 1);
         sprintf(path, "%s/.cmdr/prelude.cmdr", home);
     }
-    struct sigaction action = {.sa_handler = interrupt};
+    /* A shell ignores SIGINT for background jobs; keep that, as sh does. */
+    struct sigaction action = {.sa_handler = interrupt}, old;
     sigemptyset(&action.sa_mask);
-    sigaction(SIGINT, &action, NULL);
+    if (!sigaction(SIGINT, NULL, &old) && old.sa_handler != SIG_IGN)
+        sigaction(SIGINT, &action, NULL);
+    /* An ignored SIGCHLD survives exec and makes the kernel reap children,
+     * so run's waitpid would fail. */
+    signal(SIGCHLD, SIG_DFL);
     cmdr_session *session = cmdr_session_open(&cmdr_primitives, 1, stdout);
     char **modules = add_extensions(session);
     int status = load(session, path, 0, NULL);

@@ -43,13 +43,14 @@ static int format(int utc, const char *name, size_t argc, const cmdr_value *argv
     if (!utc) tzset(); /* localtime_r need not read TZ itself. */
     if (!(utc ? gmtime_r(&when, &parts) : localtime_r(&when, &parts)))
         return cmdr_error(error, "%s: EPOCH out of range: %lld", name, (long long)when);
-    /* A trailing byte makes a successful result nonempty, since strftime
-     * returns 0 both for empty output and for a buffer too small. */
+    /* A leading byte makes a successful result nonempty, since strftime
+     * returns 0 both for empty output and for a buffer too small. Leading, so
+     * a trailing % or %E cannot consume it. */
     const char *spec = argv[argc - 1].text;
     size_t n = strlen(spec);
     char *marked = cmdr_realloc(NULL, n + 2, 1);
-    memcpy(marked, spec, n);
-    memcpy(marked + n, "x", 2);
+    marked[0] = 'x';
+    memcpy(marked + 1, spec, n + 1);
     char *text = NULL;
     size_t written = 0;
     for (size_t size = 64; size <= FORMAT_LIMIT && !written; size *= 2) {
@@ -61,7 +62,7 @@ static int format(int utc, const char *name, size_t argc, const cmdr_value *argv
         free(text);
         return cmdr_error(error, "%s: output exceeds %d bytes", name, FORMAT_LIMIT);
     }
-    text[written - 1] = '\0';
+    memmove(text, text + 1, written); /* Drop the leading byte; keep the NUL. */
     *result = (cmdr_value){.kind = CMDR_TEXT, .text = text};
     return 0;
 }

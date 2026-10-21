@@ -165,6 +165,7 @@ cmdr_value cmdr_number_value(double value)
 {
     /* The fewest digits that read back as VALUE: 0.1 + 0.2 needs 17, 1.0 / 3 needs 16. */
     char text[64];
+    if (value == 0) value = 0; /* -0 prints as 0, so it equals 0. */
     for (int digits = 15; digits <= 17; ++digits) {
         snprintf(text, sizeof(text), "%.*g", digits, value);
         if (strtod(text, NULL) == value) break;
@@ -179,9 +180,9 @@ int cmdr_number(const char *text, double *value, char **error)
     int decimal = !isspace((unsigned char)*text)
         && !(digits[0] == '0' && (digits[1] == 'x' || digits[1] == 'X'));
     char *end;
-    errno = 0;
+    /* Not ERANGE, which glibc also sets for finite subnormal results. */
     *value = strtod(text, &end);
-    if (!decimal || end == text || *end || errno == ERANGE || !isfinite(*value))
+    if (!decimal || end == text || *end || !isfinite(*value))
         return cmdr_error(error, "invalid finite number: %s", text);
     return 0;
 }
@@ -280,6 +281,7 @@ typedef struct {
     const char *input;
     const char *dir;  /* NULL inherits cmdr's directory. */
     double timeout;   /* Seconds; 0 waits without limit. */
+    int group;        /* Own process group, signalled whole on a timeout. */
     int capture;
 } process;
 
@@ -294,15 +296,16 @@ static double now(void)
  * thread's cmdr_call reads it. */
 static atomic_int interrupted;
 /* A pipe that holds a byte while interrupted is set, so a thread waiting for
- * a child wakes on an interrupt from any thread. Read end in the high 32 bits,
- * write end in the low; -1 until the first wait makes it, since a signal
- * handler cannot. */
-static atomic_llong wake_pipe = -1;
+ * a child wakes on an interrupt from any thread. -1 until the first wait makes
+ * it, since a signal handler cannot. Two ints, not one 64-bit pair, so the
+ * handler's loads are lock-free on 32-bit targets too. The write end is
+ * published first, so a set read end means both are. */
+static atomic_int wake_read = -1, wake_write = -1;
 
-static void drain(long long fds)
+static void drain(int fd)
 {
     char bytes[16];
-    while (read((int)(fds >> 32), bytes, sizeof(bytes)) > 0) continue;
+    while (read(fd, bytes, sizeof(bytes)) > 0) continue;
 }
 
 void cmdr_interrupt(int on)
@@ -310,13 +313,13 @@ void cmdr_interrupt(int on)
     int saved = errno;
     if (on && !atomic_exchange(&interrupted, 1)) {
         /* After the flag: a wait that makes the pipe meanwhile sees the flag. */
-        long long fds = atomic_load(&wake_pipe);
-        if (fds >= 0) (void)!write((int)(fds & 0xffffffff), "", 1);
+        int fd = atomic_load(&wake_write);
+        if (fd >= 0) (void)!write(fd, "", 1);
     } else if (!on && atomic_load(&interrupted)) {
         /* Drain before clearing, so a handler that sets the flag meanwhile
          * writes nothing to drain, or writes after. */
-        long long fds = atomic_load(&wake_pipe);
-        if (fds >= 0) drain(fds);
+        int fd = atomic_load(&wake_read);
+        if (fd >= 0) drain(fd);
         atomic_store(&interrupted, 0);
     }
     errno = saved;
@@ -327,23 +330,38 @@ int cmdr_interrupted(void)
     return interrupted;
 }
 
-/* The wake pipe, made on first use; -1 if it cannot be. */
-static long long wake_fds(void)
+static int make_pipe(int p[2])
 {
-    long long fds = atomic_load(&wake_pipe), none = -1;
-    int p[2];
-    if (fds >= 0 || pipe(p)) return fds;
-    /* Not pipe2: macOS lacks it, so a spawn in another thread meanwhile may
-     * inherit the pipe. */
+#if defined(__linux__) && defined(SYS_pipe2)
+    return (int)syscall(SYS_pipe2, p, O_CLOEXEC | O_NONBLOCK);
+#else
+    /* No pipe2 on macOS, so a spawn in another thread meanwhile may inherit
+     * the pipe. */
+    if (pipe(p)) return -1;
     for (int i = 0; i < 2; ++i) {
         fcntl(p[i], F_SETFD, FD_CLOEXEC);
         fcntl(p[i], F_SETFL, O_NONBLOCK);
     }
-    fds = (long long)p[0] << 32 | (unsigned)p[1];
-    if (atomic_compare_exchange_strong(&wake_pipe, &none, fds)) return fds;
-    close(p[0]);
-    close(p[1]);
-    return none;
+    return 0;
+#endif
+}
+
+/* The wake pipe's read end, made on first use, and its write end in *w; -1 if
+ * it cannot be made or another thread is still publishing it. */
+static int wake_fds(int *w)
+{
+    int r = atomic_load(&wake_read), none = -1, p[2];
+    if (r < 0 && !make_pipe(p)) {
+        if (atomic_compare_exchange_strong(&wake_write, &none, p[1])) {
+            atomic_store(&wake_read, p[0]);
+        } else {
+            close(p[0]);
+            close(p[1]);
+        }
+        r = atomic_load(&wake_read);
+    }
+    *w = atomic_load(&wake_write);
+    return r;
 }
 
 /* A descriptor that is ready when child exits or, if wake >= 0, wake is
@@ -398,8 +416,7 @@ static void block(int watch, int wake, double seconds)
  * the child's exit and the wake pipe where the platform allows; else polls. */
 static pid_t wait_until(pid_t child, int *wait_status, double limit, int interruptible)
 {
-    long long fds = interruptible ? wake_fds() : -1;
-    int wake = fds >= 0 ? (int)(fds >> 32) : -1;
+    int w = -1, wake = interruptible ? wake_fds(&w) : -1;
     /* Polls rather than miss an interrupt it has no pipe for. */
     int watch = interruptible && wake < 0 ? -1 : watch_exit(child, wake);
     double deadline = now() + limit;
@@ -407,16 +424,19 @@ static pid_t wait_until(pid_t child, int *wait_status, double limit, int interru
     for (;;) {
         waited = waitpid(child, wait_status, WNOHANG);
         if (waited > 0 || (waited < 0 && errno != EINTR)) break;
-        if (now() >= deadline || (interruptible && cmdr_interrupted())) {
+        /* One reading of the clock: a second, later one could go negative,
+         * which poll takes as no timeout. */
+        double left = deadline - now();
+        if (left <= 0 || (interruptible && cmdr_interrupted())) {
             waited = 0;
             break;
         }
-        block(watch, wake, deadline - now());
+        block(watch, wake, left);
         /* A byte without the flag, from a set racing a clear in another
          * thread, would make every wait spin. */
         if (wake >= 0 && !cmdr_interrupted()) {
-            drain(fds);
-            if (cmdr_interrupted()) (void)!write((int)(fds & 0xffffffff), "", 1);
+            drain(wake);
+            if (cmdr_interrupted()) (void)!write(w, "", 1);
         }
     }
     int saved = errno;
@@ -428,13 +448,14 @@ static pid_t wait_until(pid_t child, int *wait_status, double limit, int interru
 /* Wait for child. Past the timeout, or on an interrupt, send SIGTERM, then
  * SIGKILL after a second, and reap it: a child that ignores SIGINT must not
  * outlive cmdr. */
-static pid_t wait_child(pid_t child, double timeout, int *wait_status, int *timed_out)
+static pid_t wait_child(pid_t child, double timeout, int group, int *wait_status, int *timed_out)
 {
     pid_t waited = wait_until(child, wait_status, timeout > 0 ? timeout : INFINITY, 1);
     if (waited > 0 || (waited < 0 && errno != EINTR)) return waited;
     *timed_out = !cmdr_interrupted();
-    kill(child, SIGTERM);
-    if (!(waited = wait_until(child, wait_status, 1, 0))) kill(child, SIGKILL);
+    pid_t target = group ? -child : child;
+    kill(target, SIGTERM);
+    if (!(waited = wait_until(child, wait_status, 1, 0))) kill(target, SIGKILL);
     if (!waited)
         do waited = waitpid(child, wait_status, 0); while (waited < 0 && errno == EINTR);
     return waited;
@@ -484,12 +505,18 @@ static int execute(const process *p, char **args, cmdr_value *result, char **err
         cmdr_error(error, "run-with: dir is not supported on this platform");
         goto done;
     }
+    posix_spawnattr_t attr;
+    int attr_rc = posix_spawnattr_init(&attr);
+    if (!rc) rc = attr_rc;
+    if (!rc && p->group) rc = posix_spawnattr_setflags(&attr, POSIX_SPAWN_SETPGROUP);
+    if (!rc && p->group) rc = posix_spawnattr_setpgroup(&attr, 0);
     pid_t child;
-    if (!rc) rc = posix_spawnp(&child, program, &actions, NULL, args, environ);
+    if (!rc) rc = posix_spawnp(&child, program, &actions, &attr, args, environ);
+    if (!attr_rc) posix_spawnattr_destroy(&attr);
     posix_spawn_file_actions_destroy(&actions);
     if (rc) { cmdr_error(error, "%s %s: %s", p->name, program, strerror(rc)); goto done; }
     int wait_status, timed_out = 0;
-    if (wait_child(child, p->timeout, &wait_status, &timed_out) < 0) {
+    if (wait_child(child, p->timeout, p->group, &wait_status, &timed_out) < 0) {
         cmdr_error(error, "%s %s: wait: %s", p->name, program, strerror(errno));
         goto done;
     }
@@ -575,19 +602,22 @@ COMMAND(run_with_command)
     const cmdr_value *options = &argv[0];
     if (options->count % 2) return cmdr_error(error, "run-with: OPTIONS must be NAME VALUE pairs");
     process p = {.name = "run-with", .input = "", .capture = 1};
-    int seen[3] = {0};
-    static const char *names[] = {"dir", "stdin", "timeout"};
+    int seen[4] = {0};
+    static const char *names[] = {"dir", "stdin", "timeout", "group"};
     for (size_t i = 0; i < options->count; i += 2) {
         const cmdr_value *name = &options->items[i], *value = &options->items[i + 1];
         if (require_text("run-with", name, error) || require_text("run-with", value, error)) return 1;
         size_t k = 0;
-        while (k < 3 && strcmp(name->text, names[k])) ++k;
-        if (k == 3) return cmdr_error(error, "run-with: unknown option %s", name->text);
+        while (k < 4 && strcmp(name->text, names[k])) ++k;
+        if (k == 4) return cmdr_error(error, "run-with: unknown option %s", name->text);
         if (seen[k]++) return cmdr_error(error, "run-with: option %s given twice", name->text);
         if (k == 0) p.dir = value->text;
         if (k == 1) p.input = value->text;
         if (k == 2 && cmdr_number(value->text, &p.timeout, error)) return 1;
         if (k == 2 && p.timeout <= 0) return cmdr_error(error, "run-with: timeout must be positive");
+        if (k == 3 && strcmp(value->text, "0") && strcmp(value->text, "1"))
+            return cmdr_error(error, "run-with: group must be 0 or 1");
+        if (k == 3) p.group = value->text[0] == '1';
     }
     char **args = NULL;
     size_t count = 0;
@@ -1409,7 +1439,7 @@ static const cmdr_command effects[] = {
     TEXT("files", "files [DIRECTORY]", "List regular files, sorted by path", files_command),
     TEXT("run", "run PROGRAM [ARG ...]", "Run an executable, returning stdout", run_command),
     TEXT("run-in", "run-in TEXT PROGRAM [ARG ...]", "Run with TEXT on stdin, returning stdout", run_in_command),
-    VALUE("run-with", "run-with OPTIONS PROGRAM [ARG ...]", "Run with dir, stdin, and timeout; return STATUS STDOUT STDERR", run_with_command),
+    VALUE("run-with", "run-with OPTIONS PROGRAM [ARG ...]", "Run with dir, stdin, timeout, and group; return STATUS STDOUT STDERR", run_with_command),
 };
 
 static const cmdr effect_table = {effects, sizeof(effects) / sizeof(effects[0]), NULL};
