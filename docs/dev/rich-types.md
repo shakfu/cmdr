@@ -244,6 +244,41 @@ The `cmdr_value` struct changes, so this needs an ABI version. To limit breakage
 
 - Explicit checks such as `argv[0].kind != CMDR_TEXT` (`ext/random/random.c:160`) reject the new kinds. They move to an accessor that accepts any scalar before the kinds land.
 
+## Costs
+
+Beyond the implementation work, the main cost is that a value's behavior depends on where it came from, and the REPL does not show it. Today `3` acts the same from a literal, `read`, `run`, or `add`. Under this sketch, values that print alike act differently:
+
+| Pipeline | Result |
+|-|-|
+| `list 10 9 2 \| sort` | `2 9 10` |
+| `read n.txt \| lines \| sort`, same digits | `10 2 9` |
+| `list 3 \| json.dumps` | `[3]` |
+| `read n.txt \| lines \| json.dumps` | `["3"]` |
+| `list 1 null` | prints as JSON |
+| `list 1 "null"` | prints one item per line |
+
+Typed shells have this failure mode. PowerShell converts the right operand to the left operand's type, so a comparison can change when its operands swap ([about_Comparison_Operators](https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_comparison_operators)).
+
+Three choices in this sketch make it worse:
+
+- Lexical literals let the source decide the kind. Quoting `3` changes `sort` and `json.dumps`.
+- Implicit widening hides the kind at text commands. The difference shows up later, in `sort`, `eq`, or `json.dumps`.
+- Mismatch and bool both express truth. `test` and `is` exist only to convert between them.
+
+### Mitigations
+
+| Mitigation | Removes | Costs |
+|-|-|-|
+| The REPL shows kind, printing text `3` as `"3"` | invisible kinds at the REPL | REPL output is no longer the data, so it stops working as glue |
+| Literals stay text; numbers come only from arithmetic, `count`, and `json.loads` | most provenance differences | `list 3 \| json.dumps` gives `["3"]`, against Python |
+| `sort` keeps byte order; typed order only through `sort { number }` | the most common silent difference | `sort` departs from Python's `sorted` |
+
+### Alternative: JSON values as opaque handles
+
+cmdr stays text-first. A `json` module returns handles that only `json.*` commands read; core commands never see a dict, null, or bool. Provenance differences then appear only where a script asked for JSON. The cost is two value systems, with explicit conversion at each crossing.
+
+The choice between this sketch and the alternative is whether cmdr becomes a general typed language or stays text-first glue that handles JSON. This sketch assumes the first.
+
 ## Open questions
 
 1. Bool operations: `and`, `or`, and `not` names are taken or mean something else. Candidates are `bool.and`, `bool.or`, and `bool.not` in a module.
@@ -253,3 +288,5 @@ The `cmdr_value` struct changes, so this needs an ABI version. To limit breakage
 3. Iterating `items` passes each pair as one list, so `{ (k v) ... }` cannot take it. Candidates are an `each-item DICT BLOCK` that passes KEY and VALUE, or list destructuring in parameters, as Python's `for k, v in d.items()`.
 
 4. Does `as` with a number literal keep its spelling? `as 1.10 v` then `$v` prints `1.10` under this sketch.
+
+5. General typed language, or text-first glue with opaque JSON handles? See [Costs](#costs).

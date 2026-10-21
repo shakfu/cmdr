@@ -6,6 +6,7 @@
 
 - [ ] **Structured data.** Records are words in text, read with `words | nth` (15 places), and JSON goes through `jq` with `run`. JSON is what glue scripts most exchange: APIs and agents' output. See [docs/dev/missing-syntax.md](docs/dev/missing-syntax.md), "Library gaps".
   - Decide between a map value beside text and lists, which changes the value model, `cmdr_value`, and every list command's contract, and a `json` extension that converts JSON to and from lists of key and value pairs, with no new value type.
+  - A third option keeps JSON as text, read and built by path: [docs/dev/ext-json.md](docs/dev/ext-json.md).
   - The pairs form keeps values printable and checkable; its cost is linear lookup and no way to tell an empty object from an empty array.
   - Whichever form, `aw`'s llama adapter and `midi`'s items are the first users to convert.
 
