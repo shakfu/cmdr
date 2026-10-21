@@ -9,16 +9,23 @@ cmdr evaluates sequentially, one thread per session. The language has no concurr
 ## In the language
 
 - Pipelines are sequential. `a | b` finishes `a` and holds its whole value before it calls `b` (`README.md:47`). Stages are not processes and do not stream.
+
 - Sub-pipelines `$(...)` run left to right, before their stage's call (`src/cmdr.c:759`).
+
 - `run`, `run-in`, and `run-with` start one program with `posix_spawn` and wait for it to exit. Its stdin and stdout, and `run-with`'s captured stderr, are temporary files, not pipes (`process_stream` and `spawn_process` in `src/primitives.c`). A program that writes before it reads cannot block, and cmdr sees no output until the program exits.
+
 - `run-all JOBS N` runs up to N programs at once and waits for all of them. It returns each job's `STATUS STDOUT STDERR` in input order, so results do not depend on which finishes first.
+
 - There is no background job, parallel map over blocks, or `await`. cmdr code never runs while a program runs.
 
 ## In a host
 
 - A session is used by one thread at a time. Sessions on different threads are independent (`include/cmdr.h:148-149`).
+
 - Call and `$(...)` depth are counted per thread, in a `_Thread_local` (`src/cmdr.c:17`). The limit is 128.
+
 - The out-of-memory handler must be set before any thread evaluates (`include/cmdr.h:65-69`).
+
 - A block value cannot move between threads. Its compiled code is shared by copies with a plain `size_t` reference count (`src/cmdr.c:205`), and its scope points into the session that wrote it.
 
 ## Process-wide state
@@ -38,13 +45,19 @@ cmdr evaluates sequentially, one thread per session. The language has no concurr
 ## Interrupts
 
 1. A SIGINT or SIGTERM handler calls `cmdr_interrupt(1)`. `src/main.c` installs one for each signal that was not ignored, and exits by the first one received.
+
 2. Each stage checks the flag before it runs, so a block of value stages also stops (`src/cmdr.c:737`).
+
 3. A wait in `run` or `run-all` blocks on the children's exits and the wake pipe: a pidfd and `poll` on Linux, kqueue on BSD and macOS, a 10 ms poll elsewhere (`block` and `wait_until` in `src/primitives.c`).
+
 4. Each running program gets SIGTERM, then SIGKILL a second later, and is reaped. `run-all` starts no more jobs. With `group 1`, the whole process group is signalled.
+
 5. The stage fails with `interrupted`, which `try` does not catch.
 
 ## Consequences
 
 - A script can overlap programs only through `run-all`, which waits for all of them. It cannot run cmdr code while they run.
+
 - Scripts cannot act on output while a program runs, as `tail -f | filter` would.
+
 - Results do not depend on timing. The only nondeterminism is in the programs a script runs.

@@ -495,8 +495,11 @@ These are optional; none is required.
 ### Implementation notes
 
 - The merged `compile_block` factors the end-of-parameter test into `param_end`, shown above.
+
 - `test_defaults` also covers a negative default, `fold`, and an alias bound with `from`. Each error case also checks that nothing printed.
+
 - The editor tests check only the prompt's colour, so `scan`'s split at `=` has no test of its own.
+
 - Running the suite under ASan and UBSan found undefined behaviour outside this change: `examples/sox-dsl/ext/snd` used libsox's `SOX_ROUND_CLIP_COUNT` and `SOX_SAMPLE_MIN`, which shift 1 by 31 bits in an `int`. It now clips with its own function.
 
 - `help` showed defaults in the overview at first. `snd.reverb`'s six sox parameter names made its row about 115 characters wide, and every row was padded to it. The overview now shows `...`, and `help NAME` gives the full signature. The help test above is as first written; the merged one checks both forms.

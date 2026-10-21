@@ -19,7 +19,9 @@ Recommended order: `_`, then `if`, then `$(...)`. `if`'s branches use `_`; `$(..
 A block must use every parameter it declares (blocks.md). The rule catches a real bug: `text a | try { (s) upper } no` returned `no`, because `upper` ran without input. But some callers pass an argument the block does not need:
 
 - `each` passes the item to a block that only repeats an action. `repeat` was added for this case.
+
 - A branch of `if`, below, receives the value it was chosen for, whether it needs it or not.
+
 - `midi.chance` draws a random number, tests it, then switches to the item with a lone `$n` stage. The draw never uses the item.
 
 ### Proposal
@@ -27,8 +29,11 @@ A block must use every parameter it declares (blocks.md). The rule catches a rea
 `_` in a parameter list declares a parameter that is ignored.
 
 - It may appear more than once: `{ (_ _ x) ... }`.
+
 - It is exempt from the unused-parameter rule.
+
 - `$_` is an error: `nothing is bound to _`.
+
 - It takes no default.
 
 `_` is an invalid parameter name today, so no script changes meaning. Python uses `_`, by convention, for a value it ignores.
@@ -60,7 +65,7 @@ if $n { (_) random.random | lt $p } { (m) $m } else { (m) to-rest $m }
 
 `or`, `try`, and `check` take a fallback value, which is computed before the choice. A branch that must not run, because it fails or has effects, needs a workaround:
 
-- `midi.seq` (examples/midi/midi/__init__.cmdr) computes the note for every key, including the rest marker `.`, which `midi.key` rejects. It substitutes `0` first, then discards the note:
+- `midi.seq` (examples/midi/midi/**init**.cmdr) computes the note for every key, including the rest marker `.`, which `midi.key` rejects. It substitutes `0` first, then discards the note:
 
   ```text
   with { (r) or { () equals $key . | replace . 0 } $key | with { (safe) item note $t $length $safe $velocity $channel } | with { (n) or { () equals $key . | $r } $n } }
@@ -77,10 +82,15 @@ if [VALUE] COND THEN [elif COND THEN ...] [else ELSE]
 ```
 
 - Each COND runs with VALUE, in order. The THEN of the first that holds runs with VALUE. If none holds, ELSE runs with VALUE; without `else`, `if` returns the last mismatch.
+
 - `elif` and `else` are words, as `as` is in `import`. They count only after a THEN, so a VALUE may be the word `else`. A block where `elif` or `else` belongs is an error; there is no positional ELSE.
+
 - An error in COND propagates. `if` never treats an error as false, unlike `try`.
+
 - Only the chosen branch runs.
+
 - Every block has its arity checked before the first COND runs, so a typo in a branch not taken still fails.
+
 - VALUE may be piped: `... | if { fs.is-file } { ... } else { ... }`. It is present when the arguments only parse with it, so a block can be a VALUE.
 
 `if` is a command, not syntax, so a `def` can shadow it like any other command.
@@ -105,8 +115,11 @@ list a.wav b.txt | keep { if { ends-with .wav } { (f) fs.is-file $f } }
 ### Don't use it
 
 - **When the fallback is a cheap constant.** `or $x { nonempty } none` is shorter. `midi.rotate`'s fallback is its input; `or` is right there.
+
 - **To filter a list.** Use `keep`.
+
 - **To replace a failure message.** Use `check`.
+
 - **To recover from an error,** such as a missing file. `if` lets errors through by design; use `try`.
 
 ## `$(...)`: a sub-pipeline as an argument
@@ -126,12 +139,19 @@ The repository's `.cmdr` files hold 430 `with { (x) ... }` blocks. In 372 of the
 `$(PIPELINE)` is an argument whose value is PIPELINE's result.
 
 - It runs when its stage runs, before the stage's command, left to right among the arguments.
+
 - It receives no input, as a block with `()` does.
+
 - It sees the enclosing blocks' parameters and the session's bindings, as any word in its place would.
+
 - It compiles with its line, so its names and syntax are checked before anything runs.
+
 - Its result is one argument; a list stays one argument. No value is an error: `$(...) returned no value`.
+
 - A failure or mismatch inside it fails the stage, with the same status.
+
 - It cannot be a command name, as a reference cannot. A whole stage of `$(...)` is an error; write the pipeline itself.
+
 - Quoting hides it: `'$(x)'` is literal text. Unquoted parentheses inside it balance, as braces do in a block, so `$(text (a))` keeps its parentheses. The proposal had the first unquoted `)` close it, which would have broken `text (a)` there.
 
 `$(` is an invalid reference today, so no script changes meaning. Plain `(...)` was rejected: `text (a)` prints `(a)` today, and would change. Shell has the same form, `$(...)`.
@@ -139,13 +159,17 @@ The repository's `.cmdr` files hold 430 `with { (x) ... }` blocks. In 372 of the
 ### Relation to blocks and with
 
 - A block is a lambda: `{ (x) upper $x }` is a value that runs later, when `each`, `if`, or `with` calls it, as often as they call it.
+
 - `$(PIPELINE)` runs once, where it is written, and takes no arguments. It is an immediately applied lambda with no parameters, Python's `(lambda: sum(xs))()`. It sees the enclosing names, as a closure does.
+
 - `A | with { (v) BODY }` is a lambda applied to A: `(lambda v: BODY)(A)`, a `let`. Replacing it with BODY, with `$(A)` in place of `$v`, inlines a let-bound value.
 
 Inlining keeps the meaning only if A is computed once, at the same point. So the conversion skipped a `with` when the following held. `scripts/flatten_with.py` automated it until it was removed after 0.2.0; see that tag.
 
 - `$v` occurs more than once: each `$(A)` runs A again.
+
 - `$v` occurs inside a nested block: the block may run many times, and A with it.
+
 - A has effects or random draws, or takes the pipeline's input: moving it changes their order, or cuts it off from the input.
 
 ### Use it
@@ -185,7 +209,9 @@ after:  drums | midi.loop 4 | midi.stack $(melody | midi.loop 2) | midi.stack $b
   Here `$w` is used three times, so the `with` stays.
 
 - **For the main flow of data.** A value transformed step by step reads left to right as a pipeline: `read f | trim | upper`, not `upper $(trim $(read f))`.
+
 - **For effects.** `$(run ...)` or `$(write ...)` hides an effect inside an argument. Put effects in stages, where their order is visible.
+
 - **More than one level deep.** `$(sub $(count $w) $i)` above is at the limit. Deeper nesting reads worse than the `with` it replaces; use a `with` or a `def`.
 
 ### Alternatives
@@ -241,6 +267,7 @@ concat $base $(by-mode $mode "" $llama-format)
 #### Don't use it
 
 - **To join with a separator.** Use `join LIST SEP`, or `text`, which separates with spaces.
+
 - **On a list whose items are lists.** An item must be text; `concat` fails otherwise, as `join` does.
 
 ### `try` with a handler block
@@ -255,7 +282,7 @@ list "" "" "" "malformed edit block: expected a file path alone on a line, SEARC
 
 #### Proposal
 
-If FALLBACK is a block, `try` calls it with the error message, without cmdr's `cmdr: ` prefix, and returns its result. Python's `except E as e`. A FALLBACK that is text or a list is returned as now. The handler's arity is checked with BLOCK's, before either runs. An error in the handler propagates. An interrupt is still not caught.
+If FALLBACK is a block, `try` calls it with the error message, without cmdr's `cmdr:` prefix, and returns its result. Python's `except E as e`. A FALLBACK that is text or a list is returned as now. The handler's arity is checked with BLOCK's, before either runs. An error in the handler propagates. An interrupt is still not caught.
 
 #### Use it
 
@@ -267,6 +294,7 @@ try { () read config.txt } { (e) concat "# defaults: " $e }
 #### Don't use it
 
 - **When the reason does not matter.** `try { read } ""` is shorter.
+
 - **To branch on a predicate.** A mismatch is not an error; use `if` or `or`, which let errors through.
 
 ### `retry`: attempts until success
@@ -296,15 +324,22 @@ retry 50 every 0.2 { () fs.is-file out.json }
 #### Don't use it
 
 - **For a fixed number of independent calls.** Use `repeat`, which keeps every result.
+
 - **Around an effect that is not safe to repeat,** such as `append`. Each attempt repeats the effects before its failure.
 
 ## Cost
 
 - **`_`:** the parameter parser and the unused check. No API change.
+
 - **`if`:** one primitive, about 40 lines, beside `try` and `or`. No syntax change.
+
 - **`$(...)`:**
   - The lexer reads a balanced `$(...)`.
+
   - The compiler compiles it like a block body with no parameters.
+
   - The evaluator runs it before the stage's call.
+
   - The editor's scanner colors it and its contents.
+
   - No API change.

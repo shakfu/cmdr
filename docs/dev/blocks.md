@@ -17,6 +17,7 @@ Decision record, 2026-10-17. Three prototypes were built against `836ade2`, outs
 - `def NAME BLOCK` defines a command.
 
 - Positional `$N` and string bodies are removed.
+
 - Later: a parameter after the first may have a default, so arity is a range. See [defaults.md](defaults.md).
 
 `{ }` over `[ ]`: three existing tests use `text [ $1 ]` as literal text.
