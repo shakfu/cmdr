@@ -1,25 +1,32 @@
 # cmdr
 
-A small glue language and REPL, in C. A script is pipelines of commands over text and lists, with explicit effects.
+`cmdr` is a small glue language and REPL in C. It is designed around the the idea that a script consists of pipelines of commands over text and lists, with explicit effects.
 
 ```text
 cmdr> text "hello world" | upper | write greeting.txt
 HELLO WORLD
 cmdr> read greeting.txt | lower
 hello world
+cmdr> read greeting.txt | split " " | each { (w) lower $w } | join -
+hello-world
+cmdr> def dashed { (s sep=-) split $s " " | each { (w) lower $w } | join $sep }
+cmdr> read greeting.txt | dashed +
+hello+world
 ```
 
-The language has:
+Pipelines look like Unix pipes. They differ in five ways:
 
-- pipelines, where `|` passes a value to the next command as its first argument, and `$(...)` computes an argument in place;
+- `|` passes a value, text or a list, as the next command's first argument. Numbers are text that arithmetic commands parse. `$(...)` computes an argument in place. Values are never re-parsed: no word splitting, globbing, or implicit shell.
 
-- blocks, `{ (a b) ... }`, which pass code as values; `def`, which names a command; and `as`, which names a value;
+- Blocks, `{ (a b) ... }`, pass code as values, with lexical scope and captured values. `each`, `keep`, `fold`, `try`, and `retry` take blocks, so loops and error handling stay inside the pipeline.
 
-- `if`/`elif`/`else`, `try` with an error handler, `retry`, and predicates that mismatch rather than fail;
+- Syntax, command names, and references are checked before any stage runs. A typo fails the line before an earlier stage writes a file.
 
-- modules, loaded with `import` and `from`, and extensions, which add C commands as modules.
+- Predicates mismatch rather than fail. A test composes mid-pipeline, and `if`, `keep`, and `or` tell a mismatch from an error. A Unix exit status conflates the two.
 
-Syntax, command names, and references are checked before a line runs. Where Python has a counterpart, cmdr follows it: `import`, `random`, `shlex`, `str.format`.
+- Effects are explicit. Programs run only through `run` and its variants. `run` fails the stage on a nonzero exit status; `run-with` returns the status as data.
+
+The language also has `def`, which names a command; `as`, which names a value; `if`/`elif`/`else`; and modules, loaded with `import` and `from`. Extensions add C commands as modules. Where Python has a counterpart, cmdr follows it: `import`, `random`, `shlex`, `str.format`.
 
 Start with [Quick start](#quick-start), then [The language](#the-language).
 
