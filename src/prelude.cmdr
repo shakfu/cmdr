@@ -3,8 +3,9 @@
 # Definitions that read files or run programs go in prelude-effects.cmdr.
 
 # Lists
-def first { nonempty | head 1 | join "" } "Return the first item"
-def last { nonempty | tail 1 | join "" } "Return the last item"
+# fold returns an item as it is; join would reject a list item.
+def first { nonempty | head 1 | fold "" { (_ x) $x } } "Return the first item"
+def last { nonempty | tail 1 | fold "" { (_ x) $x } } "Return the last item"
 def nth { (xs n) gt $n 0 | le $(count $xs) | $xs | head $n | last } "Return item N, counting from 1"
 def init { (xs) head $xs $(nonempty $xs | count | sub 1) } "Drop the last item"
 def rest { (xs) tail $xs $(nonempty $xs | count | sub 1) } "Drop the first item"

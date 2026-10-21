@@ -730,6 +730,12 @@ class Commands(unittest.TestCase):
             ('help | filter "Return the last item" | count', '1\n'),
             ('list a b c | first', 'a\n'),
             ('list a b c | nth 2', 'b\n'),
+            # Items that are lists come back whole.
+            ('list $(list a b) $(list c d) | first | join ,', 'a,b\n'),
+            ('list $(list a b) $(list c d) | last | join ,', 'c,d\n'),
+            ('list $(list a b) $(list c d) e | nth 2 | join ,', 'c,d\n'),
+            ('text "x\ny\n" | first', 'x\n'),
+            ("list '' b | first | length", '0\n'),
             ('list a b c | init | join ,', 'a,b\n'),
             ('list a b c | rest | join ,', 'b,c\n'),
             ('list a b | concat', 'ab\n'),
@@ -1141,6 +1147,72 @@ class Commands(unittest.TestCase):
                           + ' | first', 'timeout\n')
             self.assert_gone(int(pidfile.read_text()))
 
+    def test_run_all(self):
+        def jobs(*specs):
+            return 'list ' + ' '.join(f'$(list $(list {o}) {program})' for o, program in specs)
+        # Results follow the input order, not the finish order.
+        start = time.monotonic()
+        self.run_line(jobs(('', 'sh -c "sleep 0.6; echo a"'), ('stdin hi', 'cat'),
+                           ('', 'sh -c "echo err >&2; exit 3"'))
+                      + ' | run-all 3 | each { join "|" } | unlines',
+                      '0|a\n|\n0|hi|\n3||err\n')
+        self.assertLess(time.monotonic() - start, 1.5)
+        # At most N run at once: four 0.4 s jobs, two at a time, take two rounds.
+        start = time.monotonic()
+        self.run_line(jobs(*[('', 'sleep 0.4')] * 4) + ' | run-all 2 | count', '4\n')
+        self.assertGreaterEqual(time.monotonic() - start, 0.8)
+        self.assertLess(time.monotonic() - start, 1.6)
+        # A timeout stops its own job only.
+        start = time.monotonic()
+        self.run_line(jobs(('timeout 0.2', 'sleep 5'), ('', 'sh -c "sleep 0.5; echo b"'))
+                      + ' | run-all 2 | each { first } | join ,', 'timeout,0\n')
+        self.assertLess(time.monotonic() - start, 3)
+        with tempfile.TemporaryDirectory() as directory:
+            here = Path(directory).resolve()
+            self.run_line(jobs((f'dir {quote(here)}', 'pwd')) + ' | run-all 1 | first | nth 2', f'{here}\n')
+            # A child cmdr stopped by a timeout stops its own program.
+            pidfile = here / 'pid'
+            inner = f"run sh -c 'echo $$ > {pidfile}; exec sleep 30'"
+            self.run_line(jobs(('timeout 0.5', f'{quote(str(BINARY))} -c {quote(inner)}'))
+                          + ' | run-all 1 | first | first', 'timeout\n')
+            self.assert_gone(int(pidfile.read_text()))
+            # A job that cannot start fails the stage and stops the others.
+            marker = 'sleep 30.4321'
+            self.run_line(jobs(('', marker), ('', 'no-such-program')) + ' | run-all 2',
+                          error='run-all no-such-program: No such file')
+            self.assertEqual(subprocess.run(['pgrep', '-f', marker]).returncode, 1)
+        self.run_line('list | run-all 4 | count', '0\n')
+        for source, message in [('list | run-all', 'usage: run-all JOBS N'),
+                                ('run-all a 1', 'usage: run-all JOBS N'),
+                                ('list | run-all 0', 'N must be a whole number from 1 to 64'),
+                                ('list | run-all 65', 'N must be a whole number from 1 to 64'),
+                                ('list | run-all 1.5', 'N must be a whole number'),
+                                ('list a | run-all 1', 'job 1 is not OPTIONS PROGRAM'),
+                                (jobs(('', 'pwd')) + ' | push $(list $(list)) | run-all 1',
+                                 'job 2 is not OPTIONS PROGRAM'),
+                                (jobs(('bogus 1', 'pwd')) + ' | run-all 1', 'run-all: unknown option bogus')]:
+            with self.subTest(source=source):
+                self.run_line(source, error=message)
+
+    def test_run_all_interrupt(self):
+        # Ctrl-C stops every running job, even ones ignoring SIGINT.
+        with tempfile.TemporaryDirectory() as directory:
+            pids = [Path(directory) / f'pid{i}' for i in range(2)]
+            program = "sh -c 'echo $$ > {}; trap \"\" INT; exec sleep 30'"
+            line = 'list ' + ' '.join(f'$(list $(list) {program.format(p)})' for p in pids) + ' | run-all 2'
+            proc = subprocess.Popen([str(BINARY), '-c', line], stdout=subprocess.PIPE,
+                                    stderr=subprocess.PIPE, text=True, start_new_session=True)
+            deadline = time.time() + 10
+            while not all(p.exists() and p.read_text().strip() for p in pids):
+                self.assertLess(time.time(), deadline, "jobs did not start")
+                time.sleep(0.02)
+            os.killpg(proc.pid, signal.SIGINT)
+            out, err = proc.communicate(timeout=10)
+            self.assertEqual(proc.returncode, -signal.SIGINT, err)
+            self.assertIn('run-all: interrupted', err)
+            for p in pids:
+                self.assert_gone(int(p.read_text()))
+
     def test_signal_state(self):
         # A shell starts background jobs with SIGINT ignored; cmdr keeps that.
         ignore = lambda sig: lambda: signal.signal(sig, signal.SIG_IGN)
@@ -1149,6 +1221,13 @@ class Commands(unittest.TestCase):
                                 preexec_fn=ignore(signal.SIGINT))
         time.sleep(0.3)
         proc.send_signal(signal.SIGINT)
+        out, err = proc.communicate(timeout=10)
+        self.assertEqual((proc.returncode, out), (0, 'done\n'), err)
+        proc = subprocess.Popen([str(BINARY), '-c', 'run sh -c "sleep 1; echo done"'],
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                                preexec_fn=ignore(signal.SIGTERM))
+        time.sleep(0.3)
+        proc.send_signal(signal.SIGTERM)
         out, err = proc.communicate(timeout=10)
         self.assertEqual((proc.returncode, out), (0, 'done\n'), err)
         # An inherited ignored SIGCHLD made the kernel reap programs: ECHILD.
@@ -1737,6 +1816,23 @@ class Commands(unittest.TestCase):
             self.assertEqual(proc.returncode, -signal.SIGINT, err)
             self.assertIn(f'{script}:1: run sh: interrupted', err)
             self.assertNotIn('unreachable', out)
+            self.assert_gone(int(pidfile.read_text()))
+
+    def test_terminate(self):
+        # SIGTERM stops the program as Ctrl-C does, so run-with's timeout on a
+        # cmdr script cannot leave the script's program running.
+        with tempfile.TemporaryDirectory() as directory:
+            pidfile = Path(directory) / 'pid'
+            proc = subprocess.Popen([str(BINARY), '-c', self.STUBBORN.format(pid=pidfile)],
+                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            deadline = time.time() + 10
+            while not pidfile.exists() or not pidfile.read_text().strip():
+                self.assertLess(time.time(), deadline, "program did not start")
+                time.sleep(0.02)
+            proc.send_signal(signal.SIGTERM)
+            out, err = proc.communicate(timeout=10)
+            self.assertEqual(proc.returncode, -signal.SIGTERM, err)
+            self.assertIn('run sh: interrupted', err)
             self.assert_gone(int(pidfile.read_text()))
 
     def test_interrupt_repl(self):

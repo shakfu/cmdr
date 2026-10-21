@@ -4,6 +4,8 @@
 
 ### Added
 
+- `run-all JOBS N` runs programs in parallel, N at once, and returns each one's `STATUS STDOUT STDERR` in input order. It is for fan-out, such as one `aw` workflow on several projects, each in its own cmdr process. A command over child processes, not threads: a session and its blocks are not safe to share between threads, and the time goes into the programs. See `docs/dev/async.md`.
+
 - `run-with`'s `group 1` option runs the program in its own process group, so a timeout signals its children too. Before, a shell or build the program started kept running past the timeout. An option, not the default, because a program in its own group loses Ctrl-C and terminal input.
 
 - A tree-sitter grammar, `editors/tree-sitter-cmdr`, with highlight queries. Helix and Zed now highlight cmdr: `editors/helix` builds the grammar, and `editors/zed` is an extension. `make test` runs the grammar's corpus and highlight tests and parses every `.cmdr` file in the repository, if the `tree-sitter` CLI is installed.
@@ -15,6 +17,10 @@
 - `scripts/flatten_with.py`. It converted this repository's `with` blocks to `$(...)`, and that conversion is done.
 
 ### Fixed
+
+- `first`, `last`, and `nth` failed on an item that is a list, such as one `run-all` result: they ended in `join ""`, which takes only text. They now return the item whole, through `fold`.
+
+- SIGTERM ended `cmdr` and left its running program behind, so a timeout on a cmdr script, as `run-with` or `run-all` sends, could leave an agent editing a repository. SIGTERM now stops the line as Ctrl-C does, and `cmdr` exits by SIGTERM.
 
 - Sub-pipelines did not count toward the call-depth limit, since they run before their stage's call. 128 calls each nesting 128 `$(...)` reached about 16k stack frames and crashed with a 2 MB stack. Calls and sub-pipelines now share one limit of 128.
 

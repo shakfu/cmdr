@@ -297,6 +297,17 @@ cmdr> list | run-with printf '%s ' $(list --model opus) x | nth 2
 --model opus x
 ```
 
+**`run-all JOBS N`** runs programs in parallel, at most N at once, and returns each job's `STATUS STDOUT STDERR` in the order of JOBS.
+
+- Each job is a list `OPTIONS PROGRAM [ARG ...]`, as `run-with` takes. Each job's timeout runs from its own start.
+- N is a whole number from 1 to 64.
+- A job that cannot start fails the stage. The running jobs then get SIGTERM, then SIGKILL a second later, as on Ctrl-C.
+
+```text
+cmdr> list a b c | each { (d) list $(list dir $d timeout 3600 group 1) aw.cmdr audit . } | run-all 3 | each { first } | join ,
+0,0,timeout
+```
+
 ### Scripts
 
 `cmdr FILE [ARG ...]` runs FILE and stops at its first failing line, reporting `FILE:LINE:`.
@@ -410,6 +421,7 @@ These are the primitives, in [src/primitives.c](src/primitives.c). The prelude d
 | `files [DIR]`, `path-basename PATH`, `path-dirname PATH` | Regular files in DIR, sorted; lexical path parts |
 | `run PROGRAM [ARG ...]`, `run-in TEXT PROGRAM [ARG ...]` | Run a program, returning stdout |
 | `run-with OPTIONS PROGRAM [ARG ...]` | Run a program with options, returning `STATUS STDOUT STDERR` |
+| `run-all JOBS N` | Run jobs, each `OPTIONS PROGRAM [ARG ...]`, N at once; return each one's `STATUS STDOUT STDERR` |
 | `load PATH [ARG ...]` | Run a script in this session; PATH is relative to the cwd |
 | `import NAME [as ALIAS]` | Run a module once; bind its definitions as `NAME.DEF` |
 | `from NAME import DEF [as ALIAS] ...` | Run a module once; bind each DEF unqualified, if the name is new |
@@ -475,7 +487,7 @@ Syntax highlighting for Vim, Sublime Text, VS Code, Helix, and Zed is in [editor
 | `cmdr --user ...` | Any of the above with `~/.cmdr/prelude.cmdr` in place of the standard prelude; an error if the file is missing |
 | `cmdr --version` | Prints the version |
 
-Errors go to stderr, and the exit status is nonzero if any line failed. Ctrl-C while a line runs stops it, and cmdr exits by SIGINT, so a calling shell stops too. A running program gets SIGTERM, then SIGKILL a second later, so one that ignores SIGINT does not outlive cmdr.
+Errors go to stderr, and the exit status is nonzero if any line failed. Ctrl-C while a line runs stops it, and cmdr exits by SIGINT, so a calling shell stops too. A running program gets SIGTERM, then SIGKILL a second later, so one that ignores SIGINT does not outlive cmdr. SIGTERM to cmdr does the same, and cmdr exits by SIGTERM.
 
 ## Extending cmdr
 

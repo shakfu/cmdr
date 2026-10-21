@@ -128,11 +128,14 @@ static int quits(const char *pipeline)
         && (!strcmp(word, "quit") || !strcmp(word, "exit"));
 }
 
-/* Ctrl-C: the running line fails with "interrupted", stopping its program,
- * and main exits by SIGINT after closing the session. Without SA_RESTART, so
- * the signal also ends a blocking read or wait. */
-static void interrupt(int signal)
+/* SIGINT or SIGTERM: the running line fails with "interrupted", stopping its
+ * program, and main exits by the first such signal after closing the session.
+ * Without SA_RESTART, so the signal also ends a blocking read or wait. */
+static volatile sig_atomic_t received;
+
+static void interrupt(int number)
 {
+    if (!received) received = number;
     cmdr_interrupt(1);
 }
 
@@ -209,11 +212,14 @@ int main(int argc, char **argv)
         path = cmdr_realloc(NULL, strlen(home) + sizeof("/.cmdr/prelude.cmdr"), 1);
         sprintf(path, "%s/.cmdr/prelude.cmdr", home);
     }
-    /* A shell ignores SIGINT for background jobs; keep that, as sh does. */
+    /* A shell ignores SIGINT for background jobs; keep that, as sh does.
+     * SIGTERM's default would end cmdr and leave its program running. */
     struct sigaction action = {.sa_handler = interrupt}, old;
     sigemptyset(&action.sa_mask);
-    if (!sigaction(SIGINT, NULL, &old) && old.sa_handler != SIG_IGN)
-        sigaction(SIGINT, &action, NULL);
+    for (int i = 0; i < 2; ++i) {
+        int sig = i ? SIGTERM : SIGINT;
+        if (!sigaction(sig, NULL, &old) && old.sa_handler != SIG_IGN) sigaction(sig, &action, NULL);
+    }
     /* An ignored SIGCHLD survives exec and makes the kernel reap children,
      * so run's waitpid would fail. */
     signal(SIGCHLD, SIG_DFL);
@@ -238,9 +244,10 @@ int main(int argc, char **argv)
     free(modules);
     free(path);
     if (cmdr_interrupted()) { /* So a calling shell sees the interrupt and stops. */
+        int sig = received ? received : SIGINT; /* An extension may set the flag. */
         fflush(stdout);
-        signal(SIGINT, SIG_DFL);
-        raise(SIGINT);
+        signal(sig, SIG_DFL);
+        raise(sig);
     }
     return status ? 1 : 0;
 }

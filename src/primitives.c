@@ -388,27 +388,41 @@ static int watch_exit(pid_t child, int wake)
 #endif
 }
 
-/* Block on watch, and on Linux wake, for at most seconds; without watch,
- * sleep a 10 ms tick. Returns early on a signal. */
-static void block(int watch, int wake, double seconds)
+/* Block on the n descriptors in watch, and on Linux wake, for at most
+ * seconds; with none, sleep a 10 ms tick. Returns early on a signal. A kqueue
+ * is one descriptor, holding every child and wake. */
+static void block(const int *watch, size_t n, int wake, double seconds)
 {
     if (seconds > 3600) seconds = 3600; /* Callers loop; this bounds the conversions. */
-    if (watch < 0 && seconds > 0.01) seconds = 0.01;
+    if (!n && seconds > 0.01) seconds = 0.01;
     struct timespec limit = {(time_t)seconds, (long)((seconds - (time_t)seconds) * 1e9)};
 #if defined(CMDR_KQUEUE)
     struct kevent event;
-    if (watch >= 0) {
-        kevent(watch, NULL, 0, &event, 1, &limit);
+    if (n) {
+        kevent(watch[0], NULL, 0, &event, 1, &limit);
         return;
     }
 #elif defined(CMDR_PIDFD)
-    struct pollfd fds[2] = {{.fd = watch, .events = POLLIN}, {.fd = wake, .events = POLLIN}};
-    if (watch >= 0) {
-        poll(fds, wake >= 0 ? 2 : 1, (int)ceil(seconds * 1000));
+    if (n) {
+        struct pollfd *fds = cmdr_realloc(NULL, n + 1, sizeof(*fds));
+        for (size_t i = 0; i < n; ++i) fds[i] = (struct pollfd){.fd = watch[i], .events = POLLIN};
+        fds[n] = (struct pollfd){.fd = wake, .events = POLLIN};
+        poll(fds, n + (wake >= 0), (int)ceil(seconds * 1000));
+        free(fds);
         return;
     }
 #endif
     nanosleep(&limit, NULL);
+}
+
+/* After a wait that watched wake: a byte without the flag, from a set racing
+ * a clear in another thread, would make every wait spin. */
+static void settle(int wake, int w)
+{
+    if (wake >= 0 && !cmdr_interrupted()) {
+        drain(wake);
+        if (cmdr_interrupted()) (void)!write(w, "", 1);
+    }
 }
 
 /* Wait until child exits, limit seconds pass, or, if interruptible, an
@@ -431,13 +445,8 @@ static pid_t wait_until(pid_t child, int *wait_status, double limit, int interru
             waited = 0;
             break;
         }
-        block(watch, wake, left);
-        /* A byte without the flag, from a set racing a clear in another
-         * thread, would make every wait spin. */
-        if (wake >= 0 && !cmdr_interrupted()) {
-            drain(wake);
-            if (cmdr_interrupted()) (void)!write(w, "", 1);
-        }
+        block(&watch, watch >= 0, wake, left);
+        settle(wake, w);
     }
     int saved = errno;
     if (watch >= 0) close(watch);
@@ -472,59 +481,77 @@ static int add_dir(posix_spawn_file_actions_t *actions, const char *dir)
 #endif
 }
 
-/* Files rather than pipes: a child that writes before reading cannot block. */
-static int execute(const process *p, char **args, cmdr_value *result, char **error)
+/* A started program: its pid and its temporary files. */
+typedef struct {
+    pid_t child;
+    FILE *in, *out, *err;
+} spawned;
+
+static void close_streams(spawned *s)
 {
+    if (s->in) fclose(s->in);
+    if (s->out) fclose(s->out);
+    if (s->err) fclose(s->err);
+    s->in = s->out = s->err = NULL;
+}
+
+/* Start args as p says. Files rather than pipes: a child that writes before
+ * reading cannot block. */
+static int spawn_process(const process *p, char **args, spawned *s, char **error)
+{
+    *s = (spawned){0};
     const char *program = args[0];
     if (!program[0]) return cmdr_error(error, "expected an executable name");
     struct stat st;
     if (p->dir && stat(p->dir, &st))
-        return cmdr_error(error, "run-with: dir %s: %s", p->dir, strerror(errno));
+        return cmdr_error(error, "%s: dir %s: %s", p->name, p->dir, strerror(errno));
     if (p->dir && !S_ISDIR(st.st_mode))
-        return cmdr_error(error, "run-with: dir %s: %s", p->dir, strerror(ENOTDIR));
-    FILE *in = process_stream(), *out = in ? process_stream() : NULL;
-    FILE *err = out && p->capture ? process_stream() : NULL;
-    int status = 1;
+        return cmdr_error(error, "%s: dir %s: %s", p->name, p->dir, strerror(ENOTDIR));
+    s->in = process_stream();
+    s->out = s->in ? process_stream() : NULL;
+    s->err = s->out && p->capture ? process_stream() : NULL;
     size_t n = strlen(p->input);
-    if (!in || !out || (p->capture && !err)) {
+    if (!s->in || !s->out || (p->capture && !s->err)) {
         cmdr_error(error, "%s: temporary file: %s", p->name, strerror(errno));
-        goto done;
+        goto failed;
     }
-    if (fwrite(p->input, 1, n, in) != n || fflush(in) || fseek(in, 0, SEEK_SET)) {
+    if (fwrite(p->input, 1, n, s->in) != n || fflush(s->in) || fseek(s->in, 0, SEEK_SET)) {
         cmdr_error(error, "%s: preparing stdin: %s", p->name, strerror(errno));
-        goto done;
+        goto failed;
     }
     posix_spawn_file_actions_t actions;
     int rc = posix_spawn_file_actions_init(&actions);
-    if (rc) { cmdr_error(error, "%s: %s", p->name, strerror(rc)); goto done; }
-    rc = posix_spawn_file_actions_adddup2(&actions, fileno(in), STDIN_FILENO);
-    if (!rc) rc = posix_spawn_file_actions_adddup2(&actions, fileno(out), STDOUT_FILENO);
-    if (!rc && err) rc = posix_spawn_file_actions_adddup2(&actions, fileno(err), STDERR_FILENO);
+    if (rc) { cmdr_error(error, "%s: %s", p->name, strerror(rc)); goto failed; }
+    rc = posix_spawn_file_actions_adddup2(&actions, fileno(s->in), STDIN_FILENO);
+    if (!rc) rc = posix_spawn_file_actions_adddup2(&actions, fileno(s->out), STDOUT_FILENO);
+    if (!rc && s->err) rc = posix_spawn_file_actions_adddup2(&actions, fileno(s->err), STDERR_FILENO);
     if (!rc && p->dir && (rc = add_dir(&actions, p->dir)) == ENOSYS) {
         posix_spawn_file_actions_destroy(&actions);
-        cmdr_error(error, "run-with: dir is not supported on this platform");
-        goto done;
+        cmdr_error(error, "%s: dir is not supported on this platform", p->name);
+        goto failed;
     }
     posix_spawnattr_t attr;
     int attr_rc = posix_spawnattr_init(&attr);
     if (!rc) rc = attr_rc;
     if (!rc && p->group) rc = posix_spawnattr_setflags(&attr, POSIX_SPAWN_SETPGROUP);
     if (!rc && p->group) rc = posix_spawnattr_setpgroup(&attr, 0);
-    pid_t child;
-    if (!rc) rc = posix_spawnp(&child, program, &actions, &attr, args, environ);
+    if (!rc) rc = posix_spawnp(&s->child, program, &actions, &attr, args, environ);
     if (!attr_rc) posix_spawnattr_destroy(&attr);
     posix_spawn_file_actions_destroy(&actions);
-    if (rc) { cmdr_error(error, "%s %s: %s", p->name, program, strerror(rc)); goto done; }
-    int wait_status, timed_out = 0;
-    if (wait_child(child, p->timeout, p->group, &wait_status, &timed_out) < 0) {
-        cmdr_error(error, "%s %s: wait: %s", p->name, program, strerror(errno));
-        goto done;
-    }
-    if (cmdr_interrupted()) { /* Not a status: run-with would return it as data. */
-        cmdr_error(error, "%s %s: interrupted", p->name, program);
-        goto done;
-    }
-    if (fseek(out, 0, SEEK_SET) || (err && fseek(err, 0, SEEK_SET))) {
+    if (rc) { cmdr_error(error, "%s %s: %s", p->name, program, strerror(rc)); goto failed; }
+    return 0;
+failed:
+    close_streams(s);
+    return 1;
+}
+
+/* The result of s's program, which exited with wait_status, or ran past its
+ * timeout; closes s's files. */
+static int collect(const process *p, const char *program, spawned *s, int wait_status,
+                   int timed_out, cmdr_value *result, char **error)
+{
+    int status = 1;
+    if (fseek(s->out, 0, SEEK_SET) || (s->err && fseek(s->err, 0, SEEK_SET))) {
         cmdr_error(error, "%s: reading output: %s", p->name, strerror(errno));
         goto done;
     }
@@ -534,8 +561,8 @@ static int execute(const process *p, char **args, cmdr_value *result, char **err
         else if (WIFSIGNALED(wait_status)) snprintf(code, sizeof(code), "%d", 128 + WTERMSIG(wait_status));
         else snprintf(code, sizeof(code), "%d", WEXITSTATUS(wait_status));
         cmdr_value stdout_text, stderr_text = {0};
-        if (slurp(out, program, &stdout_text, error)) goto done;
-        if (slurp(err, program, &stderr_text, error)) { cmdr_free(&stdout_text); goto done; }
+        if (slurp(s->out, program, &stdout_text, error)) goto done;
+        if (slurp(s->err, program, &stderr_text, error)) { cmdr_free(&stdout_text); goto done; }
         *result = (cmdr_value){.kind = CMDR_LIST};
         cmdr_push(result, cmdr_text(code, strlen(code)));
         cmdr_push(result, stdout_text);
@@ -546,12 +573,27 @@ static int execute(const process *p, char **args, cmdr_value *result, char **err
     else if (WEXITSTATUS(wait_status))
         cmdr_error(error, "run %s: exited with status %d", program, WEXITSTATUS(wait_status));
     else
-        status = slurp(out, program, result, error);
+        status = slurp(s->out, program, result, error);
 done:
-    if (in) fclose(in);
-    if (out) fclose(out);
-    if (err) fclose(err);
+    close_streams(s);
     return status;
+}
+
+static int execute(const process *p, char **args, cmdr_value *result, char **error)
+{
+    spawned s;
+    if (spawn_process(p, args, &s, error)) return 1;
+    int wait_status, timed_out = 0;
+    if (wait_child(s.child, p->timeout, p->group, &wait_status, &timed_out) < 0) {
+        cmdr_error(error, "%s %s: wait: %s", p->name, args[0], strerror(errno));
+        close_streams(&s);
+        return 1;
+    }
+    if (cmdr_interrupted()) { /* Not a status: run-with would return it as data. */
+        close_streams(&s);
+        return cmdr_error(error, "%s %s: interrupted", p->name, args[0]);
+    }
+    return collect(p, args[0], &s, wait_status, timed_out, result, error);
 }
 
 /* Run argv as PROGRAM ARG ..., all text. */
@@ -593,32 +635,39 @@ static int add_args(const char *name, const cmdr_value *value, char ***args, siz
     return 0;
 }
 
+/* Set p from OPTIONS, a list of NAME VALUE pairs; errors name p->name. */
+static int parse_options(const cmdr_value *options, process *p, char **error)
+{
+    const char *who = p->name;
+    if (options->count % 2) return cmdr_error(error, "%s: OPTIONS must be NAME VALUE pairs", who);
+    int seen[4] = {0};
+    static const char *names[] = {"dir", "stdin", "timeout", "group"};
+    for (size_t i = 0; i < options->count; i += 2) {
+        const cmdr_value *name = &options->items[i], *value = &options->items[i + 1];
+        if (require_text(who, name, error) || require_text(who, value, error)) return 1;
+        size_t k = 0;
+        while (k < 4 && strcmp(name->text, names[k])) ++k;
+        if (k == 4) return cmdr_error(error, "%s: unknown option %s", who, name->text);
+        if (seen[k]++) return cmdr_error(error, "%s: option %s given twice", who, name->text);
+        if (k == 0) p->dir = value->text;
+        if (k == 1) p->input = value->text;
+        if (k == 2 && cmdr_number(value->text, &p->timeout, error)) return 1;
+        if (k == 2 && p->timeout <= 0) return cmdr_error(error, "%s: timeout must be positive", who);
+        if (k == 3 && strcmp(value->text, "0") && strcmp(value->text, "1"))
+            return cmdr_error(error, "%s: group must be 0 or 1", who);
+        if (k == 3) p->group = value->text[0] == '1';
+    }
+    return 0;
+}
+
 /* OPTIONS is a list of NAME VALUE pairs. A list argument adds its items as
  * arguments, at any depth, so an empty list adds none. */
 COMMAND(run_with_command)
 {
     static const char usage[] = "usage: run-with OPTIONS PROGRAM [ARG ...]";
     if (argc < 2 || argv[0].kind != CMDR_LIST) return cmdr_error(error, usage);
-    const cmdr_value *options = &argv[0];
-    if (options->count % 2) return cmdr_error(error, "run-with: OPTIONS must be NAME VALUE pairs");
     process p = {.name = "run-with", .input = "", .capture = 1};
-    int seen[4] = {0};
-    static const char *names[] = {"dir", "stdin", "timeout", "group"};
-    for (size_t i = 0; i < options->count; i += 2) {
-        const cmdr_value *name = &options->items[i], *value = &options->items[i + 1];
-        if (require_text("run-with", name, error) || require_text("run-with", value, error)) return 1;
-        size_t k = 0;
-        while (k < 4 && strcmp(name->text, names[k])) ++k;
-        if (k == 4) return cmdr_error(error, "run-with: unknown option %s", name->text);
-        if (seen[k]++) return cmdr_error(error, "run-with: option %s given twice", name->text);
-        if (k == 0) p.dir = value->text;
-        if (k == 1) p.input = value->text;
-        if (k == 2 && cmdr_number(value->text, &p.timeout, error)) return 1;
-        if (k == 2 && p.timeout <= 0) return cmdr_error(error, "run-with: timeout must be positive");
-        if (k == 3 && strcmp(value->text, "0") && strcmp(value->text, "1"))
-            return cmdr_error(error, "run-with: group must be 0 or 1");
-        if (k == 3) p.group = value->text[0] == '1';
-    }
+    if (parse_options(&argv[0], &p, error)) return 1;
     char **args = NULL;
     size_t count = 0;
     for (size_t i = 1; i < argc; ++i)
@@ -627,6 +676,156 @@ COMMAND(run_with_command)
     args[count] = NULL;
     int status = execute(&p, args, result, error);
     free(args);
+    return status;
+}
+
+/* run-all runs at most this many jobs at once; each holds four descriptors. */
+enum { MAX_RUNNING = 64 };
+
+/* A run-all job: how to run it, and its state once started. */
+typedef struct {
+    process p;
+    char **args;
+    spawned s;
+    int state;      /* 0 waiting, 1 running, 2 done. */
+    int watch;      /* The child's pidfd, or -1. */
+    double deadline, kill_at; /* kill_at is 0 until SIGTERM is sent. */
+    int killed, timed_out;
+    cmdr_value result;
+} job;
+
+/* Signal j's program, or its group. */
+static void signal_job(const job *j, int sig)
+{
+    kill(j->p.group ? -j->s.child : j->s.child, sig);
+}
+
+/* Run jobs, at most width at once, setting each one's result. On an error or
+ * an interrupt, start no more and stop the running ones, as wait_child does. */
+static int run_jobs(job *jobs, size_t n, size_t width, char **error)
+{
+    int w = -1, wake = wake_fds(&w), status = 0, wake_watched = wake >= 0;
+    int *watch = cmdr_realloc(NULL, width, sizeof(*watch));
+    int kq = -1, ticking = 0; /* ticking: some child has no watch, so poll. */
+#if defined(CMDR_KQUEUE)
+    struct kevent change;
+    kq = kqueue();
+    EV_SET(&change, wake, EVFILT_READ, EV_ADD, 0, 0, NULL);
+    if (kq >= 0 && wake >= 0 && kevent(kq, &change, 1, NULL, 0, NULL)) wake_watched = 0;
+    if (kq < 0) ticking = 1;
+#endif
+    size_t next = 0, running = 0;
+    for (;;) {
+        int stopping = status || cmdr_interrupted();
+        for (; !stopping && running < width && next < n; ++next, ++running) {
+            job *j = &jobs[next];
+            if (spawn_process(&j->p, j->args, &j->s, error)) {
+                status = stopping = 1;
+                break;
+            }
+            j->state = 1;
+            j->deadline = j->p.timeout > 0 ? now() + j->p.timeout : INFINITY;
+#if defined(CMDR_KQUEUE)
+            EV_SET(&change, j->s.child, EVFILT_PROC, EV_ADD, NOTE_EXIT, 0, NULL);
+            if (kq >= 0 && kevent(kq, &change, 1, NULL, 0, NULL)) ticking = 1;
+            j->watch = -1;
+#else
+            j->watch = watch_exit(j->s.child, -1);
+            if (j->watch < 0) ticking = 1;
+#endif
+        }
+        double t = now(), until = INFINITY;
+        size_t watched = 0;
+        for (size_t i = 0; i < next; ++i) {
+            job *j = &jobs[i];
+            if (j->state != 1) continue;
+            int wait_status;
+            pid_t waited = waitpid(j->s.child, &wait_status, WNOHANG);
+            if (waited < 0 && errno == EINTR) waited = 0;
+            if (waited) {
+                if (j->watch >= 0) close(j->watch);
+                j->state = 2;
+                --running;
+                if (waited < 0) {
+                    if (!status) cmdr_error(error, "run-all %s: wait: %s", j->args[0], strerror(errno));
+                    close_streams(&j->s);
+                    status = 1;
+                } else if (!status && !cmdr_interrupted()) {
+                    status = collect(&j->p, j->args[0], &j->s, wait_status, j->timed_out,
+                                     &j->result, error);
+                } else {
+                    close_streams(&j->s);
+                }
+                continue;
+            }
+            if (!j->kill_at && (status || cmdr_interrupted() || t >= j->deadline)) {
+                j->timed_out = !status && !cmdr_interrupted();
+                signal_job(j, SIGTERM);
+                j->kill_at = t + 1;
+            } else if (j->kill_at && !j->killed && t >= j->kill_at) {
+                signal_job(j, SIGKILL);
+                j->killed = 1;
+            }
+            double due = j->killed ? INFINITY : j->kill_at ? j->kill_at : j->deadline;
+            if (due < until) until = due;
+            if (j->watch >= 0) watch[watched++] = j->watch;
+        }
+        stopping = status || cmdr_interrupted();
+        if (!running && (stopping || next == n)) break;
+        if (running < width && next < n && !stopping) continue;
+        /* Once interrupted, the wake pipe stays readable; stop watching it. */
+        int use_wake = wake_watched && !cmdr_interrupted() ? wake : -1;
+#if defined(CMDR_KQUEUE)
+        if (kq >= 0 && wake_watched && use_wake < 0) {
+            EV_SET(&change, wake, EVFILT_READ, EV_DELETE, 0, 0, NULL);
+            kevent(kq, &change, 1, NULL, 0, NULL);
+            wake_watched = 0;
+        }
+        if (!ticking) watch[0] = kq, watched = 1;
+#endif
+        double left = until - now(); /* Negative would make poll wait forever. */
+        block(watch, ticking ? 0 : watched, use_wake, left > 0 ? left : 0);
+        settle(use_wake, w);
+    }
+    if (kq >= 0) close(kq);
+    free(watch);
+    if (!status && cmdr_interrupted()) status = cmdr_error(error, "run-all: interrupted");
+    return status;
+}
+
+/* JOBS is a list of jobs, each OPTIONS PROGRAM [ARG ...] as run-with takes. */
+COMMAND(run_all_command)
+{
+    static const char usage[] = "usage: run-all JOBS N";
+    if (argc != 2 || argv[0].kind != CMDR_LIST) return cmdr_error(error, usage);
+    double width;
+    if (require_text("run-all", &argv[1], error) || cmdr_number(argv[1].text, &width, error)) return 1;
+    if (width != floor(width) || width < 1 || width > MAX_RUNNING)
+        return cmdr_error(error, "run-all: N must be a whole number from 1 to %d", MAX_RUNNING);
+    size_t n = argv[0].count;
+    job *jobs = cmdr_realloc(NULL, n ? n : 1, sizeof(*jobs));
+    int status = 0;
+    for (size_t i = 0; i < n; ++i) jobs[i] = (job){.p = {.name = "run-all", .input = "", .capture = 1}};
+    for (size_t i = 0; i < n && !status; ++i) {
+        const cmdr_value *spec = &argv[0].items[i];
+        size_t count = 0;
+        if (spec->kind != CMDR_LIST || spec->count < 2 || spec->items[0].kind != CMDR_LIST)
+            status = cmdr_error(error, "run-all: job %zu is not OPTIONS PROGRAM [ARG ...]", i + 1);
+        else if (!(status = parse_options(&spec->items[0], &jobs[i].p, error)))
+            for (size_t k = 1; k < spec->count && !status; ++k)
+                status = add_args("run-all", &spec->items[k], &jobs[i].args, &count, error);
+        if (!status && !count)
+            status = cmdr_error(error, "run-all: job %zu is not OPTIONS PROGRAM [ARG ...]", i + 1);
+        if (!status) jobs[i].args[count] = NULL;
+    }
+    if (!status) status = run_jobs(jobs, n, (size_t)width, error);
+    if (!status) *result = (cmdr_value){.kind = CMDR_LIST};
+    for (size_t i = 0; i < n; ++i) {
+        if (!status) cmdr_push(result, jobs[i].result);
+        else cmdr_free(&jobs[i].result);
+        free(jobs[i].args);
+    }
+    free(jobs);
     return status;
 }
 
@@ -1440,6 +1639,7 @@ static const cmdr_command effects[] = {
     TEXT("run", "run PROGRAM [ARG ...]", "Run an executable, returning stdout", run_command),
     TEXT("run-in", "run-in TEXT PROGRAM [ARG ...]", "Run with TEXT on stdin, returning stdout", run_in_command),
     VALUE("run-with", "run-with OPTIONS PROGRAM [ARG ...]", "Run with dir, stdin, timeout, and group; return STATUS STDOUT STDERR", run_with_command),
+    VALUE("run-all", "run-all JOBS N", "Run jobs, each OPTIONS PROGRAM [ARG ...], N at once; return each one's STATUS STDOUT STDERR", run_all_command),
 };
 
 static const cmdr effect_table = {effects, sizeof(effects) / sizeof(effects[0]), NULL};
