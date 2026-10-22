@@ -19,6 +19,9 @@ int main(void)
     /* With ten groups, \9 is the last a replacement can name. */
     expect(table, "re.replace abcdefghij '(a)(b)(c)(d)(e)(f)(g)(h)(i)(j)' '\\9\\1'", "ia");
     expect(table, "re.all aXbXc X | join ,", "X,X");
+    /* Later searches add a group, so \9 would name the tenth. */
+    expect_error(table, "re.all aa '(a)(b)?(c)?(d)?(e)?(f)?(g)?(h)?(i)?\\9'", 1,
+                 "re.all: \\9 in REGEX is not supported");
     puts("test_re: ok");
     return 0;
 }

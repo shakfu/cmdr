@@ -23,7 +23,7 @@ Quote REGEX and REPLACEMENT in single quotes, which keep backslashes.
 
 Empty matches follow sed's `s///g`: `re.replace abc 'x*' -` is `-a-b-c-`. `re.all` and `re.split` skip them, so `x*` cannot split between every byte.
 
-Each search after the first sees the byte before it, so `\<` and `\b` hold mid-text: `re.replace aa '\<a' X` is `Xa`. This needs `REG_STARTEND` (glibc, BSD, macOS); without it, those anchors also match where each later search starts.
+The word anchors `\<`, `\>`, `\b`, and `\B` work on glibc and macOS. Each search after the first sees the byte before it, so they hold mid-text: `re.replace aa '\<a' X` is `Xa`. Backreferences `\1` to `\8` work in REGEX; `\9` is an error.
 
 REGEX goes to `regcomp` unchecked, so a hostile one can take gigabytes or minutes; see [Text and numbers](../../README.md#text-and-numbers).
 

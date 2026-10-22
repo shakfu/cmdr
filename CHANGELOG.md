@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## [0.3.0]
+
 ### Added
 
 - `run-all JOBS N` runs programs in parallel, N at once, and returns each one's `STATUS STDOUT STDERR` in input order. It is for fan-out, such as one `aw` workflow on several projects, each in its own cmdr process. A command over child processes, not threads: a session and its blocks are not safe to share between threads, and the time goes into the programs. See `docs/dev/async.md`.
@@ -10,6 +12,8 @@
 
 - A tree-sitter grammar, `editors/tree-sitter-cmdr`, with highlight queries. Helix and Zed now highlight cmdr: `editors/helix` builds the grammar, and `editors/zed` is an extension. `make test` runs the grammar's corpus and highlight tests and parses every `.cmdr` file in the repository, if the `tree-sitter` CLI is installed.
 
+- `docs/grammar.ebnf` gives cmdr's syntax in W3C EBNF, following the parser in `src/cmdr.c`.
+
 - `cmdr_scan` splits source into tokens with the parser's rules, tolerating unfinished input. The REPL's highlighting and completion, `-c` line splitting, and line continuation now use it. Each had its own copy of the quoting rules, and copies drift from the parser.
 
 ### Removed
@@ -17,6 +21,12 @@
 - `scripts/flatten_with.py`. It converted this repository's `with` blocks to `$(...)`, and that conversion is done.
 
 ### Fixed
+
+- `aw`'s llama agent failed when a file under the target was removed while it scanned for links, as a build in progress does: `find` exited 1 on the missing path. A path removed mid-scan is now ignored; any other `find` error still fails the scan, which keeps links from being followed.
+
+- On macOS, `run`, `run-with`, and `run-all` could wait up to an hour for a program that had already exited. The kqueue that watches for its exit can miss the event when the program exits as the watch is registered; `make test` hit this in about one parallel run in 15. Each wait on the kqueue now lasts at most a second before checking the program again with `waitpid`.
+
+- On macOS, `re` and `matches` lacked the word anchors `\<`, `\>`, `\b`, and `\B`, which need `REG_ENHANCED` there. Searches after the first in `re.all`, `re.split`, and `re.replace` also lost the byte before them: macOS's `REG_STARTEND` treats the search start as the start of the string, so `\<a` matched every `a` in `aa`. Each later search now starts one byte early, with REGEX wrapped as `.(REGEX)`, which works on any libc. Backreferences are renumbered past the new group, so `\9` in REGEX is now an error.
 
 - `first`, `last`, and `nth` failed on an item that is a list, such as one `run-all` result: they ended in `join ""`, which takes only text. They now return the item whole, through `fold`.
 

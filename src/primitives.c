@@ -395,6 +395,11 @@ static void block(const int *watch, size_t n, int wake, double seconds)
 {
     if (seconds > 3600) seconds = 3600; /* Callers loop; this bounds the conversions. */
     if (!n && seconds > 0.01) seconds = 0.01;
+#if defined(CMDR_KQUEUE)
+    /* macOS can drop NOTE_EXIT for a child that exits as it is registered;
+     * callers' waitpid then reaps it within a second. */
+    if (n && seconds > 1) seconds = 1;
+#endif
     struct timespec limit = {(time_t)seconds, (long)((seconds - (time_t)seconds) * 1e9)};
 #if defined(CMDR_KQUEUE)
     struct kevent event;
@@ -878,7 +883,11 @@ COMMAND(matches_command)
 {
     if (argc != 2) return cmdr_error(error, "usage: matches TEXT REGEX");
     regex_t re;
+#ifdef REG_ENHANCED /* macOS: the word anchors \< \> \b \B, as glibc has. */
+    int rc = regcomp(&re, argv[1].text, REG_EXTENDED | REG_ENHANCED | REG_NOSUB);
+#else
     int rc = regcomp(&re, argv[1].text, REG_EXTENDED | REG_NOSUB);
+#endif
     if (rc) {
         char message[128];
         regerror(rc, &re, message, sizeof(message));

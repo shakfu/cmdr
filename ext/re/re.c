@@ -1,5 +1,6 @@
 /* POSIX extended regular expressions, matched bytewise, as matches does. */
 #define _POSIX_C_SOURCE 200809L
+#define _DARWIN_C_SOURCE /* REG_ENHANCED */
 #include "cmdr.h"
 
 #include <errno.h>
@@ -11,9 +12,16 @@
     static int name(const cmdr *repl, void *user, size_t argc, const cmdr_value *argv, \
                     cmdr_value *result, char **error)
 
+/* macOS has the word anchors \< \> \b \B only with REG_ENHANCED; glibc always. */
+#ifdef REG_ENHANCED
+#define FLAGS (REG_EXTENDED | REG_ENHANCED)
+#else
+#define FLAGS REG_EXTENDED
+#endif
+
 static int compile(regex_t *re, const char *pattern, const char *name, char **error)
 {
-    int rc = regcomp(re, pattern, REG_EXTENDED);
+    int rc = regcomp(re, pattern, FLAGS);
     if (!rc) return 0;
     char message[128];
     regerror(rc, re, message, sizeof(message));
@@ -82,6 +90,47 @@ static void expand(FILE *out, const char *replacement, const char *base, const r
             fwrite(base + m[*p - '0'].rm_so, 1, (size_t)(m[*p - '0'].rm_eo - m[*p - '0'].rm_so), out);
 }
 
+/* ".(PATTERN)", with backreferences renumbered past the new group, or NULL if
+ * PATTERN uses \9. A search after the first starts a byte early and "."
+ * consumes it, so \< and \b see that byte. REG_STARTEND cannot do this on
+ * macOS, which treats rm_so as the start of the string. */
+static char *wrap(const char *pattern)
+{
+    char *w = cmdr_realloc(NULL, strlen(pattern) + 4, 1), *q = w;
+    *q++ = '.';
+    *q++ = '(';
+    for (const char *p = pattern; *p;) {
+        if (*p == '[') { /* A bracket expression, which has no escapes. */
+            const char *e = p + 1;
+            if (*e == '^') ++e;
+            if (*e == ']') ++e;
+            while (*e && *e != ']')
+                if (*e == '[' && e[1] && strchr(":.=", e[1])) {
+                    char d = e[1];
+                    for (e += 2; *e && !(*e == d && e[1] == ']'); ++e) continue;
+                    if (*e) e += 2;
+                } else {
+                    ++e;
+                }
+            if (*e) ++e;
+            memcpy(q, p, (size_t)(e - p));
+            q += e - p;
+            p = e;
+        } else if (*p == '\\' && p[1] >= '1' && p[1] <= '9') {
+            if (p[1] == '9') { free(w); return NULL; }
+            *q++ = '\\';
+            *q++ = (char)(p[1] + 1);
+            p += 2;
+        } else {
+            if (*p == '\\' && p[1]) *q++ = *p++;
+            *q++ = *p++;
+        }
+    }
+    *q++ = ')';
+    *q = '\0';
+    return w;
+}
+
 enum mode { ALL, SPLIT, REPLACE };
 
 /* Visit matches left to right. ALL and SPLIT skip empty matches; REPLACE
@@ -90,36 +139,38 @@ enum mode { ALL, SPLIT, REPLACE };
 static int scan(enum mode mode, const char *name, const char *text, const char *pattern,
                 const char *replacement, cmdr_value *result, char **error)
 {
-    regex_t re;
+    regex_t re, later;
     if (compile(&re, pattern, name, error)) return 1;
     if (replacement && check_replacement(replacement, re.re_nsub, error)) {
         regfree(&re);
         return 1;
     }
-    regmatch_t m[10];
+    char *wrapped = wrap(pattern);
+    int bad = wrapped ? compile(&later, wrapped, name, error)
+                      : cmdr_error(error, "%s: \\9 in REGEX is not supported", name);
+    free(wrapped);
+    if (bad) {
+        regfree(&re);
+        return 1;
+    }
+    regmatch_t m[10], w[11];
     size_t n = re.re_nsub < 9 ? re.re_nsub + 1 : 10;
     char *out_text = NULL;
     size_t out_size = 0;
     FILE *out = NULL;
     if (mode == REPLACE && !(out = open_memstream(&out_text, &out_size))) {
         regfree(&re);
+        regfree(&later);
         return cmdr_error(error, "%s: %s", name, strerror(errno));
     }
     if (mode != REPLACE) *result = (cmdr_value){.kind = CMDR_LIST};
     const char *p = text, *piece = text, *previous = NULL;
-    int flags = 0, rc;
-#ifdef REG_STARTEND
-    regoff_t length = (regoff_t)strlen(text);
-#endif
+    int rc;
     for (;;) {
-        const char *base = p;
-#ifdef REG_STARTEND /* Search all of text from p, so \< and \b see the byte before p. */
-        base = text;
-        m[0].rm_so = (regoff_t)(p - text);
-        m[0].rm_eo = length;
-        flags |= REG_STARTEND;
-#endif
-        if ((rc = regexec(&re, base, n, m, flags))) break;
+        const char *base = p == text ? text : p - 1;
+        if (p == text) rc = regexec(&re, text, n, m, 0);
+        else if (!(rc = regexec(&later, base, n + 1, w, 0))) memcpy(m, w + 1, n * sizeof(*m));
+        if (rc) break;
         const char *start = base + m[0].rm_so, *stop = base + m[0].rm_eo;
         if (start != stop || (mode == REPLACE && start != previous)) {
             if (mode == ALL) cmdr_push(result, cmdr_text(start, (size_t)(stop - start)));
@@ -132,9 +183,9 @@ static int scan(enum mode mode, const char *name, const char *text, const char *
         }
         if (!*stop) break;
         p = stop == start ? stop + 1 : stop;
-        flags = REG_NOTBOL;
     }
     regfree(&re);
+    regfree(&later);
     if (rc && rc != REG_NOMATCH) {
         if (out) { fclose(out); free(out_text); }
         else cmdr_free(result);

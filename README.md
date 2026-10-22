@@ -472,7 +472,7 @@ Put definitions in a file, such as `ext.cmdr`, and run `load ext.cmdr` in a sess
 
 `help` lists the commands. It returns text, so `help | filter map` works, and `help NAME` shows one command's full usage and documentation.
 
-- The prompt is light green, except on terminals without escape sequences (`dumb`, `cons25`, `emacs`). The first line names the version and prelude, such as `cmdr 0.2.0 (prelude: standard)`.
+- The prompt is light green, except on terminals without escape sequences (`dumb`, `cons25`, `emacs`). The first line names the version and prelude, such as `cmdr 0.3.0 (prelude: standard)`.
 
 - Highlighting colors commands, references, blocks, sub-pipelines, and strings. Names bound by `as` are bold magenta, where bound and where used. Unknown commands are red.
 

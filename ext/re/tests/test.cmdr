@@ -21,3 +21,10 @@ not "abc" { re.find '[0-9]' }
 re.replace aa '\<a' X | equals Xa
 re.all aaa '\<a' | count | equals 1
 re.all foofoo '\bfoo' | count | equals 1
+re.all aaa '\Ba' | count | equals 2
+re.all "a a" '\<a' | count | equals 2
+re.all aaa '^a' | count | equals 1
+# Later searches keep backreferences and bracket expressions.
+re.all xaabb '(.)\1' | join , | equals aa,bb
+re.replace "a]b]" '[]]' - | equals a-b-
+re.all "a1b2" '[[:digit:]]' | join , | equals 1,2

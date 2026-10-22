@@ -29,3 +29,7 @@ aw.target-path . | try { (t) aw.workflow $t feature $(list plan@dry) } rejected 
 list | aw.check-sandbox | check { equals 0 } "empty probe was rejected"
 list true | aw.check-sandbox | check { equals 0 } "passing probe was rejected"
 list false | try { (a) aw.check-sandbox $a } rejected | check { equals rejected } "failing probe was accepted"
+
+# tracked's link scan tolerates a path removed mid-scan, and no other find error.
+list 1 "./a\n" "find: ./x: No such file or directory\n" | aw.find-out | check { equals "./a\n" } "a path removed mid-scan failed the scan"
+try { () list 1 "./a\n" "find: ./y: Permission denied\n" | aw.find-out } rejected | check { equals rejected } "a find error was ignored"

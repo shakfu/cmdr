@@ -17,6 +17,7 @@ def agent-timeout { () env.or AW_TIMEOUT 1800 } "Seconds an agent may run"
 def opt { (f v) or $v { (x) list $f $(nonempty $x) } $(list) } "Return FLAG VALUE as a list, or an empty list if VALUE is empty"
 def by-mode { (mode r w) or { () equals $mode read | $r } $w } "Return R for read mode, else W"
 def agent-out { (res) nth $res 1 | with { (s) nth $res 3 | lines | tail 20 | unlines | with { (e) check $s { equals 0 } $(format "failed with status {}:\n{}" $s $e) } } | $res | nth 2 } "Return stdout of a run-with result, or fail with its stderr"
+def find-out { (res) nth $res 3 | lines | keep { not { ends-with ": No such file or directory" } } | with { (e) check $e { empty } $(format "find failed:\n{}" $(unlines $e)) } | $res | nth 2 } "Stdout of a run-with result of find; fail on any error but a path removed during the scan"
 def launch { (args d) agent-timeout | with { (t) list dir $d timeout $t | run-with $args } | agent-out } "Run ARGS in DIR with the agent timeout"
 text '{"sandbox":{"enabled":true,"autoAllowBashIfSandboxed":true,"allowUnsandboxedCommands":false,"failIfUnavailable":true}}' | as claude-sandbox "Settings for claude: Bash may write only in DIR, and never retries unsandboxed"
 def sandbox-probe { () list bwrap --unshare-net --ro-bind / / --dev /dev true | with { (p) run uname | trim | with { (os) or { () equals $os Linux | $p } $(list) } } } "An argv that fails where claude's sandbox cannot run commands; empty off Linux"
@@ -28,7 +29,7 @@ def llama-url { () env.or AW_LLAMA_URL http://127.0.0.1:8080 } "Base URL of llam
 def llama-max { () env.or AW_LLAMA_MAX_BYTES 200000 } "Largest project text sent to llama"
 def git-in { (d args) list dir $d | run-with git -c core.fsmonitor=false -c core.hooksPath=/dev/null $args | agent-out } "Run git ARGS in DIR without its fsmonitor or hooks; return stdout"
 def edit-prefixes { (p) split $p / | fold $(list) { (acc c) push $acc $(or { () last $acc | path-join $c } $c) } } "a, a/b, a/b/c for a/b/c"
-def tracked { (d) git-in $d $(list ls-files) | lines | with { (fs) list dir $d | run-with find . -path ./.git -prune -o ! -type f ! -type d -print | agent-out | lines | each { strip-prefix ./ } | with { (bad) keep $fs { (f) edit-prefixes $f | keep { (x) any $bad { equals $x } } | empty } } } } "Tracked files in DIR that are regular files on disk, not through a link"
+def tracked { (d) git-in $d $(list ls-files) | lines | with { (fs) list dir $d | run-with env LC_ALL=C find . -path ./.git -prune -o ! -type f ! -type d -print | find-out | lines | each { strip-prefix ./ } | with { (bad) keep $fs { (f) edit-prefixes $f | keep { (x) any $bad { equals $x } } | empty } } } } "Tracked files in DIR that are regular files on disk, not through a link"
 def llama-file { (d f) format "### {}\n```\n{}\n```" $f $(path-join $d $f | try { read } "(unreadable)") }
 def llama-context { (d) tracked $d | each { (f) llama-file $d $f } | join "\n\n" | with { (c) llama-max | with { (n) check $c { length | le $n } "project exceeds AW_LLAMA_MAX_BYTES" | $c } } } "Every tracked file in DIR, under a heading"
 text "\n\nGive each change as an edit block: the file path alone on a line, then\n<<<<<<< SEARCH\nlines copied exactly from the file\n=======\nthe lines that replace them\n>>>>>>> REPLACE\nSEARCH must match exactly one place in the file. An empty SEARCH creates a new file." | as llama-format

@@ -590,6 +590,7 @@ class Commands(unittest.TestCase):
         cases = [
             ("text abc123 | matches '^[a-z]+[0-9]+$'", 'abc123\n'),
             ("list a1 b c2 | keep { matches '[0-9]' } | join ,", 'a1,c2\n'),
+            ("list ab ba | keep { matches '\\<a' } | join ,", 'ab\n'),
             ("list 10 9 100 -1 2.5 | sort-n | join ,", '-1,2.5,9,10,100\n'),
             ('text "10\n9\n" | sort-n', '9\n10\n'),
             ("list | sort-n | count", '0\n'),
@@ -1785,11 +1786,16 @@ class Commands(unittest.TestCase):
         return os.waitstatus_to_exitcode(status), out
 
     def assert_gone(self, pid):
-        """Fail, and stop it, if process pid is still running."""
-        try:
-            os.kill(pid, 0)
-        except ProcessLookupError:
-            return
+        """Fail, and stop it, if process pid still runs 2 s after cmdr exits."""
+        # A signalled process dies when next scheduled, and an orphan's zombie
+        # lasts until init reaps it; both pass kill(pid, 0).
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline:
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                return
+            time.sleep(0.02)
         os.kill(pid, 9)
         self.fail(f"process {pid} outlived cmdr")
 
