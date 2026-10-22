@@ -3,7 +3,7 @@ BUILD_DIR ?= build
 CMAKE ?= cmake
 BUILD_TYPE ?= RelWithDebInfo
 
-.PHONY: all configure check test clean
+.PHONY: all configure check test check-format clean
 
 all: configure
 	$(CMAKE) --build $(BUILD_DIR)
@@ -15,6 +15,10 @@ check: all
 	$(CMAKE) --build $(BUILD_DIR) --target check
 
 test: check
+
+# Tracked .cmdr files must be in flat layout. The highlight fixture is not a program.
+check-format: all
+	git ls-files '*.cmdr' | grep -v '/test/highlight/' | xargs $(BUILD_DIR)/cmdr --fmt --flat --check
 
 clean:
 	rm -rf $(BUILD_DIR)
