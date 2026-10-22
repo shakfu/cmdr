@@ -26,7 +26,7 @@ include(GNUInstallDirs)
 # libcmdr.a and libcmdr.so: the interpreter, primitives, sessions, and
 # prelude, for embedding. Both use one set of position-independent objects.
 option(CMDR_SHARED "Build libcmdr.so as well as libcmdr.a" ON)
-add_library(cmdr_objects OBJECT src/cmdr.c src/primitives.c src/session.c
+add_library(cmdr_objects OBJECT src/cmdr.c src/format.c src/primitives.c src/session.c
             "${CMAKE_CURRENT_BINARY_DIR}/prelude.c")
 set_target_properties(cmdr_objects PROPERTIES POSITION_INDEPENDENT_CODE ON)
 # run-with's dir needs a chdir file action: POSIX.1-2024's, or the older _np

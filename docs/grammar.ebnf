@@ -13,35 +13,35 @@
 
 /* ---- 1. Scripts and line joining ------------------------------------- */
 
-/* A script, REPL input, or -c text is physical lines. The last line may lack
- * NL. */
+/* A script, REPL input, or -c text is physical lines, joined alike. The last
+ * line may lack NL. */
 script        ::= ( line NL )* line?
 line          ::= blank | comment_line | source_line
-blank         ::= WS*
-comment_line  ::= WS* comment
+blank         ::= S*
+comment_line  ::= S* comment
 
-/* Joining: while the last token of the accumulated text is "|", the next
- * physical line is appended, NL included. Blank and comment lines are dropped
- * while joining. The joined text is parsed as body. A "|" inside an unclosed
- * block also continues the line. */
+/* Joining: while the accumulated text ends in "|", or a block or
+ * sub-pipeline is open outside quotes, the next physical line is appended
+ * after a NL. Blank and comment lines are dropped while joining. The joined
+ * text is parsed as body. A quote never spans lines. */
 source_line   ::= body
-
-/* -c also lets quotes, blocks, and sub-pipelines span lines. Scripts and the
- * REPL do not: an unjoined NL inside them ends the line. */
 
 /* ---- 2. Pipelines ---------------------------------------------------- */
 
-/* A comment is recognized only where a body starts. "#" elsewhere is word
+/* A comment is "#" where a line or a body starts. "#" elsewhere is word
  * text: `text a #b` prints "a #b". */
-body          ::= WS* comment? WS* pipeline? WS*
 comment       ::= "#" [^#xA]*
 
-pipeline      ::= stage ( WS* "|" WS* stage )*
+/* NL goes only next to "|" or at a body's ends, so a missing "|" is an
+ * error, not an argument. */
+gap           ::= ( S | NL | NL S* comment )*
+body          ::= S* comment? gap ( pipeline gap )?
+pipeline      ::= stage ( gap "|" gap stage )*
 
 /* A stage of one reference returns that value. Otherwise the first lexeme is
  * the command name and must be a word. */
 stage         ::= reference
-                | word ( WS+ argument )*
+                | word ( S+ argument )*
 
 argument      ::= word | reference | block | sub_pipeline
 
@@ -103,7 +103,8 @@ default       ::= '""' | "''" | [^ #x9#xA#xB#xC#xD'"\|${})]+
 
 /* ---- 6. Terminals ---------------------------------------------------- */
 
-WS            ::= [ #x9#xA#xB#xC#xD]    /* C isspace; NL only after joining */
+WS            ::= S | NL                /* C isspace */
+S             ::= [ #x9#xB#xC#xD]       /* WS but NL */
 NL            ::= #xA
 Char          ::= [#x1-#xFF]            /* any byte except NUL */
 

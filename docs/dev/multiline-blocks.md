@@ -1,6 +1,6 @@
 # Multi-line blocks
 
-Proposal, 2026-10-22, against `f62783d`. Not implemented. Open questions are listed at the end.
+Decision record, 2026-10-22, against `2e7feb7`. Implemented as proposed, with the decisions under [Decisions](#decisions) and the formatter under [Formatter](#formatter).
 
 ## Background
 
@@ -99,7 +99,7 @@ Here `| keep` and `| empty` belong to `(f)`, not `(bad)`. Moving one `}` changes
 - `}` stands on its own line, aligned with the line that opened the block.
 - Short blocks stay inline: `{ strip-prefix ./ }`.
 
-A `cmdr fmt` built on `cmdr_scan` could enforce this later. It is out of scope here.
+`cmdr --fmt` produces this layout; see [Formatter](#formatter).
 
 ## Failure modes
 
@@ -115,13 +115,23 @@ A `cmdr fmt` built on `cmdr_scan` could enforce this later. It is out of scope h
 | `src/cmdr.c` | `parse` enforces rule 2 and skips comment lines after an allowed newline |
 | `src/main.c` | `line_length` and its splitter go; `-c` joins as scripts do |
 | `editors/tree-sitter-cmdr/grammar.js` | Newlines allowed inside `block` and `sub_pipeline` per rule 2; corpus tests |
-| `editors/vim`, `editors/sublime`, `editors/vscode` | Check that block and comment patterns work across lines |
+| `editors/vim`, `editors/sublime`, `editors/vscode` | None: their block regions span lines, and comments match `^\s*#` |
 | `README.md`, `docs/grammar.ebnf` | "Words and lines" section; the grammar's joining and `body` rules |
 
 The REPL already prints `...> ` while a pipeline continues.
 
-## Open questions
+## Decisions
 
-1. **Trailing `|` inside blocks.** Allow both leading and trailing, or leading only? Both is one rule shared with top level. Leading only gives one style inside blocks.
-2. **Quotes spanning lines.** For: long prompt text, such as `llama-format` in aw, written with `\n`. Against: an unclosed quote joins the rest of the file. If quotes stay single-line, `-c` loses its quoted newline, which CHANGELOG 0.2.0 kept.
-3. **`$(...)` bodies.** Rule 2 covers them. Multi-line sub-pipelines may work against the README's advice to keep effects and long flows out of arguments. Restrict rule 1 to `{`?
+1. **Trailing `|` inside blocks:** allowed, as is leading. One rule for blocks and the top level, where a trailing `|` continues a line. The formatter emits leading `|` inside blocks.
+2. **Quotes spanning lines:** not allowed, in any mode. A quote open at a line's end stops joining, so the error is `unclosed quote` on that line, not a block that takes the rest of the file. `cmdr -c $'text "a\nb"'` worked in 0.2.0 and is now an error; write `\n`.
+3. **`$(...)` bodies:** same rule as blocks.
+
+## Formatter
+
+`cmdr --fmt [--flat] [--check | -w] [FILE ...]`, over `cmdr_format` in `src/format.c`. A flag, not a `fmt` subcommand: `cmdr fmt` already runs a script named `fmt`.
+
+- **Splitting.** Pipelines end where `cmdr_join` ends them, so the formatter and the interpreter agree on every pipeline. Each is checked with `cmdr_check_syntax`, which compiles without resolving names. A file with a syntax error is refused, since formatting it could turn an error into a running program.
+- **Multiline.** A pipeline that fits in 100 columns stays on one line. Otherwise its blocks and sub-pipelines break, last first, until the line up to the first broken one fits; a block holding a comment always breaks. A top-level pipeline whose lines still overflow, or with comments between its stages, puts each stage on a line after a trailing `|`. Words are never wrapped, so a long quoted string still overflows.
+- **Flat.** Each pipeline on one line. Comments inside it move above it, in order; flat has no other place for them.
+- **Blank lines** inside a pipeline are dropped. Top-level blank lines are kept.
+- **Safety.** Before returning, `cmdr_format` re-reads its output and requires the same pipelines with the same tokens, and the same comments in the same order. Otherwise it fails and returns nothing.

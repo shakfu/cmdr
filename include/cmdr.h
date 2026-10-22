@@ -105,6 +105,8 @@ int cmdr_call(const cmdr *repl, const char *name, size_t argc,
               const cmdr_value *argv, cmdr_value *result, char **error);
 /* Evaluate a line, which has no input. */
 int cmdr_eval(const cmdr *repl, const char *line, cmdr_value *result, char **error);
+/* Check a line's syntax, nested blocks included, without resolving names. */
+int cmdr_check_syntax(const char *line, char **error);
 /* Call a block with argv bound to its parameters; omitted trailing
  * parameters take their defaults. Its commands resolve where it was written,
  * not in the caller. */
@@ -117,9 +119,10 @@ int cmdr_block_arity(const cmdr_value *block, size_t argc, char **error);
 /* Write value as cmdr_render does, ending with a newline, and flush. Nothing
  * is written for none. Returns nonzero if writing failed. */
 int cmdr_print(const cmdr_value *value, FILE *out);
-/* Append line, n bytes, to the pipeline being read. Return 1 if the pipeline
- * continues: its last nonblank character is an unescaped '|', or the line is
- * blank or a comment inside a continuation and was skipped. */
+/* Append line, n bytes, to the pipeline being read, after a newline if the
+ * text so far lacks one. Return 1 if the pipeline continues: its last token is
+ * '|', a block or sub-pipeline is open outside quotes, or the line is blank or
+ * a comment inside a continuation and was skipped. */
 int cmdr_join(char **pipeline, size_t *used, const char *line, size_t n);
 
 /* A token of cmdr source, as cmdr_scan reports it. A parameter's default is
@@ -144,6 +147,12 @@ typedef struct {
  * non-NULL, sets quoted[i] to 1 for each byte in quotes or escapes, else 0. */
 void cmdr_scan(const char *text, size_t n, unsigned char *quoted,
                int (*visit)(const cmdr_token *, void *), void *data);
+
+/* Format cmdr source. Multiline breaks each block or sub-pipeline that does
+ * not fit in 100 columns into one stage per line; flat writes each pipeline
+ * on one line, moving its comments above it. Returns 0 and sets *out, which
+ * the caller frees, or nonzero with *error naming the first bad line. */
+int cmdr_format(const char *source, int flat, char **out, char **error);
 
 /* help, def, and load in front of a host's command table. A session is used
  * by one thread at a time; sessions on different threads are independent. */

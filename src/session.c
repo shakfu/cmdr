@@ -844,9 +844,17 @@ int cmdr_print(const cmdr_value *value, FILE *out)
     return fflush(out) != 0;
 }
 
-static int last_token(const cmdr_token *t, void *data)
+typedef struct {
+    cmdr_token last;
+    size_t depth; /* Open blocks and sub-pipelines. */
+} join_state;
+
+static int track(const cmdr_token *t, void *data)
 {
-    *(cmdr_token *)data = *t;
+    join_state *js = data;
+    js->last = *t;
+    if (t->kind == CMDR_TOKEN_BLOCK_OPEN || t->kind == CMDR_TOKEN_SUB_OPEN) ++js->depth;
+    else if (t->kind == CMDR_TOKEN_BLOCK_CLOSE || t->kind == CMDR_TOKEN_SUB_CLOSE) --js->depth;
     return 0;
 }
 
@@ -859,12 +867,20 @@ static int blank_or_comment(const char *line)
 int cmdr_join(char **pipeline, size_t *used, const char *line, size_t n)
 {
     if (*used && blank_or_comment(line)) return 1;
-    *pipeline = cmdr_realloc(*pipeline, *used + n + 1, 1);
+    /* A newline separates joined lines, so they cannot run together. */
+    int gap = *used && (*pipeline)[*used - 1] != '\n';
+    *pipeline = cmdr_realloc(*pipeline, *used + gap + n + 1, 1);
+    if (gap) (*pipeline)[(*used)++] = '\n';
     memcpy(*pipeline + *used, line, n);
     (*pipeline)[*used += n] = '\0';
-    cmdr_token last = {CMDR_TOKEN_COMMENT, 0, 0, 0, 0};
-    cmdr_scan(*pipeline, *used, NULL, last_token, &last);
-    return last.kind == CMDR_TOKEN_PIPE;
+    if (!*used) return 0;
+    join_state js = {{CMDR_TOKEN_COMMENT, 0, 0, 0, 0}, 0};
+    unsigned char *quoted = cmdr_realloc(NULL, *used, 1);
+    cmdr_scan(*pipeline, *used, quoted, track, &js);
+    /* A quote ends on its line: an open one is an error, not a continuation. */
+    int in_quote = (*pipeline)[*used - 1] == '\n' && quoted[*used - 1];
+    free(quoted);
+    return js.last.kind == CMDR_TOKEN_PIPE || (js.depth && !in_quote);
 }
 
 /* Push a layer of the script commands, reading user's path and arguments. */

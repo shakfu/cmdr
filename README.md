@@ -82,7 +82,19 @@ List commands accept lists or newline-separated text; in text, a final newline e
 
 - A line ending in an unescaped `|` continues on the next line. Blank and comment lines inside a continuation are skipped.
 
-- Quotes and blocks cannot span lines otherwise. Write a newline as `\n`, and end a line inside a block with `|` to continue it. A block's first stage starts on the line that opens the block: `{ (s) |` alone is an error.
+- A block or sub-pipeline may span lines. Inside one, a line break goes next to `|` or the brackets: after `{`, its parameters, or `$(`, before or after `|`, and before `}` or `)`. A break anywhere else is an error, so a missing `|` cannot turn the next stage into arguments. Comment and blank lines inside are skipped.
+
+    ```text
+    def shout { (s)
+        # Upper case, then emphasis.
+        upper $s
+        | concat !
+    }
+    ```
+
+- Quotes cannot span lines. Write a newline as `\n`.
+
+- Indentation has no meaning; a `|` belongs to the innermost open block. `cmdr --fmt` lays out each block that does not fit in 100 columns as above: each `|` under its block's first stage, and `}` under the line that opened it.
 
 ### Sub-pipelines
 
@@ -490,7 +502,8 @@ Syntax highlighting for Vim, Sublime Text, VS Code, Helix, and Zed is in [editor
 |-|-|
 | `cmdr` | The REPL, or one pipeline per line from piped stdin, continuing after errors |
 | `cmdr FILE [ARG ...]` | A script, stopping at its first failing line |
-| `cmdr -c 'PIPELINE'` | PIPELINE, or several lines in turn, stopping at the first failure: `cmdr -c $'import fs\nfs.exists /tmp'`. A newline inside quotes or a block stays in its pipeline |
+| `cmdr -c 'PIPELINE'` | PIPELINE, or several lines in turn, as a script's, stopping at the first failure: `cmdr -c $'import fs\nfs.exists /tmp'` |
+| `cmdr --fmt [--flat] [--check \| -w] [FILE ...]` | Prints each FILE formatted, or stdin with no FILE or `-`. Multiline by default; `--flat` puts each pipeline on one line and moves its comments above it. `-w` rewrites changed files; `--check` lists them and exits 1. Refuses a file with a syntax error |
 | `cmdr --user ...` | Any of the above with `~/.cmdr/prelude.cmdr` in place of the standard prelude; an error if the file is missing |
 | `cmdr --version` | Prints the version |
 
@@ -584,6 +597,8 @@ if (cmdr_session_prelude(session, &error)
 - For a console without file or process access, pass 0 and end the host's table in `&cmdr_pure`, which omits `read`, `write`, `append`, `files`, `run`, and `run-in`.
 
 - `cmdr_scan` splits source into tokens with the parser's rules, tolerating unfinished input, for a host's highlighting or completion. The REPL highlights with it.
+
+- `cmdr_check_syntax` checks a pipeline's syntax without resolving names. `cmdr_format` returns source in the multiline or flat layout of `cmdr --fmt`; a host that generates cmdr can emit flat lines and format them for people.
 
 - `cmdr_session_add_module` makes a C table importable as a module, and `cmdr_session_add_source` makes a script's source one. They are found before files. Extensions are part of the executable, not `libcmdr`, so a host adds its own this way.
 

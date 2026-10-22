@@ -7,6 +7,7 @@
 #include <signal.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #ifdef CMDR_EDITOR
@@ -71,35 +72,6 @@ static char **add_extensions(cmdr_session *session)
     return names;
 }
 
-typedef struct {
-    const char *text;
-    size_t depth; /* Open blocks and sub-pipelines. */
-    size_t end;   /* Past the last token outside them. */
-    int split;    /* A newline outside them precedes the current token. */
-} splitter;
-
-static int split_line(const cmdr_token *t, void *data)
-{
-    splitter *sp = data;
-    if (!sp->depth && memchr(sp->text + sp->end, '\n', t->start - sp->end)) return sp->split = 1;
-    if (t->kind == CMDR_TOKEN_BLOCK_OPEN || t->kind == CMDR_TOKEN_SUB_OPEN) ++sp->depth;
-    else if (t->kind == CMDR_TOKEN_BLOCK_CLOSE || t->kind == CMDR_TOKEN_SUB_CLOSE) --sp->depth;
-    if (!sp->depth) sp->end = t->end;
-    return 0;
-}
-
-/* Where -c's current line ends: the first newline outside quotes, blocks, and
- * sub-pipelines, so a quoted newline stays in its pipeline, as it did when -c
- * took one. */
-static size_t line_length(const char *text)
-{
-    splitter sp = {text, 0, 0, 0};
-    cmdr_scan(text, strlen(text), NULL, split_line, &sp);
-    if (sp.depth && !sp.split) return strlen(text); /* An unclosed block runs to the end. */
-    const char *newline = strchr(text + sp.end, '\n');
-    return newline ? (size_t)(newline - text) : strlen(text);
-}
-
 /* Evaluate -c's lines in turn, as a script's, stopping at the first failure. */
 static int evaluate_lines(cmdr_session *session, const char *text)
 {
@@ -107,15 +79,94 @@ static int evaluate_lines(cmdr_session *session, const char *text)
     size_t used = 0;
     int status = 0;
     while (!status && *text) {
-        size_t n = line_length(text);
+        size_t n = strcspn(text, "\n");
+        n += text[n] == '\n';
         if (!cmdr_join(&pipeline, &used, text, n) && used) {
             used = 0;
             status = evaluate(session, pipeline);
         }
-        text += n + (text[n] == '\n');
+        text += n;
     }
     if (!status && used) status = evaluate(session, pipeline); /* Ends in a continuation. */
     free(pipeline);
+    return status;
+}
+
+/* The whole of in, or NULL on a read error. */
+static char *read_all(FILE *in)
+{
+    size_t used = 0, capacity = 4096, n;
+    char *text = cmdr_realloc(NULL, capacity, 1);
+    while ((n = fread(text + used, 1, capacity - used - 1, in)) > 0)
+        if ((used += n) + 1 == capacity) text = cmdr_realloc(text, capacity *= 2, 1);
+    text[used] = '\0';
+    if (ferror(in)) { free(text); return NULL; }
+    return text;
+}
+
+/* Replace path's contents through a temporary file and a rename, so a failed
+ * write leaves it whole. */
+static int replace_file(const char *path, const char *text)
+{
+    struct stat info;
+    char *temp = cmdr_realloc(NULL, strlen(path) + sizeof(".XXXXXX"), 1);
+    sprintf(temp, "%s.XXXXXX", path);
+    int fd = stat(path, &info) ? -1 : mkstemp(temp), status = fd < 0;
+    if (!status) {
+        FILE *out = fdopen(fd, "w");
+        status = !out || fchmod(fd, info.st_mode & 07777) || fputs(text, out) < 0;
+        if (out ? fclose(out) : close(fd)) status = 1;
+        if (status || rename(temp, path)) { status = 1; unlink(temp); }
+    }
+    if (status) fprintf(stderr, "cmdr: %s: %s\n", path, strerror(errno));
+    free(temp);
+    return status;
+}
+
+/* cmdr --fmt: print each FILE formatted, rewrite it with -w, or with --check
+ * list those that would change. No FILE, or -, is stdin. */
+static int format_main(int argc, char **argv)
+{
+    int flat = 0, write = 0, check = 0, i = 1;
+    for (; i < argc && argv[i][0] == '-' && argv[i][1]; ++i) {
+        if (!strcmp(argv[i], "--flat")) flat = 1;
+        else if (!strcmp(argv[i], "-w")) write = 1;
+        else if (!strcmp(argv[i], "--check")) check = 1;
+        else break;
+    }
+    int stdin_only = i == argc;
+    for (int k = i; k < argc; ++k)
+        if (argv[k][0] == '-' && (argv[k][1] || write)) stdin_only = -1;
+    if ((write && check) || stdin_only < 0 || (write && stdin_only)) {
+        fprintf(stderr, "usage: cmdr --fmt [--flat] [--check | -w] [FILE ...]\n");
+        return 2;
+    }
+    int status = 0;
+    for (int k = i; k < argc || (stdin_only && k == i); ++k) {
+        const char *path = stdin_only || !strcmp(argv[k], "-") ? NULL : argv[k];
+        FILE *in = path ? fopen(path, "r") : stdin;
+        char *source = in ? read_all(in) : NULL, *out, *error;
+        if (in && in != stdin) fclose(in);
+        if (!source) {
+            fprintf(stderr, "cmdr: %s: %s\n", path ? path : "stdin", strerror(errno));
+            status = 1;
+            continue;
+        }
+        if (cmdr_format(source, flat, &out, &error)) {
+            fprintf(stderr, "cmdr: %s:%s\n", path ? path : "stdin", error);
+            free(error);
+            status = 1;
+        } else if (check) {
+            if (strcmp(source, out)) { puts(path ? path : "stdin"); status = 1; }
+        } else if (write) {
+            if (strcmp(source, out) && replace_file(path, out)) status = 1;
+        } else if (fputs(out, stdout) < 0) {
+            status = 1;
+        }
+        free(source);
+        free(out);
+    }
+    if (fflush(stdout)) status = 1;
     return status;
 }
 
@@ -196,13 +247,15 @@ int main(int argc, char **argv)
         printf("cmdr %s\n", CMDR_VERSION);
         return 0;
     }
+    if (argc > 1 && !strcmp(argv[1], "--fmt")) return format_main(argc - 1, argv + 1);
     /* --user replaces the standard prelude with ~/.cmdr/prelude.cmdr. */
     int user = argc > 1 && !strcmp(argv[1], "--user");
     argc -= user;
     argv += user;
     int command = argc > 1 && !strcmp(argv[1], "-c");
     if ((command && argc != 3) || (!command && argc > 1 && argv[1][0] == '-')) {
-        fprintf(stderr, "usage: cmdr [--user] [-c PIPELINE | FILE [ARG ...]]\n       cmdr --version\n");
+        fprintf(stderr, "usage: cmdr [--user] [-c PIPELINE | FILE [ARG ...]]\n"
+                        "       cmdr --fmt [--flat] [--check | -w] [FILE ...]\n       cmdr --version\n");
         return 2;
     }
     char *path = NULL;

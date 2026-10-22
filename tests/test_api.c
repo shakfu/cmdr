@@ -466,6 +466,51 @@ static void scanning(void)
     kinds(line, quoted, 0);
     const char *want = "00111110011";
     for (size_t i = 0; i < strlen(line); ++i) CHECK(quoted[i] == want[i] - '0');
+    /* A comment is '#' where a line starts, in a block too. */
+    CHECK(!strcmp(kinds("each {\n  # note\n  upper\n}", NULL, 0), "c{#c}"));
+    CHECK(!strcmp(kinds("each { text a #b }", NULL, 0), "c{cww}"));
+}
+
+/* Lines join while a '|' ends them, or a block or sub-pipeline is open
+ * outside quotes; a newline separates them. */
+static void joining(void)
+{
+    char *pipeline = NULL;
+    size_t used = 0;
+    CHECK(cmdr_join(&pipeline, &used, "each { (x)", 10));
+    CHECK(cmdr_join(&pipeline, &used, "  # note", 8));
+    CHECK(cmdr_join(&pipeline, &used, "  text $x", 9));
+    CHECK(cmdr_join(&pipeline, &used, "  | upper $(", 12));
+    CHECK(cmdr_join(&pipeline, &used, "    text b", 10));
+    CHECK(!cmdr_join(&pipeline, &used, ") }\n", 4));
+    CHECK(!strcmp(pipeline, "each { (x)\n  text $x\n  | upper $(\n    text b\n) }\n"));
+    used = 0;
+    CHECK(!cmdr_join(&pipeline, &used, "each { text \"a\n", 15));
+    used = 0;
+    CHECK(!cmdr_join(&pipeline, &used, "text a\\\n", 8));
+    free(pipeline);
+}
+
+static void syntax_and_format(void)
+{
+    char *error, *out;
+    /* Names are not resolved; structure is checked. */
+    CHECK(!cmdr_check_syntax("nonesuch $nobody { (x) also-none }", &error));
+    CHECK(cmdr_check_syntax("each { text a\nupper }", &error));
+    CHECK(!strcmp(error, "newline inside a pipeline must be next to '|'"));
+    free(error);
+    CHECK(cmdr_check_syntax("each { (b=1 a) upper }", &error));
+    free(error);
+    CHECK(!cmdr_format("list a |\n  each { (x) upper $x }\n", 0, &out, &error));
+    CHECK(!strcmp(out, "list a | each { (x) upper $x }\n"));
+    free(out);
+    CHECK(!cmdr_format("", 1, &out, &error));
+    CHECK(!strcmp(out, ""));
+    free(out);
+    CHECK(cmdr_format("text a\ntext {b\n", 1, &out, &error));
+    CHECK(!out);
+    CHECK(!strcmp(error, "2: unclosed '{'"));
+    free(error);
 }
 
 int main(void)
@@ -482,6 +527,8 @@ int main(void)
     interrupts();
     interrupt_waits();
     scanning();
+    joining();
+    syntax_and_format();
     puts("test_api: ok");
     return 0;
 }

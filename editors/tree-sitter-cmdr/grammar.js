@@ -18,6 +18,10 @@ module.exports = grammar({
   // free between tokens.
   extras: _ => [/[ \t\r]/],
 
+  // After a body's stage, a newline may lead to '|' or to the body's end;
+  // only the token after the gap decides.
+  conflicts: $ => [[$.body_pipeline]],
+
   rules: {
     // Lines, each a pipeline, a comment, or blank; the last may lack a newline.
     source_file: $ => seq(
@@ -87,12 +91,23 @@ module.exports = grammar({
     // $name, or $MODULE.NAME for a module's binding.
     reference: _ => token(seq('$', NAME, repeat(seq('.', NAME)))),
 
+    // A body may span lines: a newline, or a comment line, goes next to '|'
+    // or at either end, so a missing '|' is an error, as in cmdr.
     block: $ => seq(
       '{',
       optional($.parameters),
-      optional($.pipeline),
+      optional($._gap),
+      optional(seq(alias($.body_pipeline, $.pipeline), optional($._gap))),
       '}',
     ),
+
+    // Inside a body, a line may also start with '|'.
+    body_pipeline: $ => seq(
+      $.stage,
+      repeat(seq(optional($._gap), '|', optional($._gap), $.stage)),
+    ),
+
+    _gap: $ => repeat1(choice($._newline, $.comment)),
 
     // "(a b)" directly after '{'. _ is a parameter the block ignores; a
     // parameter after the first may have a default, one word or "".
@@ -106,7 +121,13 @@ module.exports = grammar({
     default: _ => token.immediate(/[^\s)]*/),
 
     // An argument whose value is PIPELINE's result.
-    sub_pipeline: $ => seq('$(', $.pipeline, ')'),
+    sub_pipeline: $ => seq(
+      '$(',
+      optional($._gap),
+      alias($.body_pipeline, $.pipeline),
+      optional($._gap),
+      ')',
+    ),
 
     // Literal parentheses, which balance, so $(text (a)) ends at its own ')'.
     parenthesized: $ => seq('(', repeat($._argument), ')'),

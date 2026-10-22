@@ -14,7 +14,24 @@
 
 - `docs/grammar.ebnf` gives cmdr's syntax in W3C EBNF, following the parser in `src/cmdr.c`.
 
+- **Multi-line blocks.** A block or sub-pipeline may span lines in scripts, the REPL, and `-c`. A line break inside one goes next to `|`, after the opening bracket or parameters, or before the closing bracket; anywhere else it is an error, so a forgotten `|` cannot pass the next stage as arguments. Comment and blank lines inside are skipped. Newlines next to `|` over newlines as whitespace, which `-c` had: it ran `{ text x` / `upper }` as `text x upper`. See [docs/dev/multiline-blocks.md](docs/dev/multiline-blocks.md).
+
+  ```text
+  def shout { (s)
+      upper $s
+      | concat !
+  }
+  ```
+
+- `cmdr --fmt [--flat] [--check | -w] [FILE ...]` formats scripts. Multiline breaks each block that does not fit in 100 columns, one stage per line; `--flat` puts each pipeline on one line and moves its comments above it. It refuses a file with a syntax error, and checks that its output keeps every pipeline's tokens and every comment. `cmdr_format` and `cmdr_check_syntax` give hosts the same.
+
 - `cmdr_scan` splits source into tokens with the parser's rules, tolerating unfinished input. The REPL's highlighting and completion, `-c` line splitting, and line continuation now use it. Each had its own copy of the quoting rules, and copies drift from the parser.
+
+### Changed
+
+- `-c` splits lines as a script does. A newline inside quotes is now an error, `unclosed quote`, where 0.2.0 kept it in the pipeline; write `\n`. The same rule holds for `cmdr_eval` and `cmdr_session_eval`: a newline must be next to `|` or a body's ends.
+
+- `cmdr_join` continues while a block or sub-pipeline is open outside quotes, and puts a newline between lines that lack one.
 
 ### Removed
 

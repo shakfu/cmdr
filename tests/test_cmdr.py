@@ -67,16 +67,16 @@ class Commands(unittest.TestCase):
 
     def test_lists(self):
         cases = [
-            ('list "a\nb" "c" | count', '2\n'),
+            ('list "a\\nb" "c" | count', '2\n'),
             ('list "" "" | count', '2\n'),
             ('list | count', '0\n'),
             ('list "hello world" "a|b" "" | map upper | join ,', 'HELLO WORLD,A|B,\n'),
             ('split "pear,apple,pear,banana" , | sort | uniq | join ", "', 'apple, banana, pear\n'),
             ('split "a,,b," , | join :', 'a::b:\n'),
-            ('split "a\nb,c" , | count', '2\n'),
+            ('split "a\\nb,c" , | count', '2\n'),
             ('split "" , | count', '0\n'),
             ('split , , | count', '2\n'),
-            ('list "a\nb" "a\nc" "d" | filter a | count', '2\n'),
+            ('list "a\\nb" "a\\nc" "d" | filter a | count', '2\n'),
             ('list a b c | head 2 | tail 1 | join :', 'b\n'),
             ('list a b c | head 0 | count', '0\n'),
             ('list a b c | tail 0 | count', '0\n'),
@@ -94,19 +94,19 @@ class Commands(unittest.TestCase):
 
     def test_legacy_lines(self):
         cases = [
-            ('text "b\na\na\n" | sort | uniq | upper', 'A\nB\n'),
+            ('text "b\\na\\na\\n" | sort | uniq | upper', 'A\nB\n'),
             # Text in gives text out; lists stay lists.
-            ('text "b\na" | sort | length', '4\n'),
-            ('text "a\nb\n" | filter b | head 1 | tail 1 | length', '2\n'),
+            ('text "b\\na" | sort | length', '4\n'),
+            ('text "a\\nb\\n" | filter b | head 1 | tail 1 | length', '2\n'),
             ('list b a | sort | count', '2\n'),
-            ('text "a\n\nb\n" | count', '3\n'),
-            ('text "\n" | count', '1\n'),
+            ('text "a\\n\\nb\\n" | count', '3\n'),
+            ('text "\\n" | count', '1\n'),
             ('text "" | count', '0\n'),
-            ('text "a\nb" | count', '2\n'),
-            ('text "a\nb" | map upper | join ,', 'A,B\n'),
-            ('text "a\n\nb\n" | lines | map length | join ,', '1,0,1\n'),
+            ('text "a\\nb" | count', '2\n'),
+            ('text "a\\nb" | map upper | join ,', 'A,B\n'),
+            ('text "a\\n\\nb\\n" | lines | map length | join ,', '1,0,1\n'),
             ('text "" | lines | count', '0\n'),
-            ('list "a\nb" c | lines | count', '2\n'),
+            ('list "a\\nb" c | lines | count', '2\n'),
         ]
         for source, expected in cases:
             with self.subTest(source=source):
@@ -152,7 +152,7 @@ class Commands(unittest.TestCase):
             self.assertEqual(path.read_text(), 'one')
             self.run_line(f'text two | append {q} | length', '3\n')
             self.assertEqual(path.read_text(), 'onetwo')
-            self.run_line(f'list "a\nb" c | write {q} | count', '2\n')
+            self.run_line(f'list "a\\nb" c | write {q} | count', '2\n')
             self.assertEqual(path.read_text(), 'a\nb\nc\n')
             self.run_line(f'list x y | write {q} | map upper | join ,', 'X,Y\n')
             self.assertEqual(path.read_text(), 'x\ny\n')
@@ -279,8 +279,8 @@ class Commands(unittest.TestCase):
             ("list a b c | keep { (s v) equals $s $v } b | join ,", 'b\n'),
             ("list | keep { nonempty } | count", '0\n'),
             # keep preserves the input representation, like filter.
-            ('text "x\ny\n" | keep { equals y }', 'y\n'),
-            ('text "x\ny\n" | keep { equals y } | length', '2\n'),
+            ('text "x\\ny\\n" | keep { equals y }', 'y\n'),
+            ('text "x\\ny\\n" | keep { equals y } | length', '2\n'),
             ("list 'a b' c | each { (s p) text $p $s } pre | join ,", 'pre a b,pre c\n'),
             ("list a b | each { (s) upper $s | text [ $s ] } | join ,", 'A [ a ],B [ b ]\n'),
             ("list a b | each { (s) list $s } | count", '2\n'),
@@ -333,8 +333,8 @@ class Commands(unittest.TestCase):
             ('text a | equals b', "equals: a differs from b"),
             # Descriptions quote text that is not one word, and stay short.
             ("text 'a b' | equals ''", "equals: 'a b' differs from ''"),
-            ('text "x\ny" | equals ' + 'z' * 40, "differs from " + 'z' * 32 + "..."),
-            ('text "x\ny" | equals x', r"equals: 'x\ny' differs from x"),
+            ('text "x\\ny" | equals ' + 'z' * 40, "differs from " + 'z' * 32 + "..."),
+            ('text "x\\ny" | equals x', r"equals: 'x\ny' differs from x"),
             ('list a b c d e f g | not { nonempty }', 'not: [a, b, c, d, e, ... 7 items] satisfies'),
             ('text acd | contains b', "contains: b not found in acd"),
             ('list a | equals a', "command 'equals' expects text"),
@@ -361,8 +361,8 @@ class Commands(unittest.TestCase):
             ("list a b | keep { (x) text $(equals $x a) } | join ,", 'a\n'),
             # Arithmetic over two computed values.
             ("add $(list a b c | count) $(list d e | count)", '5\n'),
-            # -c splits lines outside sub-pipelines, as outside blocks and quotes.
-            ("text $(text\na) b\ntext c", 'a b\nc\n'),
+            # A sub-pipeline may span lines, broken next to '|' or its brackets.
+            ("text $(\n  text a\n  | upper\n) b\ntext c", 'A b\nc\n'),
         ]
         for source, expected in cases:
             with self.subTest(source=source):
@@ -399,7 +399,7 @@ class Commands(unittest.TestCase):
             ("list a b | concat", 'ab\n'),
             ("concat '### ' x $(list y z)", '### xyz\n'),
             ("concat | length", '0\n'),
-            ('text "a\nb\n" | concat | length', '4\n'),
+            ('text "a\\nb\\n" | concat | length', '4\n'),
             # format: {} in order, {N} by position from 0, {{ and }} are braces.
             ("format '{} has {} lines.' notes.txt 3", 'notes.txt has 3 lines.\n'),
             ("format '{0} and {0}, {1}' a b", 'a and a, b\n'),
@@ -541,7 +541,7 @@ class Commands(unittest.TestCase):
             ("repeat 0 { () text x } | count", '0\n'),
             ("repeat 2 { () list a b } | count", '2\n'),
             ("text 2 | repeat { () text y } | join ,", 'y,y\n'),
-            ('text "1\n2\n" | fold 0 { (a x) add $a $x }', '3\n'),
+            ('text "1\\n2\\n" | fold 0 { (a x) add $a $x }', '3\n'),
             # or falls back only on a mismatch.
             ("text a | or { equals b } other", 'other\n'),
             ("text a | or { equals a } other", 'a\n'),
@@ -592,7 +592,7 @@ class Commands(unittest.TestCase):
             ("list a1 b c2 | keep { matches '[0-9]' } | join ,", 'a1,c2\n'),
             ("list ab ba | keep { matches '\\<a' } | join ,", 'ab\n'),
             ("list 10 9 100 -1 2.5 | sort-n | join ,", '-1,2.5,9,10,100\n'),
-            ('text "10\n9\n" | sort-n', '9\n10\n'),
+            ('text "10\\n9\\n" | sort-n', '9\n10\n'),
             ("list | sort-n | count", '0\n'),
             ("list | sort | count", '0\n'),
         ]
@@ -727,7 +727,7 @@ class Commands(unittest.TestCase):
             ('list Makefile .bashrc a.b/c | each { (p) or { () path-ext $p } - } | join ,', '-,-,-\n'),
             ('list a.txt Makefile .gitignore | path-has-ext | join ,', 'a.txt\n'),
             ('list a b | last', 'b\n'),
-            ('text "a\nb\n" | last', 'b\n'),
+            ('text "a\\nb\\n" | last', 'b\n'),
             ('help | filter "Return the last item" | count', '1\n'),
             ('list a b c | first', 'a\n'),
             ('list a b c | nth 2', 'b\n'),
@@ -735,7 +735,7 @@ class Commands(unittest.TestCase):
             ('list $(list a b) $(list c d) | first | join ,', 'a,b\n'),
             ('list $(list a b) $(list c d) | last | join ,', 'c,d\n'),
             ('list $(list a b) $(list c d) e | nth 2 | join ,', 'c,d\n'),
-            ('text "x\ny\n" | first', 'x\n'),
+            ('text "x\\ny\\n" | first', 'x\n'),
             ("list '' b | first | length", '0\n'),
             ('list a b c | init | join ,', 'a,b\n'),
             ('list a b c | rest | join ,', 'b,c\n'),
@@ -757,7 +757,7 @@ class Commands(unittest.TestCase):
             ('list 3 10 2 | min', '2\n'),
             ('list 1 2 | mean', '1.5\n'),
             ('list 1 5 11 | keep { between 2 10 } | join ,', '5\n'),
-            ('text "a  b\tc\nd" | words | join ,', 'a,b,c,d\n'),
+            ('text "a  b\tc\\nd" | words | join ,', 'a,b,c,d\n'),
             ('text foobar | starts-with foo', 'foobar\n'),
             ('text foo | starts-with ""', 'foo\n'),
             ('text foobar | ends-with bar', 'foobar\n'),
@@ -1073,6 +1073,155 @@ class Commands(unittest.TestCase):
             self.assertEqual(result.stdout, 'a\n')
             self.assertIn(f'{script}:2: unknown command: bogus', result.stderr)
 
+    def test_multiline_blocks(self):
+        # A block or sub-pipeline spans lines; its newlines go next to '|' or
+        # its brackets, and its comment and blank lines are skipped.
+        source = ("def shout { (s)\n"
+                  "    # loud\n"
+                  "\n"
+                  "    upper $s\n"
+                  "    | concat !\n"
+                  "} \"Shout S\"\n"
+                  "shout hi\n"
+                  "list a b | each { (x) text $x |\n"
+                  "    upper } | join ,\n"
+                  "text $(\n"
+                  "    list a b\n"
+                  "    | count\n"
+                  ") items\n"
+                  "help shout\n")
+        expected = 'HI!\nA,B\n2 items\nshout S\nShout S\n'
+        result = self.run_input(source)
+        self.assertEqual((result.returncode, result.stdout), (0, expected), result.stderr)
+        self.run_line(source, expected)
+        # A missing '|' is an error, not an argument.
+        for source in ['list a | each { text x\nupper }', 'text $(text\na)',
+                       'list a | each {\n  text x\n  # note\n  upper\n}']:
+            with self.subTest(source=source):
+                self.run_line(source, error="newline inside a pipeline must be next to '|'")
+        # Quotes stay on their line, in -c too.
+        self.run_line('text "a\nb"', error='unclosed quote')
+        self.run_line('list a | each { text "a\n  b" }', error='unclosed quote')
+        # An unclosed block takes the rest of the script, and its error names
+        # the line that opened it.
+        with tempfile.TemporaryDirectory() as directory:
+            script = Path(directory) / 'script.cmdr'
+            script.write_text('text a\nlist b | each {\n  upper\ntext c\n')
+            result = subprocess.run([str(BINARY), str(script)], capture_output=True,
+                                    text=True, timeout=20)
+            self.assertEqual(result.stdout, 'a\n')
+            self.assertIn(f"{script}:2: unclosed '{{'", result.stderr)
+
+    def test_format(self):
+        source = ("#!/usr/bin/env cmdr\n"
+                  "# A long def.\n"
+                  "\n"
+                  "def tracked { (d) git-in $d $(list ls-files) | lines | with { (fs) list dir $d | "
+                  "run-with find . -print | lines | each { strip-prefix ./ } | with { (bad) keep $fs "
+                  "{ (f) edit-prefixes $f | keep { (x) any $bad { equals $x } } | empty } } } } \"Doc\"\n"
+                  "text a |\n"
+                  "  # between\n"
+                  "  upper\n"
+                  "list a | each {\n"
+                  "    # inside\n"
+                  "    upper\n"
+                  "}\n")
+        multiline = ("#!/usr/bin/env cmdr\n"
+                     "# A long def.\n"
+                     "\n"
+                     "def tracked { (d)\n"
+                     "    git-in $d $(list ls-files)\n"
+                     "    | lines\n"
+                     "    | with { (fs)\n"
+                     "        list dir $d\n"
+                     "        | run-with find . -print\n"
+                     "        | lines\n"
+                     "        | each { strip-prefix ./ }\n"
+                     "        | with { (bad)\n"
+                     "            keep $fs { (f) edit-prefixes $f | keep { (x) any $bad { equals $x } } "
+                     "| empty }\n"
+                     "        }\n"
+                     "    }\n"
+                     "} \"Doc\"\n"
+                     "text a |\n"
+                     "    # between\n"
+                     "    upper\n"
+                     "list a | each {\n"
+                     "    # inside\n"
+                     "    upper\n"
+                     "}\n")
+        flat = ("#!/usr/bin/env cmdr\n"
+                "# A long def.\n"
+                "\n"
+                "def tracked { (d) git-in $d $(list ls-files) | lines | with { (fs) list dir $d | "
+                "run-with find . -print | lines | each { strip-prefix ./ } | with { (bad) keep $fs "
+                "{ (f) edit-prefixes $f | keep { (x) any $bad { equals $x } } | empty } } } } \"Doc\"\n"
+                "# between\n"
+                "text a | upper\n"
+                "# inside\n"
+                "list a | each { upper }\n")
+        # Flat moves comments out of pipelines, so multiline cannot restore them.
+        flat_multiline = multiline.split('text a |')[0] + ("# between\n"
+                                                            "text a | upper\n"
+                                                            "# inside\n"
+                                                            "list a | each { upper }\n")
+        for args, given, want in [([], source, multiline), ([], multiline, multiline),
+                                  ([], flat, flat_multiline), (['--flat'], source, flat),
+                                  (['--flat'], multiline, flat), (['--flat'], flat, flat)]:
+            with self.subTest(args=args, given=given):
+                result = self.run_input(given, '--fmt', *args)
+                self.assertEqual((result.returncode, result.stdout), (0, want), result.stderr)
+        # Both layouts run alike.
+        stub = 'def git-in { (d a) text "x\\ny" }\n'
+        outputs = {self.run_input(stub + text + 'tracked .\n').stdout for text in [source, multiline, flat]}
+        self.assertEqual(len(outputs), 1, outputs)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'a.cmdr'
+            path.write_text(source)
+            path.chmod(0o750)
+            check = subprocess.run([str(BINARY), '--fmt', '--check', str(path)],
+                                   capture_output=True, text=True, timeout=20)
+            self.assertEqual((check.returncode, check.stdout), (1, f'{path}\n'))
+            subprocess.run([str(BINARY), '--fmt', '-w', str(path)], check=True, timeout=20)
+            self.assertEqual(path.read_text(), multiline)
+            self.assertEqual(path.stat().st_mode & 0o777, 0o750)
+            self.assertEqual(os.listdir(directory), ['a.cmdr'])
+            check = subprocess.run([str(BINARY), '--fmt', '--check', str(path)],
+                                   capture_output=True, text=True, timeout=20)
+            self.assertEqual((check.returncode, check.stdout), (0, ''))
+            # A syntax error names its line and leaves the file alone.
+            path.write_text('text a\nlist a | each {\n  text x\n  upper\n}\n')
+            bad = subprocess.run([str(BINARY), '--fmt', '-w', str(path)],
+                                 capture_output=True, text=True, timeout=20)
+            self.assertEqual(bad.returncode, 1)
+            self.assertIn(f"{path}:2: newline inside a pipeline must be next to '|'", bad.stderr)
+            self.assertEqual(path.read_text(), 'text a\nlist a | each {\n  text x\n  upper\n}\n')
+        for args in [['-w'], ['--check', '-w', 'x'], ['--bogus'], ['-w', '-', 'x']]:
+            with self.subTest(args=args):
+                usage = subprocess.run([str(BINARY), '--fmt', *args], capture_output=True,
+                                       text=True, timeout=20)
+                self.assertEqual(usage.returncode, 2, usage.stderr)
+                self.assertIn('usage: cmdr --fmt', usage.stderr)
+
+    def test_format_repository(self):
+        # Every script formats in both layouts, which convert to each other.
+        # Highlight fixtures need not be valid programs.
+        scripts = sorted(p for p in ROOT.glob('**/*.cmdr')
+                         if not {'build', 'thirdparty', 'highlight'} & set(p.relative_to(ROOT).parts))
+        self.assertGreater(len(scripts), 20)
+        for path in scripts:
+            with self.subTest(script=str(path.relative_to(ROOT))):
+                layouts = {}
+                for args in [[], ['--flat']]:
+                    result = subprocess.run([str(BINARY), '--fmt', *args, str(path)],
+                                            capture_output=True, text=True, timeout=20)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    layouts[tuple(args)] = result.stdout
+                for args, want in layouts.items():
+                    for given in layouts.values():
+                        again = self.run_input(given, '--fmt', *args)
+                        self.assertEqual(again.stdout, want, again.stderr)
+
     def test_os_composition(self):
         self.run_line("run printf '%s' 'hello world' | upper", 'HELLO WORLD\n')
         self.run_line('text abc | run-in tr a-z A-Z', 'ABC\n')
@@ -1097,7 +1246,7 @@ class Commands(unittest.TestCase):
 
     def test_push(self):
         self.run_line('list a b | push c "d e" | join ,', 'a,b,c,d e\n')
-        self.run_line('text "a\nb\n" | push c | join ,', 'a,b,c\n')
+        self.run_line('text "a\\nb\\n" | push c | join ,', 'a,b,c\n')
         self.run_line('list | push | count', '0\n')
         # A list item stays one item, so fold can collect lists.
         self.run_line('list a | with { (xs) push $xs $xs } | count', '2\n')
@@ -1666,7 +1815,8 @@ class Commands(unittest.TestCase):
         # regular-expression tokens cannot require.
         rejected = ['text {a', 'text $(a', 'text "a', "text 'a", 'text a\\', '| a', 'text a |',
                     'text a | | b', 'text $_', 'text $', 'text $1', 'text $1x', '$x upper',
-                    '$(text a) b', '{ upper } x', 'each { (1x) upper }', 'each { (s }', 'text $()']
+                    '$(text a) b', '{ upper } x', 'each { (1x) upper }', 'each { (s }', 'text $()',
+                    'list a | each { text x\nupper }', 'text $(text\na)']
         accepted = ['text {a}b', 'text $(text a)b', 'text $a.', 'text $a..b']
         with tempfile.TemporaryDirectory() as directory:
             paths = {}
@@ -1907,6 +2057,7 @@ class Commands(unittest.TestCase):
         with tempfile.TemporaryDirectory() as home:
             keys = [b"tex\t a\r",               # Tab completes a command name.
                     b"text b |\r", b"  upper\r",   # A continued pipeline.
+                    b"list f | each {\r", b"  upper\r", b"}\r",  # An open block continues.
                     b"text c |\r", b"\x03",        # Ctrl-C drops the unfinished pipeline.
                     b"text d\r",
                     b"\x1b[A\r",                  # Up recalls the previous line.
@@ -1916,6 +2067,7 @@ class Commands(unittest.TestCase):
             self.assertEqual(code, 0, out)
             self.assertIn(b"\na\r\n", out)
             self.assertIn(b"\nB\r\n", out)
+            self.assertRegex(out, rb"\.\.\.> \}[^\n]*\nF\r\n")
             self.assertEqual(out.count(b"\nd\r\n"), 2, out)
             self.assertNotIn(b"c d", out)
             self.assertIn(b"\x1b[34mtext", out)
@@ -1923,7 +2075,8 @@ class Commands(unittest.TestCase):
             history = (Path(home) / '.cmdr_history').read_text().splitlines()
             # A continued pipeline is one entry. A repeat of the previous entry
             # and quit are not stored.
-            self.assertEqual(history, ['text a', 'text b |   upper', 'text d'])
+            self.assertEqual(history, ['text a', 'text b |   upper', 'list f | each {   upper }',
+                                       'text d'])
             self.assertFalse((Path(home) / '.cmdr_history.tmp').exists())
 
     @unittest.skipUnless(os.environ.get('CMDR_EDITOR') == '1', 'built without the editor')

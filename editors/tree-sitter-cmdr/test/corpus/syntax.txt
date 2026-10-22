@@ -283,3 +283,104 @@ text a |
 --------------------------------------------------------------------------------
 
 (source_file)
+
+================================================================================
+A block spans lines next to '|', with comment and blank lines
+================================================================================
+
+def shout { (s)
+    # loud
+
+    upper $s
+    | concat !
+} "Shout S"
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (pipeline
+    (stage
+      (word)
+      (word)
+      (block
+        (parameters
+          (parameter
+            (identifier)))
+        (comment)
+        (pipeline
+          (stage
+            (word)
+            (reference))
+          (stage
+            (word)
+            (word))))
+      (string
+        (string_content)))))
+
+================================================================================
+A line in a block may end with '|'
+================================================================================
+
+list a b | each { (x) text $x |
+    upper } | join ,
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (pipeline
+    (stage
+      (word)
+      (word)
+      (word))
+    (stage
+      (word)
+      (block
+        (parameters
+          (parameter
+            (identifier)))
+        (pipeline
+          (stage
+            (word)
+            (reference))
+          (stage
+            (word)))))
+    (stage
+      (word)
+      (word))))
+
+================================================================================
+A sub-pipeline spans lines
+================================================================================
+
+text $(
+    list a b
+    | count
+) items
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (pipeline
+    (stage
+      (word)
+      (sub_pipeline
+        (pipeline
+          (stage
+            (word)
+            (word)
+            (word))
+          (stage
+            (word))))
+      (word))))
+
+================================================================================
+A newline in a block must be next to '|'
+:error
+================================================================================
+
+list a | each { text x
+upper }
+
+--------------------------------------------------------------------------------
+
+(source_file)

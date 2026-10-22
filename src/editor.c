@@ -211,7 +211,8 @@ ssize_t editor_read(editor *ed, const char *prompt, char **line, size_t *capacit
 
 void editor_remember(editor *ed, const char *pipeline)
 {
-    /* Newlines are whitespace to the parser, so one line recalls the pipeline. */
+    /* A pipeline's newlines are next to '|' or a block's brackets, where a
+     * space means the same, so one line recalls it. */
     char *flat = cmdr_strndup(pipeline, strlen(pipeline));
     for (char *p = flat; *p; ++p)
         if (*p == '\n' || *p == '\r') *p = ' ';

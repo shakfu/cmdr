@@ -274,8 +274,10 @@ typedef struct {
 } lexeme;
 
 /* Index of the bracket that closes the one before s[i], or n. Brackets of the
- * same kind nest; quotes and escapes hide them. Sets *deep past MAX_CALL_DEPTH. */
-static size_t closing(const char *s, size_t i, size_t n, char open, char close, int *deep)
+ * same kind nest; quotes and escapes hide them. Sets *deep past MAX_CALL_DEPTH,
+ * and *in_quote if the text ends in a quote. */
+static size_t closing(const char *s, size_t i, size_t n, char open, char close, int *deep,
+                      int *in_quote)
 {
     char quote = 0;
     for (size_t depth = 1; i < n; ++i) {
@@ -286,6 +288,7 @@ static size_t closing(const char *s, size_t i, size_t n, char open, char close, 
         else if (c == open && ++depth > MAX_CALL_DEPTH) { *deep = 1; return n; }
         else if (c == close && !--depth) return i;
     }
+    *in_quote = quote != 0;
     return n;
 }
 
@@ -298,10 +301,12 @@ static lexeme read_lexeme(const char *s, size_t i, size_t n, char **text, unsign
     int sub = s[i] == '$' && i + 1 < n && s[i + 1] == '(';
     if (s[i] == '{' || sub) {
         lx.kind = sub ? LEX_SUB : LEX_BLOCK;
-        lx.close = sub ? closing(s, i + 2, n, '(', ')', &lx.deep)
-                       : closing(s, i + 1, n, '{', '}', &lx.deep);
+        int in_quote = 0;
+        lx.close = sub ? closing(s, i + 2, n, '(', ')', &lx.deep, &in_quote)
+                       : closing(s, i + 1, n, '{', '}', &lx.deep, &in_quote);
         lx.end = lx.close < n ? lx.close + 1 : n;
         if (lx.deep) lx.problem = sub ? "sub-pipelines nested too deeply" : "blocks nested too deeply";
+        else if (lx.close == n && in_quote) lx.problem = "unclosed quote";
         else if (lx.close == n) lx.problem = sub ? "unclosed '$('" : "unclosed '{'";
         else if (lx.end < n && !isspace((unsigned char)s[lx.end]) && s[lx.end] != '|')
             lx.problem = sub ? "expected a space after ')'" : "expected a space after '}'";
@@ -352,14 +357,11 @@ static int param_end(const char *p)
     return !*p || isspace((unsigned char)*p) || *p == ')';
 }
 
-/* Skip whitespace, then a comment: '#' where a pipeline starts, to the end of
- * its line. */
-static size_t skip_comment(const char *s, size_t i, size_t n, size_t *comment)
+/* End of the comment at s[i], i < n: its line's end. A comment is '#' where a
+ * line or a body starts; '#' elsewhere is text. */
+static size_t comment_end(const char *s, size_t i, size_t n)
 {
-    while (i < n && isspace((unsigned char)s[i])) ++i;
-    *comment = i;
-    if (i < n && s[i] == '#')
-        while (i < n && s[i] != '\n') ++i;
+    while (i < n && s[i] != '\n') ++i;
     return i;
 }
 
@@ -376,25 +378,40 @@ static int check_reference(const char *s, size_t n, char **error)
     return 0;
 }
 
-/* Parse the whole pipeline before performing any effects. */
+/* Parse the whole pipeline before performing any effects. A newline must be
+ * next to '|' or the body's ends, so a missing '|' is an error, not an
+ * argument; see docs/dev/multiline-blocks.md. */
 static int parse(const char *line, program *pg, char **error)
 {
     *pg = (program){.stages = cmdr_realloc(NULL, 1, sizeof(stage)), .count = 1};
     pg->stages[0] = (stage){0};
-    size_t n = strlen(line), comment, i = skip_comment(line, 0, n, &comment);
+    size_t n = strlen(line), i = 0;
+    int line_start = 1, newline = 0, after_lexeme = 0;
     while (i < n) {
         stage *s = &pg->stages[pg->count - 1];
         if (isspace((unsigned char)line[i])) {
-            ++i;
+            if (line[i++] == '\n') line_start = newline = 1;
             continue;
         }
+        if (line_start && line[i] == '#') {
+            i = comment_end(line, i, n);
+            continue;
+        }
+        line_start = 0;
         if (line[i] == '|') {
             if (!s->count) { cmdr_error(error, "expected a command before '|'"); goto fail; }
             pg->stages = cmdr_realloc(pg->stages, pg->count + 1, sizeof(stage));
             pg->stages[pg->count++] = (stage){0};
+            newline = after_lexeme = 0;
             ++i;
             continue;
         }
+        if (newline && after_lexeme) {
+            cmdr_error(error, "newline inside a pipeline must be next to '|'");
+            goto fail;
+        }
+        newline = 0;
+        after_lexeme = 1;
         char *text = NULL;
         lexeme lx = read_lexeme(line, i, n, &text, NULL);
         word w = {0};
@@ -442,15 +459,19 @@ static int emit(visitor visit, void *data, cmdr_token_kind kind, size_t start, s
  * read as compile_block reads them. Returns nonzero if visit stopped. */
 static int scan(const char *s, size_t i, size_t n, unsigned char *quoted, visitor visit, void *data)
 {
-    size_t comment;
-    i = skip_comment(s, i, n, &comment);
-    if (i > comment && emit(visit, data, CMDR_TOKEN_COMMENT, comment, i, 0, 0)) return 1;
-    int command = 1;
+    int command = 1, line_start = 1;
     while (i < n) {
         if (isspace((unsigned char)s[i])) {
-            ++i;
+            if (s[i++] == '\n') line_start = 1;
             continue;
         }
+        if (line_start && s[i] == '#') {
+            size_t start = i;
+            i = comment_end(s, i, n);
+            if (emit(visit, data, CMDR_TOKEN_COMMENT, start, i, 0, 0)) return 1;
+            continue;
+        }
+        line_start = 0;
         if (s[i] == '|') {
             if (emit(visit, data, CMDR_TOKEN_PIPE, i, i + 1, 0, 0)) return 1;
             command = 1;
@@ -619,7 +640,7 @@ static int compile_block(const cmdr *repl, const char *text, scope *sc, cmdr_cod
     if (!status) status = compile_body(repl, p, sc, &code->body, error);
     /* An unused parameter would never receive its argument, since only
      * { ... } pipes its input. */
-    for (size_t i = outer; !status && i < sc->count; ++i)
+    for (size_t i = outer; !status && repl && i < sc->count; ++i)
         if (!sc->used[i]) {
             status = cmdr_error(error, "parameter $%s is never used", sc->names[i]);
             dispose(&code->body);
@@ -635,7 +656,8 @@ static int compile_block(const cmdr *repl, const char *text, scope *sc, cmdr_cod
 }
 
 /* Parse line, resolve references to slots, compile nested blocks, and check
- * command names, so errors precede any effects. */
+ * command names, so errors precede any effects. With repl NULL, check syntax
+ * only: names are not resolved. */
 static int compile_body(const cmdr *repl, const char *line, scope *sc, program *pg,
                         char **error)
 {
@@ -646,7 +668,9 @@ static int compile_body(const cmdr *repl, const char *line, scope *sc, program *
             word *w = &s->words[j];
             size_t k = sc->count;
             while (w->ref && k && strcmp(sc->names[k - 1], w->text)) --k;
-            if (w->ref && !k) {
+            if (w->ref && !k && !repl) {
+                /* Syntax only. */
+            } else if (w->ref && !k) {
                 /* No block declares it: a binding, resolved where the line compiles. */
                 const cmdr_command *c = cmdr_find(repl, w->text);
                 if (c && c->value) {
@@ -684,7 +708,7 @@ static int compile_body(const cmdr *repl, const char *line, scope *sc, program *
                        : s->words[0].block ? "block" : "sub-pipeline; write the pipeline itself");
             goto fail;
         }
-        if (!cmdr_find(repl, s->words[0].text)) {
+        if (repl && !cmdr_find(repl, s->words[0].text)) {
             cmdr_error(error, "unknown command: %s", s->words[0].text);
             goto fail;
         }
@@ -809,6 +833,18 @@ int cmdr_eval(const cmdr *repl, const char *line, cmdr_value *result, char **err
     int status = evaluate(repl, &pg, NULL, 1, NULL, NULL, 0, result, error);
     dispose(&pg);
     return status;
+}
+
+int cmdr_check_syntax(const char *line, char **error)
+{
+    *error = NULL;
+    scope sc = {0};
+    program pg;
+    int failed = compile_body(NULL, line, &sc, &pg, error);
+    free(sc.names);
+    free(sc.used);
+    if (!failed) dispose(&pg);
+    return failed;
 }
 
 /* A block without a parameter list takes exactly its piped input. One with
