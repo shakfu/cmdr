@@ -1,0 +1,124 @@
+/* cmdr grammar, in W3C EBNF notation: https://www.w3.org/TR/xml/#sec-notation
+ *
+ * Follows src/cmdr.c (parse, read_lexeme, compile_block) and src/session.c
+ * (cmdr_join). Where they disagree with this file, the code is correct.
+ *
+ * Parsing has three steps:
+ *   1. Line joining turns physical lines into pipeline sources.
+ *   2. Bracket matching finds each block's and sub-pipeline's extent.
+ *   3. Each extent's text is parsed again: a block's as block_body, a
+ *      sub-pipeline's as body.
+ * Constraints that EBNF cannot express are listed at the end.
+ */
+
+/* ---- 1. Scripts and line joining ------------------------------------- */
+
+/* A script, REPL input, or -c text is physical lines. The last line may lack
+ * NL. */
+script        ::= ( line NL )* line?
+line          ::= blank | comment_line | source_line
+blank         ::= WS*
+comment_line  ::= WS* comment
+
+/* Joining: while the last token of the accumulated text is "|", the next
+ * physical line is appended, NL included. Blank and comment lines are dropped
+ * while joining. The joined text is parsed as body. A "|" inside an unclosed
+ * block also continues the line. */
+source_line   ::= body
+
+/* -c also lets quotes, blocks, and sub-pipelines span lines. Scripts and the
+ * REPL do not: an unjoined NL inside them ends the line. */
+
+/* ---- 2. Pipelines ---------------------------------------------------- */
+
+/* A comment is recognized only where a body starts. "#" elsewhere is word
+ * text: `text a #b` prints "a #b". */
+body          ::= WS* comment? WS* pipeline? WS*
+comment       ::= "#" [^#xA]*
+
+pipeline      ::= stage ( WS* "|" WS* stage )*
+
+/* A stage of one reference returns that value. Otherwise the first lexeme is
+ * the command name and must be a word. */
+stage         ::= reference
+                | word ( WS+ argument )*
+
+argument      ::= word | reference | block | sub_pipeline
+
+/* ---- 3. Words -------------------------------------------------------- */
+
+/* A word runs to the next unquoted WS or "|". Pieces concatenate:
+ * a"b c"d is the one word "ab cd". */
+word          ::= ( piece - ( "{" | "$" ) ) piece*
+piece        ::= bare | escape | sq_string | dq_string
+
+/* "$", "{", "}", "(", ")", and "#" are ordinary after a word's first
+ * character: a$x, a{b, and x) are literal words. "}" and ")" end a word only
+ * where they close an enclosing block or sub-pipeline (step 2 of the
+ * header). */
+bare          ::= [^ #x9#xA#xB#xC#xD|'"\]
+
+/* Outside quotes, \c is c: \n is "n". A trailing "\" is an error. */
+escape        ::= "\" Char
+
+/* Single quotes keep every character, including "\". */
+sq_string     ::= "'" [^']* "'"
+
+/* In double quotes, \n is a newline, \t a tab, and \c is c otherwise. */
+dq_string     ::= '"' ( [^"\] | "\" Char )* '"'
+
+/* Every word is text. Numbers have no lexical class; commands parse them. */
+
+/* ---- 4. References --------------------------------------------------- */
+
+/* The reference lexeme runs from "$" to the next WS or "|", and all of it
+ * must match: $x. and $x"y" are errors, not a reference and text. */
+reference     ::= "$" identifier ( "." identifier )*
+identifier    ::= [A-Za-z] [A-Za-z0-9_-]*
+
+/* ---- 5. Blocks ------------------------------------------------------- */
+
+/* A closing "}" or ")" must be followed by WS, "|", or the end of the
+ * enclosing text: {a}b and $(a)b are errors. */
+block         ::= "{" brace_text "}"
+sub_pipeline  ::= "$(" paren_text ")"
+
+/* Bracket matching. Only brackets of the same kind nest, and quotes and
+ * escapes hide them. Each text is then parsed: brace_text as block_body,
+ * paren_text as body. So $(text (a)) passes "(a)" to text. */
+brace_text    ::= ( [^{}'"\] | escape | sq_string | dq_string
+                  | "{" brace_text "}" )*
+paren_text    ::= ( [^()'"\] | escape | sq_string | dq_string
+                  | "(" paren_text ")" )*
+
+/* A "(" that is the first non-WS character of a block opens its parameter
+ * list. The body may follow ")" directly: {(x)text $x}. */
+block_body    ::= WS* parameters? body
+parameters    ::= "(" WS* ( parameter ( WS+ parameter )* WS* )? ")"
+parameter     ::= "_"
+                | identifier ( "=" default )?
+
+/* A default is literal: "" or '' for empty text, else bare characters. */
+default       ::= '""' | "''" | [^ #x9#xA#xB#xC#xD'"\|${})]+
+
+/* ---- 6. Terminals ---------------------------------------------------- */
+
+WS            ::= [ #x9#xA#xB#xC#xD]    /* C isspace; NL only after joining */
+NL            ::= #xA
+Char          ::= [#x1-#xFF]            /* any byte except NUL */
+
+/* ---- 7. Constraints checked after parsing ---------------------------- *
+ *
+ * All are checked for the whole line before any command runs.
+ *
+ * - A command name is a word that names a known command. A block,
+ *   reference, or sub-pipeline cannot be one.
+ * - A sub-pipeline's text is not all WS. $( # x ) passes this check, then
+ *   fails when it runs, returning no value.
+ * - A reference names an enclosing block's parameter or a value binding.
+ *   $_ is an error.
+ * - Parameters: the first has no default; parameters with defaults follow
+ *   all required ones; _ has no default, may repeat, and is never
+ *   referenced; every other parameter is referenced in its body.
+ * - Blocks and sub-pipelines nest at most 128 deep (MAX_CALL_DEPTH).
+ */
