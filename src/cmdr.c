@@ -688,14 +688,14 @@ static int compile_body(const cmdr *repl, const char *line, scope *sc, program *
             if (w->block && compile_block(repl, w->text, sc, &w->code, error)) goto fail;
             if (w->sub) {
                 /* In the enclosing scope, so $name means what it does beside it. */
-                const char *t = w->text;
-                while (isspace((unsigned char)*t)) ++t;
-                if (!*t) {
-                    cmdr_error(error, "empty sub-pipeline $()");
-                    goto fail;
-                }
                 w->pipeline = cmdr_realloc(NULL, 1, sizeof(*w->pipeline));
-                if (compile_body(repl, w->text, sc, w->pipeline, error)) {
+                int failed = compile_body(repl, w->text, sc, w->pipeline, error);
+                /* Blank or only comments. */
+                if (!failed && !w->pipeline->stages[0].count) {
+                    dispose(w->pipeline);
+                    failed = cmdr_error(error, "empty sub-pipeline $()");
+                }
+                if (failed) {
                     free(w->pipeline);
                     w->pipeline = NULL;
                     goto fail;

@@ -370,6 +370,7 @@ class Commands(unittest.TestCase):
         errors = [
             ("$(text a)", 'command name cannot be a sub-pipeline; write the pipeline itself'),
             ("text $()", 'empty sub-pipeline $()'),
+            ("text $(\n  # x\n)", 'empty sub-pipeline $()'),
             ("text $(text a", "unclosed '$('"),
             ("text $(text a)b", "expected a space after ')'"),
             ("text $(bogus) x", 'unknown command: bogus'),       # Checked with its line.
@@ -390,6 +391,10 @@ class Commands(unittest.TestCase):
             log = Path(directory) / 'log'
             self.run_line(f"text $(text x | write {quote(str(log))}) $(read /nonexistent)",
                           error='read /nonexistent')
+            self.assertEqual(log.read_text(), 'x')
+            # A comment-only one is a compile error, so the write before it never runs.
+            self.run_line(f"text $(text y | write {quote(str(log))}) $(\n  # x\n)",
+                          error='empty sub-pipeline $()')
             self.assertEqual(log.read_text(), 'x')
 
     def test_concat_format_try_retry(self):
@@ -2058,6 +2063,7 @@ class Commands(unittest.TestCase):
             keys = [b"tex\t a\r",               # Tab completes a command name.
                     b"text b |\r", b"  upper\r",   # A continued pipeline.
                     b"list f | each {\r", b"  upper\r", b"}\r",  # An open block continues.
+                    b"list g | each { # note\r", b"  upper\r", b"}\r",  # Not in history.
                     b"text c |\r", b"\x03",        # Ctrl-C drops the unfinished pipeline.
                     b"text d\r",
                     b"\x1b[A\r",                  # Up recalls the previous line.
@@ -2076,7 +2082,7 @@ class Commands(unittest.TestCase):
             # A continued pipeline is one entry. A repeat of the previous entry
             # and quit are not stored.
             self.assertEqual(history, ['text a', 'text b |   upper', 'list f | each {   upper }',
-                                       'text d'])
+                                       'list g | each {          upper }', 'text d'])
             self.assertFalse((Path(home) / '.cmdr_history.tmp').exists())
 
     @unittest.skipUnless(os.environ.get('CMDR_EDITOR') == '1', 'built without the editor')

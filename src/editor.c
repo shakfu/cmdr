@@ -209,11 +209,19 @@ ssize_t editor_read(editor *ed, const char *prompt, char **line, size_t *capacit
     return (ssize_t)n + 1;
 }
 
+static int erase_comment(const cmdr_token *t, void *data)
+{
+    if (t->kind == CMDR_TOKEN_COMMENT) memset((char *)data + t->start, ' ', t->end - t->start);
+    return 0;
+}
+
 void editor_remember(editor *ed, const char *pipeline)
 {
     /* A pipeline's newlines are next to '|' or a block's brackets, where a
-     * space means the same, so one line recalls it. */
+     * space means the same, so one line recalls it. A comment would then run
+     * to the end of that line, so it is dropped. */
     char *flat = cmdr_strndup(pipeline, strlen(pipeline));
+    cmdr_scan(flat, strlen(flat), NULL, erase_comment, flat);
     for (char *p = flat; *p; ++p)
         if (*p == '\n' || *p == '\r') *p = ' ';
     size_t n = strlen(flat);

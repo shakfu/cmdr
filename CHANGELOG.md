@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### Added
+
+- `make check-format` fails if a tracked `.cmdr` file is not in `cmdr --fmt --flat` layout.
+
+### Fixed
+
+- A sub-pipeline holding only comments, such as `$(` and `# note` on the next line, was rejected only when it ran, after earlier stages' effects. The empty check looked for whitespace alone; it is now a compile error, as `$()` is.
+
+- The REPL stored a multi-line pipeline in history with its newlines as spaces, so a comment inside a block ran to the end of the recalled line and swallowed the stages after it. Comments are now dropped from the history entry.
+
 ## [0.3.0]
 
 ### Added
