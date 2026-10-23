@@ -262,7 +262,9 @@ Typed shells have this failure mode. PowerShell converts the right operand to th
 Three choices in this sketch make it worse:
 
 - Lexical literals let the source decide the kind. Quoting `3` changes `sort` and `json.dumps`.
+
 - Implicit widening hides the kind at text commands. The difference shows up later, in `sort`, `eq`, or `json.dumps`.
+
 - Mismatch and bool both express truth. `test` and `is` exist only to convert between them.
 
 ### Mitigations

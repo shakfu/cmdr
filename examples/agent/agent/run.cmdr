@@ -1,0 +1,6 @@
+# The process agent.start spawns: runs its arguments as a command line and
+# records the outcome in $AW_RUNS/$AW_RUN_ID.
+
+import agent
+
+script-args | agent.run-detached

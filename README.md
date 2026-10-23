@@ -299,7 +299,7 @@ HELLO WORLD
 
 **`run-with OPTIONS PROGRAM [ARG ...]`** captures stderr and returns the exit status as data: `STATUS STDOUT STDERR`.
 
-- OPTIONS is a list of NAME VALUE pairs: `dir` sets the working directory, `stdin` the input, `timeout` a limit in seconds, and `group 1` runs the program in its own process group.
+- OPTIONS is a list of NAME VALUE pairs: `dir` sets the working directory, `stdin` the input, `timeout` a limit in seconds, and `group 1` runs the program in its own process group. `out PATH` and `err PATH` write stdout and stderr to PATH as the program runs, so another process can follow them; STDOUT and STDERR are still returned. Both may name one file.
 
 - Past the limit the program gets SIGTERM, then SIGKILL a second later. Its own children are signalled only with `group 1`. A program in its own group does not get Ctrl-C from the terminal, and cannot read the terminal.
 
@@ -325,6 +325,13 @@ cmdr> list | run-with printf '%s ' $(list --model opus) x | nth 2
 ```text
 cmdr> list a b c | each { (d) list $(list dir $d timeout 3600 group 1) agent.cmdr audit . } | run-all 3 | each { first } | join ,
 0,0,timeout
+```
+
+**`spawn OPTIONS PROGRAM [ARG ...]`** starts a program in its own session and returns its pid without waiting. It takes `dir`, `out`, and `err`, as `run-with` does. Stdin is `/dev/null`, and output goes nowhere without `out` or `err`. The program gets no Ctrl-C from the terminal and outlives cmdr. Each `spawn` reaps the programs earlier ones started that have exited.
+
+```text
+cmdr> list out /tmp/build.log err /tmp/build.log | spawn make -C ~/src/app
+48213
 ```
 
 ### Scripts
@@ -441,6 +448,7 @@ These are the primitives, in [src/primitives.c](src/primitives.c). The prelude d
 | `run PROGRAM [ARG ...]`, `run-in TEXT PROGRAM [ARG ...]` | Run a program, returning stdout |
 | `run-with OPTIONS PROGRAM [ARG ...]` | Run a program with options, returning `STATUS STDOUT STDERR` |
 | `run-all JOBS N` | Run jobs, each `OPTIONS PROGRAM [ARG ...]`, N at once; return each one's `STATUS STDOUT STDERR` |
+| `spawn OPTIONS PROGRAM [ARG ...]` | Start a program in its own session; return its pid without waiting |
 | `load PATH [ARG ...]` | Run a script in this session; PATH is relative to the cwd |
 | `import NAME [as ALIAS]` | Run a module once; bind its definitions as `NAME.DEF` |
 | `from NAME import DEF [as ALIAS] ...` | Run a module once; bind each DEF unqualified, if the name is new |
@@ -484,7 +492,7 @@ Put definitions in a file, such as `ext.cmdr`, and run `load ext.cmdr` in a sess
 
 `help` lists the commands. It returns text, so `help | filter map` works, and `help NAME` shows one command's full usage and documentation.
 
-- The prompt is light green, except on terminals without escape sequences (`dumb`, `cons25`, `emacs`). The first line names the version and prelude, such as `cmdr 0.3.0 (prelude: standard)`.
+- The prompt is light green, except on terminals without escape sequences (`dumb`, `cons25`, `emacs`). The first line names the version and prelude, such as `cmdr 0.4.0 (prelude: standard)`.
 
 - Highlighting colors commands, references, blocks, sub-pipelines, and strings. Names bound by `as` are bold magenta, where bound and where used. Unknown commands are red.
 

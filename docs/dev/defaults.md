@@ -303,6 +303,7 @@ A block made inside the body captures `env`, including defaults, through `.items
 ```c
 /* Call a block with argv bound to its parameters; omitted trailing
  * parameters take their defaults. Its commands resolve where it was
+
  * written, not in the caller. */
 int cmdr_run(const cmdr_value *block, size_t argc, const cmdr_value *argv,
              cmdr_value *result, char **error);

@@ -334,6 +334,7 @@ retry 50 every 0.2 { () fs.is-file out.json }
 - **`if`:** one primitive, about 40 lines, beside `try` and `or`. No syntax change.
 
 - **`$(...)`:**
+
   - The lexer reads a balanced `$(...)`.
 
   - The compiler compiles it like a block body with no parameters.

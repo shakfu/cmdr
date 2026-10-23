@@ -58,23 +58,63 @@ set_tests_properties(example_aw_usage PROPERTIES PASS_REGULAR_EXPRESSION "usage:
 set_tests_properties(example_aw_ask example_aw_fix example_aw_usage PROPERTIES TIMEOUT 60
   WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
   ENVIRONMENT "AW_RUNS=${CMAKE_CURRENT_BINARY_DIR}/agent-runs")
-# The claude adapter's bwrap preflight, with stub bwrap and claude on PATH.
-if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+# The claude adapter reads claude's stream-json with jq, as the stub claude
+# writes it.
+find_program(CMDR_JQ jq)
+# The claude adapter's sandbox, with stub bwrap and claude on PATH. With
+# AW_SANDBOX=1, a failing bwrap stops claude; without it, bwrap is not run.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMDR_JQ)
   set(CMDR_AW_STUBS "${PROJECT_SOURCE_DIR}/examples/agent/tests/stubs")
-  add_test(NAME example_aw_sandbox_blocked COMMAND cmdr "${CMDR_AW}" ask . claude where is it)
-  add_test(NAME example_aw_sandbox_ok COMMAND cmdr "${CMDR_AW}" ask . claude where is it)
+  foreach(case IN ITEMS blocked ok off)
+    add_test(NAME example_aw_sandbox_${case} COMMAND cmdr "${CMDR_AW}" ask . claude where is it)
+    set_tests_properties(example_aw_sandbox_${case} PROPERTIES TIMEOUT 60
+      WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}")
+  endforeach()
   set_tests_properties(example_aw_sandbox_blocked PROPERTIES
-    PASS_REGULAR_EXPRESSION "sandbox unavailable: stub bwrap" FAIL_REGULAR_EXPRESSION "stub claude ran")
-  set_tests_properties(example_aw_sandbox_ok PROPERTIES PASS_REGULAR_EXPRESSION "stub claude ran")
-  set_tests_properties(example_aw_sandbox_blocked example_aw_sandbox_ok PROPERTIES TIMEOUT 60
-    WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}")
-  set_tests_properties(example_aw_sandbox_blocked PROPERTIES ENVIRONMENT
-    "AW_RUNS=${CMAKE_CURRENT_BINARY_DIR}/agent-runs;PATH=${CMDR_AW_STUBS}:$ENV{PATH}")
-  set_tests_properties(example_aw_sandbox_ok PROPERTIES ENVIRONMENT
-    "AW_RUNS=${CMAKE_CURRENT_BINARY_DIR}/agent-runs;PATH=${CMDR_AW_STUBS}:$ENV{PATH};AW_STUB_BWRAP=0")
+    PASS_REGULAR_EXPRESSION "sandbox unavailable: stub bwrap" FAIL_REGULAR_EXPRESSION "stub claude ran"
+    ENVIRONMENT "AW_RUNS=${CMAKE_CURRENT_BINARY_DIR}/agent-runs;PATH=${CMDR_AW_STUBS}:$ENV{PATH};AW_SANDBOX=1")
+  set_tests_properties(example_aw_sandbox_ok PROPERTIES PASS_REGULAR_EXPRESSION "stub claude ran.*--settings"
+    ENVIRONMENT "AW_RUNS=${CMAKE_CURRENT_BINARY_DIR}/agent-runs;PATH=${CMDR_AW_STUBS}:$ENV{PATH};AW_SANDBOX=1;AW_STUB_BWRAP=0")
+  set_tests_properties(example_aw_sandbox_off PROPERTIES
+    PASS_REGULAR_EXPRESSION "stub claude ran" FAIL_REGULAR_EXPRESSION "--settings|sandbox unavailable"
+    ENVIRONMENT "AW_RUNS=${CMAKE_CURRENT_BINARY_DIR}/agent-runs;PATH=${CMDR_AW_STUBS}:$ENV{PATH}")
+endif()
+# claude's write steps run in auto mode, or AW_CLAUDE_WRITE_MODE from a fixed
+# set; read steps always run in plan mode.
+set(CMDR_AW_ENV "AW_RUNS=${CMAKE_CURRENT_BINARY_DIR}/agent-runs;PATH=${PROJECT_SOURCE_DIR}/examples/agent/tests/stubs:$ENV{PATH}")
+if(CMDR_JQ)
+  foreach(case IN ITEMS auto read accept bad)
+    set(cmd edit . claude fix it)
+    if(case STREQUAL "read")
+      set(cmd ask . claude where is it)
+    endif()
+    add_test(NAME example_aw_claude_${case} COMMAND cmdr "${CMDR_AW}" ${cmd})
+    set_tests_properties(example_aw_claude_${case} PROPERTIES TIMEOUT 60
+      WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}" ENVIRONMENT "${CMDR_AW_ENV}")
+  endforeach()
+  set_tests_properties(example_aw_claude_auto PROPERTIES
+    PASS_REGULAR_EXPRESSION "stub claude ran.*--permission-mode auto")
+  set_tests_properties(example_aw_claude_read PROPERTIES
+    PASS_REGULAR_EXPRESSION "stub claude ran.*--permission-mode plan")
+  set_tests_properties(example_aw_claude_accept PROPERTIES
+    PASS_REGULAR_EXPRESSION "stub claude ran.*--permission-mode acceptEdits"
+    ENVIRONMENT "${CMDR_AW_ENV};AW_CLAUDE_WRITE_MODE=acceptEdits")
+  set_tests_properties(example_aw_claude_bad PROPERTIES
+    PASS_REGULAR_EXPRESSION "AW_CLAUDE_WRITE_MODE must be auto or acceptEdits" FAIL_REGULAR_EXPRESSION "stub claude ran"
+    ENVIRONMENT "${CMDR_AW_ENV};AW_CLAUDE_WRITE_MODE=bypassPermissions")
+  # Detached runs: a dry agent, and a stub claude that sleeps until cancelled.
+  add_test(NAME example_agent_runs
+    COMMAND cmdr "${PROJECT_SOURCE_DIR}/examples/agent/tests/test_runs.cmdr")
+  add_test(NAME example_aw_start
+    COMMAND sh -c "id=$(\"$1\" \"$2\" start ask . dry where is it) && \"$1\" \"$2\" wait \"$id\" && \"$1\" \"$2\" status \"$id\" && \"$1\" \"$2\" result \"$id\"" sh
+            $<TARGET_FILE:cmdr> "${CMDR_AW}")
+  set_tests_properties(example_agent_runs example_aw_start PROPERTIES TIMEOUT 60
+    WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
+    ENVIRONMENT "${CMDR_AW_ENV};AW_RUNS=${CMAKE_CURRENT_BINARY_DIR}/agent-detached;AW_CMDR=$<TARGET_FILE:cmdr>;AW_STUB_SLEEP=30;CMDR_PATH=${PROJECT_SOURCE_DIR}/examples/agent")
+  set_tests_properties(example_aw_start PROPERTIES
+    PASS_REGULAR_EXPRESSION "\tdone\t[0-9]+s\task@dry\task [.] dry where is it\n.*dry read [.] .*where is it")
 endif()
 # The llama agent, with a stub curl; jq and git are real.
-find_program(CMDR_JQ jq)
 if(CMDR_GIT AND CMDR_JQ)
   set(CMDR_AW_STUBS "${PROJECT_SOURCE_DIR}/examples/agent/tests/stubs")
   add_test(NAME example_agent_llama

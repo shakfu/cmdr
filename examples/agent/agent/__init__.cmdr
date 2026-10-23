@@ -8,21 +8,27 @@ import re
 import time
 
 script-dir | as home-dir "Directory holding actions/"
-def runs-dir { () env.or AW_RUNS agent-runs } "Directory for run logs"
+def runs-dir { () env.or HOME . | path-join .cmdr/runs | with { (d) env.or AW_RUNS $d } } "Directory for run logs and detached runs"
+def run-file { (id f) runs-dir | path-join $id | path-join $f } "File F of run ID"
 def agent-timeout { () env.or AW_TIMEOUT 1800 } "Seconds an agent may run"
 
 # Agents. An adapter takes PROMPT DIR MODEL MODE and returns the agent's
 # final text. An empty MODEL selects the agent's default; MODE is read or write.
-# Each runs in its agent's own sandbox, so agents without one are not here.
+# Each can run in its agent's own sandbox, so agents without one are not here.
+# claude's needs AW_SANDBOX=1.
 def opt { (f v) or $v { (x) list $f $(nonempty $x) } $(list) } "Return FLAG VALUE as a list, or an empty list if VALUE is empty"
 def by-mode { (mode r w) or { () equals $mode read | $r } $w } "Return R for read mode, else W"
 def agent-out { (res) nth $res 1 | with { (s) nth $res 3 | lines | tail 20 | unlines | with { (e) check $s { equals 0 } $(format "failed with status {}:\n{}" $s $e) } } | $res | nth 2 } "Return stdout of a run-with result, or fail with its stderr"
 def find-out { (res) nth $res 3 | lines | keep { not { ends-with ": No such file or directory" } } | with { (e) check $e { empty } $(format "find failed:\n{}" $(unlines $e)) } | $res | nth 2 } "Stdout of a run-with result of find; fail on any error but a path removed during the scan"
-def launch { (args d) agent-timeout | with { (t) list dir $d timeout $t | run-with $args } | agent-out } "Run ARGS in DIR with the agent timeout"
+def run-outputs { () env.or AW_RUN_ID "" | if { equals "" } { (_) list } else { (id) list out $(run-file $id out) err $(run-file $id err) } } "run-with options that keep a detached run's step output in its directory"
+def launch { (args d) agent-timeout | with { (t) run-outputs | push dir $d timeout $t | run-with $args } | agent-out } "Run ARGS in DIR with the agent timeout"
 text '{"sandbox":{"enabled":true,"autoAllowBashIfSandboxed":true,"allowUnsandboxedCommands":false,"failIfUnavailable":true}}' | as claude-sandbox "Settings for claude: Bash may write only in DIR, and never retries unsandboxed"
 def sandbox-probe { () list bwrap --unshare-net --ro-bind / / --dev /dev true | with { (p) run uname | trim | with { (os) or { () equals $os Linux | $p } $(list) } } } "An argv that fails where claude's sandbox cannot run commands; empty off Linux"
 def check-sandbox { (args) list 0 "" "" | with { (ok) list | with { (o) or $args { (a) run-with $o $(nonempty $a) } $ok } } | with { (r) nth $r 3 | trim | with { (e) nth $r 1 | check { equals 0 } $(concat "sandbox unavailable: " $e) } } } "Fail with ARGS's stderr unless it exits 0; pass if ARGS is empty"
-def agent-claude { (p d m mode) sandbox-probe | check-sandbox | $m | with { (x) opt --model $x } | with { (mf) list claude -p $mf --permission-mode $(by-mode $mode plan acceptEdits) --permission-prompts none --safe-mode --settings $claude-sandbox $p | launch $d } } "Run claude -p in its sandbox, without user CLAUDE.md"
+def claude-settings { () env.or AW_SANDBOX 0 | if { equals 1 } { (_) sandbox-probe | check-sandbox | with { (_) list --settings $claude-sandbox } } else { (_) list } } "--settings for claude's sandbox if AW_SANDBOX is 1, once it is checked to run; else an empty list"
+def claude-write-mode { () env.or AW_CLAUDE_WRITE_MODE auto | with { (m) list auto acceptEdits | check { any { equals $m } } "AW_CLAUDE_WRITE_MODE must be auto or acceptEdits" | $m } } "claude's permission mode for write steps"
+def claude-result { (out) list stdin $out | run-with jq -rs 'map(select(.type == "result")) | last | if . == null then error("no result event") elif .is_error then error(.result // .subtype) else .result end' | agent-out } "The final text in claude's stream-json OUT, or fail with its error"
+def agent-claude { (p d m mode) claude-settings | with { (sf) opt --model $m | with { (mf) list claude -p --output-format stream-json --verbose $mf --permission-mode $(by-mode $mode plan $(claude-write-mode)) --permission-prompts none --safe-mode $sf $p | launch $d | claude-result } } } "Run claude -p, in its sandbox if AW_SANDBOX is 1, without user CLAUDE.md; stream-json, so a detached run's output shows its progress"
 def agent-codex { (p d m mode) list codex exec $(opt -m $m) -s $(by-mode $mode read-only workspace-write) $p | launch $d } "Run codex exec"
 def agent-cursor { (p d m mode) list cursor-agent -p --output-format text --sandbox enabled $(opt --model $m) $(by-mode $mode --mode=plan --force) $p | launch $d } "Run cursor-agent -p"
 def llama-url { () env.or AW_LLAMA_URL http://127.0.0.1:8080 } "Base URL of llama-server"
@@ -104,7 +110,8 @@ def log-append { (x log) concat $x "\n\n" | append $log | $x } "Append TEXT and 
 # Chains. Every step is checked before the first agent runs. Each step gets
 # the previous output as {{input}} and every earlier one as {{history}}.
 # The log in AW_RUNS records the run; steps do not read it.
-def run-log { (t) runs-dir | fs.mkdir | with { (r) time.local "%Y%m%d-%H%M%S" | concat -XXXXXX | with { (n) run mktemp $(path-join $r $n) | trim } } | with { (log) format "# Run\n\n{}\n\n" $(target-brief $t) | write $log | $log } }
+def new-log { () runs-dir | fs.mkdir | with { (r) time.local "%Y%m%d-%H%M%S" | concat -XXXXXX | with { (n) run mktemp $(path-join $r $n) | trim } } } "A new log file in AW_RUNS"
+def run-log { (t) env.or AW_RUN_ID "" | if { equals "" } { (_) new-log } else { (id) run-file $id log } | with { (log) format "# Run\n\n{}\n\n" $(target-brief $t) | write $log | $log } } "A log for TARGET's chain; a detached run's is in its directory"
 def first-history { (input) or $input { (x) list "## input" $(nonempty $x) } $(list) } "History holding INPUT, or empty"
 def chain-step { (h t p log) heading $p | log-append $log | with { (head) run-step $t $p $h | log-append $log | with { (out) push $h $head $out } } }
 def chain-from { (t specs input) map $specs parse-step | map check-step | with { (steps) run-log $t | with { (log) fold $steps $(first-history $input) { (h p) chain-step $h $t $p $log } } } | history-last } "Run STEPS on TARGET, the first with INPUT; return the last output"
@@ -120,3 +127,49 @@ def workflow { (t kind steps) require-kind $t $kind | chain $steps } "Run STEPS 
 def audit { (t) audit-steps | with { (s) workflow $t path $s } } "Survey, review, and report on a path target"
 def fix { (t) fix-steps | with { (s) workflow $t bug $s } } "Reproduce, diagnose, patch, and review a bug target"
 def build { (t) build-steps | with { (s) workflow $t feature $s } } "Plan, critique, implement, verify, and review a feature target"
+
+# Command lines: CMD DIR ..., as agent.cmdr takes them.
+list "usage: agent.cmdr ask DIR AGENT[:MODEL] PROMPT ..." "       agent.cmdr edit DIR AGENT[:MODEL] PROMPT ..." "       agent.cmdr chain DIR STEP ..." "       agent.cmdr audit DIR [STEP ...]" "       agent.cmdr fix DIR REPORT-FILE [STEP ...]" "       agent.cmdr build DIR SPEC-FILE [STEP ...]" "       agent.cmdr start ask|edit|chain|audit|fix|build ..." "       agent.cmdr status [ID ...]" "       agent.cmdr log|result|cancel ID" "       agent.cmdr wait ID ..." | unlines | as cli-usage
+def cli-args { (a n) count $a | check { ge $n } $cli-usage | $a } "Return ARGS if it has at least N items, else fail with usage"
+def after { (xs n) tail $xs $(count $xs | sub $n) } "Drop the first N items"
+def cli-steps { (a n d) after $a $n | or { nonempty } $d } "Items after N, or D if there are none"
+def cli-prompt { (a f) cli-args $a 4 | nth 2 | target-path | list | map $f $(nth $a 3) $(after $a 3 | unwords) | concat }
+def cli-ask { (a) cli-prompt $a ask }
+def cli-edit { (a) cli-prompt $a edit }
+def cli-chain { (a) cli-args $a 3 | nth 2 | target-path | chain $(after $a 2) }
+def cli-audit { (a) cli-args $a 2 | nth 2 | target-path | with { (t) audit-steps | with { (d) cli-steps $a 2 $d | with { (s) workflow $t path $s } } } }
+def cli-fix { (a) cli-args $a 3 | nth 3 | read | target-bug $(nth $a 2) | with { (t) fix-steps | with { (d) cli-steps $a 3 $d | with { (s) workflow $t bug $s } } } }
+def cli-build { (a) cli-args $a 3 | nth 3 | read | target-feature $(nth $a 2) | with { (t) build-steps | with { (d) cli-steps $a 3 $d | with { (s) workflow $t feature $s } } } }
+list ask edit chain audit fix build | as cli-commands "Commands that run agents"
+def cli-check { (a) cli-args $a 2 | first | check { (c) cli-commands | any { equals $c } } $cli-usage | $a } "Return ARGS if they name a command that runs agents, else fail with usage"
+def cli { (a) cli-check $a | first | with { (c) list $a | map $(concat cli- $c) | concat } } "Run the command line ARGS, CMD DIR ...; return its output"
+
+# Detached runs: agent.start runs a command line in its own session, and
+# $AW_RUNS/ID records it. See ../docs/dev/agent-runs.md.
+def run-put { (x id f) run-file $id $f | with { (p) concat $p .tmp | with { (t) write $x $t | with { (_) fs.move $t $p } } } | $x } "Replace run ID's file F with X by a rename, so readers never see part of it; return X"
+def run-read { (id f) run-file $id $f | try { (p) fs.exists $p | read | trim } "" } "Run ID's file F, trimmed; empty text if it is missing"
+def cmdr-exe { () env.or AW_CMDR cmdr } "The cmdr a detached run uses"
+def real-dir { (d) list | run-with sh -c 'cd -- "$1" && pwd -P' sh $d | agent-out | trim } "DIR with links resolved"
+def runs { () runs-dir | fs.mkdir | fs.dirs | keep { (d) path-join $d state | fs.is-file } | map path-basename } "Every run id, oldest first"
+def run-live { (id) run-read $id pid | if { equals "" } { (_) text "" } else { (p) list | run-with ps -o stat= -p $p | check { (r) nth $r 1 | equals 0 | $r | nth 2 | trim | not { starts-with Z } } "exited" } } "Succeed while run ID's process may be running; a zombie has exited"
+def run-state { (id) run-file $id state | check { fs.is-file } $(concat "no such run: " $id) | read | trim } "Run ID's recorded state"
+def gone-state { (id) run-state $id | if { equals running } { (_) text lost } else { (s) $s } } "Run ID's state, read after its process is gone"
+def state { (id) run-state $id | if { equals running } { (s) or { () run-live $id | $s } "" } else { (s) $s } | if { equals "" } { (_) gone-state $id } else { (s) $s } } "running, done, failed, cancelled, or lost: running recorded, but the process is gone"
+def holder { (d) runs | keep { (id) run-read $id dir | equals $d | with { (_) state $id | equals running } } } "Live runs that may write in DIR"
+def lock-check { (a d) first $a | if { equals ask } { (_) list } else { (_) holder $d } | check { empty } $(concat "a run is already writing in " $d) } "Fail if ARGS may write in DIR while a live run may too"
+def new-run { () runs-dir | fs.mkdir | with { (r) time.local "%Y%m%d-%H%M%S" | concat -XXXXXX | with { (n) run mktemp -d $(path-join $r $n) | trim | path-basename } } } "Make a run directory; return its id"
+def start-in { (a d) lock-check $a $d | with { (_) new-run } | with { (id) run-put $d $id dir | with { (_) run-put $(unwords $a) $id argv } | with { (_) run-put $(time.now) $id started } | with { (_) run-put running $id state } | with { (_) run-file $id run.err } | with { (e) list err $e | spawn env $(concat AW_RUN_ID= $id) $(cmdr-exe) $(path-join $home-dir run.cmdr) $a } | run-put $id pid | $id } } "Spawn ARGS as a run in DIR; return its id"
+def start { (a) cli-check $a | nth 2 | check { fs.is-dir } "not a directory" | real-dir | with { (d) start-in $a $d } } "Run the command line ARGS, CMD DIR ..., in its own session; return its run id at once"
+def run-detached { (a) env.get AW_RUN_ID | with { (id) try { () cli $a | run-put $id result | with { (_) run-put done $id state } } { (e) run-put $e $id error | with { (_) run-put failed $id state } } } } "The body of a detached run: run ARGS, then record its result or error"
+def run-error { (id s) run-read $id error | or { nonempty } $(run-read $id run.err) | with { (e) format "run {} {}: {}" $id $s $e } } "Why run ID ended in state S"
+def wait-one { (id) retry 604800 every 1 { () state $id | check { not { equals running } } "still running" } } "Block until run ID ends, at most a week; return its state"
+def result { (id) wait-one $id | if { equals done } { (_) run-file $id result | read } else { (s) run-error $id $s | with { (m) check "" { nonempty } $m } } } "Block until run ID ends; return its output, or fail with why it did not finish"
+def wait { (ids) each $ids { (id) wait-one $id } | with { (ss) check $ss { all { equals done } } $(each $ids { (id) list $id $(state $id) | unwords } | unlines) | $ids } } "Block until each run in IDS ends; return IDS, or fail if any did not finish"
+def stop-group { (id p) concat - $p | with { (g) list | run-with kill -TERM -- $g | with { (_) try { () retry 20 every 0.25 { () not $id { run-live } } } { (_) list | run-with kill -KILL -- $g } } } } "SIGTERM run ID's process group P, then SIGKILL it if it is still there after 5 seconds"
+def cancel { (id) state $id | if { equals running } { (_) run-read $id pid | check { nonempty } "run has no pid yet" | with { (p) stop-group $id $p } | with { (_) run-state $id | if { equals running } { (_) run-put cancelled $id state } else { (s) $s } } } else { (s) $s } } "Stop run ID's process group if it is running; return its state"
+def elapsed { (id) run-read $id started | if { equals "" } { (_) text - } else { (t0) state $id | if { equals running } { (_) time.now } else { (_) run-file $id state | fs.mtime } | sub $t0 | concat s } } "How long run ID ran, or has run so far"
+def step { (id) run-file $id log | try { (f) read $f | lines | keep { starts-with "## " } | last | strip-prefix "## " } "-" } "The step run ID is on, or ran last"
+def status-row { (id) format "{}\t{}\t{}\t{}\t{}" $id $(state $id) $(elapsed $id) $(step $id) $(run-read $id argv) } "One line on run ID"
+def status { (ids) or { () nonempty $ids } $(runs) | each { (id) status-row $id } | unlines } "One line per run in IDS, or per run: id, state, seconds, step, command line"
+text '(fromjson? // {type: "line", line: .}) as $e | if $e.type == "line" then $e.line elif $e.type == "assistant" then ($e.message.content[]? | if .type == "text" then .text elif .type == "tool_use" then "> \(.name) \(.input | tostring | .[0:120])" else empty end) else empty end' | as stream-filter "jq program: claude's stream-json as text and tool calls; other lines unchanged"
+def log { (id) run-state $id | with { (_) run-read $id log } | with { (l) run-file $id out | try { (f) fs.exists $f | read } "" | with { (o) list stdin $o | run-with jq -rR $stream-filter | agent-out } | with { (o) list $l $o | keep { nonempty } | join "\n\n" } } } "Run ID's log, then its current step's output so far"

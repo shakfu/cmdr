@@ -2,11 +2,25 @@
 
 ## Unreleased
 
+## [0.4.0]
+
 ### Added
 
 - `make check-format` fails if a tracked `.cmdr` file is not in `cmdr --fmt --flat` layout.
 
+- `spawn OPTIONS PROGRAM [ARG ...]` starts a program in its own session and returns its pid without waiting, with `dir`, `out`, and `err`. `run-with` and `run-all` take `out PATH` and `err PATH`, which write output to PATH as it is produced, so another process can follow a running program.
+
+- The `agent` example runs agents in the background: `agent.cmdr start CMD ...` prints a run id at once, and `status`, `log`, `result`, `wait`, and `cancel` act on runs. From cmdr, `agent.start` returns the id and `agent.result` waits for the output, so a run's output can go into a pipeline. A run is a directory under `AW_RUNS` written by a process in its own session, over a job table in the session, so runs outlive the terminal and any process can query them. See `docs/dev/agent-runs.md`.
+
 ### Changed
+
+- Breaking: `AW_RUNS` defaults to `~/.cmdr/runs`, not `agent-runs` in the working directory, so `agent.cmdr status` finds runs from anywhere.
+
+- The `agent` example runs claude with `--output-format stream-json --verbose` and reads the final text with jq, so a detached run's log shows each tool call as it happens. The claude adapter now needs jq.
+
+- The `agent` example's claude write steps use `--permission-mode auto`, over `acceptEdits`, so claude's classifier can approve commands such as running tests. `AW_CLAUDE_WRITE_MODE=acceptEdits` restores the old mode. Read steps stay in `plan`.
+
+- Breaking: the `agent` example runs claude in its Bash sandbox only with `AW_SANDBOX=1`. Before, every claude step needed `bwrap`, so on Ubuntu 24.04, where AppArmor blocks unprivileged user namespaces, claude never ran. Without it, Bash commands that claude's permission mode approves run unsandboxed.
 
 - Breaking: `cmdr-snd` and `cmdr-midi` are gone. `-DCMDR_SND=ON` and `-DCMDR_MIDI=ON` build those extensions into `cmdr`, so one binary carries any set of them; `AUTO` builds one only if its libraries are found. Both default to `OFF`, so `cmdr` still needs neither library. `make test` builds with both on `AUTO`, in `build-all/`, so it still runs their tests where the libraries are found. `-DCMDR_EXAMPLES` is removed, and scripts starting `#!/usr/bin/env cmdr-snd` need `cmdr`. Importing an extension left out fails with the option to set: `cmdr was built without snd; configure with -DCMDR_SND=ON`.
 

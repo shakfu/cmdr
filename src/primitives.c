@@ -32,6 +32,12 @@
 #endif
 #endif
 
+/* glibc declares it only under _GNU_SOURCE, which would change other
+ * declarations here; glibc 2.26 and musl take this value. */
+#if defined(__linux__) && !defined(POSIX_SPAWN_SETSID)
+#define POSIX_SPAWN_SETSID 0x80
+#endif
+
 extern char **environ;
 
 #define COMMAND(name) \
@@ -274,15 +280,34 @@ static FILE *process_stream(void)
     return file;
 }
 
+/* PATH opened with flags, above the standard descriptors as process_stream's
+ * files are; appending, so a reader can follow it and out and err can share it. */
+static FILE *named_stream(const char *path, int flags)
+{
+    int opened = open(path, flags | O_CLOEXEC, 0666);
+    if (opened < 0) return NULL;
+    int fd = fcntl(opened, F_DUPFD_CLOEXEC, 3), saved = errno;
+    close(opened);
+    if (fd < 0) { errno = saved; return NULL; }
+    int mode = flags & O_ACCMODE;
+    FILE *file = fdopen(fd, mode == O_RDONLY ? "rb" : mode == O_WRONLY ? "ab" : "r+b");
+    if (!file) { saved = errno; close(fd); errno = saved; }
+    return file;
+}
+
+enum { OUTPUT_FLAGS = O_RDWR | O_CREAT | O_TRUNC | O_APPEND };
+
 /* How to run a program. capture returns STATUS STDOUT STDERR, as run-with
  * does, in place of failing on a nonzero status. */
 typedef struct {
     const char *name; /* The command, for messages. */
     const char *input;
     const char *dir;  /* NULL inherits cmdr's directory. */
+    const char *out, *err; /* Files for stdout and stderr; NULL for temporary ones. */
     double timeout;   /* Seconds; 0 waits without limit. */
     int group;        /* Own process group, signalled whole on a timeout. */
     int capture;
+    int detach;       /* Own session, stdin from /dev/null, no output unless out or err. */
 } process;
 
 static double now(void)
@@ -512,15 +537,23 @@ static int spawn_process(const process *p, char **args, spawned *s, char **error
         return cmdr_error(error, "%s: dir %s: %s", p->name, p->dir, strerror(errno));
     if (p->dir && !S_ISDIR(st.st_mode))
         return cmdr_error(error, "%s: dir %s: %s", p->name, p->dir, strerror(ENOTDIR));
-    s->in = process_stream();
-    s->out = s->in ? process_stream() : NULL;
-    s->err = s->out && p->capture ? process_stream() : NULL;
+    const char *failed_path = NULL;
+    s->in = p->detach ? named_stream("/dev/null", O_RDONLY) : process_stream();
+    if (s->in && p->out) s->out = named_stream(failed_path = p->out, OUTPUT_FLAGS);
+    else if (s->in) s->out = p->detach ? named_stream("/dev/null", O_WRONLY) : process_stream();
+    int want_err = p->capture || p->detach || p->err;
+    if (s->out && p->err) s->err = named_stream(failed_path = p->err, OUTPUT_FLAGS);
+    else if (s->out && want_err) {
+        failed_path = NULL;
+        s->err = p->detach ? named_stream("/dev/null", O_WRONLY) : process_stream();
+    }
     size_t n = strlen(p->input);
-    if (!s->in || !s->out || (p->capture && !s->err)) {
-        cmdr_error(error, "%s: temporary file: %s", p->name, strerror(errno));
+    if (!s->in || !s->out || (want_err && !s->err)) {
+        if (failed_path) cmdr_error(error, "%s: %s: %s", p->name, failed_path, strerror(errno));
+        else cmdr_error(error, "%s: temporary file: %s", p->name, strerror(errno));
         goto failed;
     }
-    if (fwrite(p->input, 1, n, s->in) != n || fflush(s->in) || fseek(s->in, 0, SEEK_SET)) {
+    if (!p->detach && (fwrite(p->input, 1, n, s->in) != n || fflush(s->in) || fseek(s->in, 0, SEEK_SET))) {
         cmdr_error(error, "%s: preparing stdin: %s", p->name, strerror(errno));
         goto failed;
     }
@@ -540,6 +573,12 @@ static int spawn_process(const process *p, char **args, spawned *s, char **error
     if (!rc) rc = attr_rc;
     if (!rc && p->group) rc = posix_spawnattr_setflags(&attr, POSIX_SPAWN_SETPGROUP);
     if (!rc && p->group) rc = posix_spawnattr_setpgroup(&attr, 0);
+#if defined(POSIX_SPAWN_SETSID)
+    if (!rc && p->detach) rc = posix_spawnattr_setflags(&attr, POSIX_SPAWN_SETSID);
+#else /* A new group at least, so the terminal's Ctrl-C does not reach it. */
+    if (!rc && p->detach) rc = posix_spawnattr_setflags(&attr, POSIX_SPAWN_SETPGROUP);
+    if (!rc && p->detach) rc = posix_spawnattr_setpgroup(&attr, 0);
+#endif
     if (!rc) rc = posix_spawnp(&s->child, program, &actions, &attr, args, environ);
     if (!attr_rc) posix_spawnattr_destroy(&attr);
     posix_spawn_file_actions_destroy(&actions);
@@ -640,19 +679,23 @@ static int add_args(const char *name, const cmdr_value *value, char ***args, siz
     return 0;
 }
 
-/* Set p from OPTIONS, a list of NAME VALUE pairs; errors name p->name. */
-static int parse_options(const cmdr_value *options, process *p, char **error)
+/* The options each command takes, as bits of parse_options's names. */
+enum { RUN_OPTIONS = 0x3f, SPAWN_OPTIONS = 0x31 };
+
+/* Set p from OPTIONS, a list of NAME VALUE pairs, of those in allowed; errors
+ * name p->name. */
+static int parse_options(const cmdr_value *options, process *p, int allowed, char **error)
 {
     const char *who = p->name;
     if (options->count % 2) return cmdr_error(error, "%s: OPTIONS must be NAME VALUE pairs", who);
-    int seen[4] = {0};
-    static const char *names[] = {"dir", "stdin", "timeout", "group"};
+    int seen[6] = {0};
+    static const char *names[] = {"dir", "stdin", "timeout", "group", "out", "err"};
     for (size_t i = 0; i < options->count; i += 2) {
         const cmdr_value *name = &options->items[i], *value = &options->items[i + 1];
         if (require_text(who, name, error) || require_text(who, value, error)) return 1;
         size_t k = 0;
-        while (k < 4 && strcmp(name->text, names[k])) ++k;
-        if (k == 4) return cmdr_error(error, "%s: unknown option %s", who, name->text);
+        while (k < 6 && strcmp(name->text, names[k])) ++k;
+        if (k == 6 || !(allowed & 1 << k)) return cmdr_error(error, "%s: unknown option %s", who, name->text);
         if (seen[k]++) return cmdr_error(error, "%s: option %s given twice", who, name->text);
         if (k == 0) p->dir = value->text;
         if (k == 1) p->input = value->text;
@@ -661,6 +704,9 @@ static int parse_options(const cmdr_value *options, process *p, char **error)
         if (k == 3 && strcmp(value->text, "0") && strcmp(value->text, "1"))
             return cmdr_error(error, "%s: group must be 0 or 1", who);
         if (k == 3) p->group = value->text[0] == '1';
+        if (k >= 4 && !value->text[0]) return cmdr_error(error, "%s: %s must be a path", who, name->text);
+        if (k == 4) p->out = value->text;
+        if (k == 5) p->err = value->text;
     }
     return 0;
 }
@@ -672,7 +718,7 @@ COMMAND(run_with_command)
     static const char usage[] = "usage: run-with OPTIONS PROGRAM [ARG ...]";
     if (argc < 2 || argv[0].kind != CMDR_LIST) return cmdr_error(error, usage);
     process p = {.name = "run-with", .input = "", .capture = 1};
-    if (parse_options(&argv[0], &p, error)) return 1;
+    if (parse_options(&argv[0], &p, RUN_OPTIONS, error)) return 1;
     char **args = NULL;
     size_t count = 0;
     for (size_t i = 1; i < argc; ++i)
@@ -816,7 +862,7 @@ COMMAND(run_all_command)
         size_t count = 0;
         if (spec->kind != CMDR_LIST || spec->count < 2 || spec->items[0].kind != CMDR_LIST)
             status = cmdr_error(error, "run-all: job %zu is not OPTIONS PROGRAM [ARG ...]", i + 1);
-        else if (!(status = parse_options(&spec->items[0], &jobs[i].p, error)))
+        else if (!(status = parse_options(&spec->items[0], &jobs[i].p, RUN_OPTIONS, error)))
             for (size_t k = 1; k < spec->count && !status; ++k)
                 status = add_args("run-all", &spec->items[k], &jobs[i].args, &count, error);
         if (!status && !count)
@@ -832,6 +878,53 @@ COMMAND(run_all_command)
     }
     free(jobs);
     return status;
+}
+
+/* Programs spawn started, not yet reaped; a lock guards them, since sessions
+ * may run in several threads. */
+static atomic_flag detached_lock = ATOMIC_FLAG_INIT;
+static pid_t *detached;
+static size_t detached_count;
+
+/* Reap the exited programs spawn started, then add child to them. Only those:
+ * waitpid(-1) could reap a child that run-with waits for in another thread. */
+static void track_detached(pid_t child)
+{
+    while (atomic_flag_test_and_set(&detached_lock)) continue;
+    size_t kept = 0;
+    for (size_t i = 0; i < detached_count; ++i) {
+        pid_t waited = waitpid(detached[i], NULL, WNOHANG);
+        if (!waited || (waited < 0 && errno == EINTR)) detached[kept++] = detached[i];
+    }
+    detached = cmdr_realloc(detached, kept + 1, sizeof(*detached));
+    detached[kept++] = child;
+    detached_count = kept;
+    atomic_flag_clear(&detached_lock);
+}
+
+/* Start a program in its own session and return its pid, without waiting. */
+COMMAND(spawn_command)
+{
+    static const char usage[] = "usage: spawn OPTIONS PROGRAM [ARG ...]";
+    if (argc < 2 || argv[0].kind != CMDR_LIST) return cmdr_error(error, usage);
+    process p = {.name = "spawn", .input = "", .detach = 1};
+    if (parse_options(&argv[0], &p, SPAWN_OPTIONS, error)) return 1;
+    char **args = NULL;
+    size_t count = 0;
+    for (size_t i = 1; i < argc; ++i)
+        if (add_args(p.name, &argv[i], &args, &count, error)) { free(args); return 1; }
+    if (!count) return cmdr_error(error, usage);
+    args[count] = NULL;
+    spawned s;
+    int status = spawn_process(&p, args, &s, error);
+    free(args);
+    if (status) return 1;
+    close_streams(&s);
+    track_detached(s.child);
+    char pid[24];
+    snprintf(pid, sizeof(pid), "%ld", (long)s.child);
+    *result = cmdr_text(pid, strlen(pid));
+    return 0;
 }
 
 COMMAND(split_command)
@@ -1647,8 +1740,9 @@ static const cmdr_command effects[] = {
     TEXT("files", "files [DIRECTORY]", "List regular files, sorted by path", files_command),
     TEXT("run", "run PROGRAM [ARG ...]", "Run an executable, returning stdout", run_command),
     TEXT("run-in", "run-in TEXT PROGRAM [ARG ...]", "Run with TEXT on stdin, returning stdout", run_in_command),
-    VALUE("run-with", "run-with OPTIONS PROGRAM [ARG ...]", "Run with dir, stdin, timeout, and group; return STATUS STDOUT STDERR", run_with_command),
+    VALUE("run-with", "run-with OPTIONS PROGRAM [ARG ...]", "Run with dir, stdin, timeout, group, out, and err; return STATUS STDOUT STDERR", run_with_command),
     VALUE("run-all", "run-all JOBS N", "Run jobs, each OPTIONS PROGRAM [ARG ...], N at once; return each one's STATUS STDOUT STDERR", run_all_command),
+    VALUE("spawn", "spawn OPTIONS PROGRAM [ARG ...]", "Start a program in its own session with dir, out, and err; return its pid without waiting", spawn_command),
 };
 
 static const cmdr effect_table = {effects, sizeof(effects) / sizeof(effects[0]), NULL};

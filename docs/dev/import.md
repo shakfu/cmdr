@@ -7,6 +7,7 @@ Decision record, 2026-10-19. `script-dir | path-join workflows.cmdr | load` work
 `import NAME [as ALIAS]` follows Python's `import`, except where noted.
 
 - **Search.** A built-in module the host provides, such as an extension's `_fs` or `fs`, comes first. Then, for each directory, in order, the first of `DIR/NAME/__init__.cmdr` and `DIR/NAME.cmdr` that exists is the module:
+
   1. The directory of the file in which `import` is written. In the REPL and `-c`, the current directory.
 
   2. Each entry of `CMDR_PATH`, separated by `:`.

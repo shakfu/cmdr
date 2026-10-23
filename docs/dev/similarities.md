@@ -71,6 +71,7 @@ Sources: Tcl [apply](https://www.tcl.tk/man/tcl8.6/TclCmd/apply.htm), [interp](h
 Two conclusions follow:
 
 - cmdr shares Dhall's restrictions on mutation and recursion, but not its purity or types.
+
 - cmdr shares Nushell's model of passing values through pipelines, but not its structured data or streaming. cmdr's `run` returns stdout only after the program exits.
 
 ## Open questions

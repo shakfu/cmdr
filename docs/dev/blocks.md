@@ -38,8 +38,7 @@ Prototype size, C lines (`836ade2`: 1308):
 |-|-|-|
 | 1344 | 1403 | 1541 |
 
-N still carried positional `$N` and string bodies. Removing them did not make the shipped form smaller: it has 1463 lines, and 1473 with
-[compilation](#compilation).
+N still carried positional `$N` and string bodies. Removing them did not make the shipped form smaller: it has 1463 lines, and 1473 with [compilation](#compilation).
 
 ## Side by side
 
@@ -62,6 +61,7 @@ Scenarios: 3 filters by a def argument; 5 uses the outer item in an inner block;
 - P repeats each outer value at every nesting level. It cannot return a closure.
 
 - L's costs come from positional `$N` and `$0`, not from lexical scope:
+
   - `def NAME { }` cannot work, because the block's `$N` bind to the top-level line, which has no arguments.
 
   - A top-level block cannot take a value.

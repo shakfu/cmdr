@@ -13,8 +13,11 @@ This sketch takes a third option. JSON stays text, and `json.*` commands read an
 ## Model
 
 - A JSON value is text holding valid JSON.
+
 - A path is the arguments after the JSON: each is a key into an object, or an index into an array.
+
 - Commands that return JSON return the source slice unchanged. Numbers keep their spelling, keys keep their order, and a 64-bit id keeps its digits.
+
 - Only `json.text` and `json.keys` decode JSON strings into text.
 
 Path segments are separate arguments, not a `.a.b` path string, so a key may contain `.`, `[`, or spaces without escaping.
@@ -90,8 +93,11 @@ Separators, `ensure_ascii`, and duplicate keys follow Python: `", "` and `": "`,
 ## Implementation
 
 - A hand-written scanner over spans, in `ext/json/json.c`. It validates RFC 8259 and returns the byte range of the value at a path, without building a tree.
+
 - Nesting deeper than a fixed limit, such as 512, is an error, so hostile input cannot overflow the C stack.
+
 - Invalid UTF-8 in the input is an error, as RFC 8259 requires UTF-8.
+
 - `json.format` and the builders write output; the readers only slice.
 
 A hand-written scanner over a library, because spans and spellings are the point. cJSON stores numbers as doubles and loses their spelling. jsmn returns spans but is permissive unless built with `JSMN_STRICT`. These are from the libraries' documentation, not tested here.
@@ -103,10 +109,13 @@ Tests: a `tests/test.cmdr` beside the C unit tests, as for `shlex`, plus the y_ 
 ## Relation to rich-types.md
 
 - If cmdr gains dicts, `json.loads` and `json.dumps` join this module. The path commands stay: they read a large response without converting it.
+
 - If cmdr stays text-first, this module is the alternative that sketch describes. JSON text takes the place of an opaque handle, at the cost of a scan per command.
 
 ## Open questions
 
 1. Should `json.get` on a string return it decoded, as `jq -r` does? That saves `json.text`, but `null` and `"null"` then print alike.
+
 2. Is `json.set` enough, or do scripts need `json.unset` and a merge?
+
 3. Should builders emit compact JSON, `{"a":1}`, for request bodies? Python's default separators add spaces.

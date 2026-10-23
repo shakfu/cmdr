@@ -1,6 +1,6 @@
 id = "cmdr"
 name = "cmdr"
-version = "0.3.0"
+version = "0.4.0"
 schema_version = 1
 authors = ["Shakeeb Alireza"]
 description = "Syntax highlighting for cmdr scripts"

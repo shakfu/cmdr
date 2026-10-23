@@ -1,3 +1,6 @@
 #!/bin/sh
-# Stands in for claude: prints its arguments.
-echo "stub claude ran: $*"
+# Stands in for claude: reports its arguments as stream-json, after
+# AW_STUB_SLEEP seconds if that is set.
+jq -nc '{type: "assistant", message: {content: [{type: "tool_use", name: "Bash", input: {command: "stub"}}]}}'
+[ -n "$AW_STUB_SLEEP" ] && sleep "$AW_STUB_SLEEP"
+jq -nc --arg r "stub claude ran: $*" '{type: "result", subtype: "success", is_error: false, result: $r}'

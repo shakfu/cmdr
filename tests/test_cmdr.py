@@ -1302,6 +1302,75 @@ class Commands(unittest.TestCase):
                           + ' | first', 'timeout\n')
             self.assert_gone(int(pidfile.read_text()))
 
+    def test_run_with_output_files(self):
+        def run(options, program):
+            return f'list {options} | with {{ (o) run-with $o {program} }}'
+        with tempfile.TemporaryDirectory() as directory:
+            out, err = Path(directory) / 'out', Path(directory) / 'err'
+            # The result is as without the files, which hold the same text.
+            self.run_line(run(f'out {quote(out)} err {quote(err)}', 'sh -c "echo o; echo e >&2; exit 2"')
+                          + ' | join "|"', '2|o\n|e\n')
+            self.assertEqual((out.read_text(), err.read_text()), ('o\n', 'e\n'))
+            # A second run replaces the file; one file can take both streams.
+            self.run_line(run(f'out {quote(out)} err {quote(out)}', 'sh -c "echo 1; echo 2 >&2"') + ' | first', '0\n')
+            self.assertEqual(out.read_text(), '1\n2\n')
+            # The file fills while the program runs, so a reader can follow it.
+            proc = subprocess.Popen([str(BINARY), '-c', run(f'out {quote(out)}', 'sh -c "echo early; sleep 2"')],
+                                    stdout=subprocess.DEVNULL)
+            deadline = time.monotonic() + 1.5
+            while out.read_text() != 'early\n' and time.monotonic() < deadline:
+                time.sleep(0.02)
+            self.assertEqual(out.read_text(), 'early\n')
+            self.assertIsNone(proc.poll())
+            proc.wait(timeout=10)
+            self.run_line(run(f'out {quote(Path(directory) / "missing" / "out")}', 'true'),
+                          error='run-with: ' + str(Path(directory) / 'missing' / 'out') + ': No such file')
+        self.run_line(run('out ""', 'true'), error='run-with: out must be a path')
+
+    def test_spawn(self):
+        def spawn(options, program):
+            return f'list {options} | with {{ (o) spawn $o {program} }}'
+        with tempfile.TemporaryDirectory() as directory:
+            here = Path(directory).resolve()
+            out = here / 'out'
+            # spawn returns at once, with the pid of a program in its own session.
+            start = time.monotonic()
+            result = self.run_line(spawn(f'dir {quote(here)} out {quote(out)} err {quote(out)}',
+                                         'sh -c "pwd; ps -o sid= -p $$; echo e >&2; read x || echo eof; sleep 30"'))
+            self.assertLess(time.monotonic() - start, 2)
+            pid = int(result.stdout)
+            try:
+                deadline = time.monotonic() + 5
+                while out.read_text().count('\n') < 4 and time.monotonic() < deadline:
+                    time.sleep(0.02)
+                lines = out.read_text().splitlines()
+                self.assertEqual(lines[0], str(here))
+                self.assertEqual(int(lines[1]), pid)
+                self.assertEqual(lines[2:], ['e', 'eof'])
+            finally:
+                os.killpg(pid, 9)  # The session's group: sh and its sleep.
+            # Without out and err, output goes nowhere.
+            result = self.run_line(spawn('', 'sh -c "echo lost; echo lost >&2"'))
+            self.assertRegex(result.stdout, r'^[0-9]+\n$')
+            self.assertNotIn('lost', result.stderr)
+            # Each spawn reaps the programs earlier ones started that have exited.
+            line = ('repeat 3 { () list | spawn true } | with { (_) list | run-with sleep 0.5 } '
+                    '| with { (_) list | spawn sleep 2 } | with { (_) run sh -c "echo $PPID; ps -A -o ppid=,stat="  }')
+            result = self.run_line(line)
+            me, *rows = result.stdout.splitlines()
+            children = [r.split()[1] for r in rows if r.split()[0] == me]
+            self.assertTrue(children)  # The sleep 2, at least.
+            self.assertFalse([c for c in children if c.startswith('Z')], children)
+        self.run_line(spawn('', 'no-such-program'), error='spawn no-such-program: No such file')
+        for options, message in [('stdin x', 'spawn: unknown option stdin'),
+                                 ('timeout 1', 'spawn: unknown option timeout'),
+                                 ('group 1', 'spawn: unknown option group'),
+                                 ('err ""', 'spawn: err must be a path')]:
+            with self.subTest(options=options):
+                self.run_line(spawn(options, 'true'), error=message)
+        self.run_line('spawn a true', error='usage: spawn OPTIONS PROGRAM')
+        self.run_line('list | with { (o) spawn $o }', error='usage: spawn')
+
     def test_run_all(self):
         def jobs(*specs):
             return 'list ' + ' '.join(f'$(list $(list {o}) {program})' for o, program in specs)

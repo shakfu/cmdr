@@ -35,13 +35,18 @@ def tracked { (d) git-in $d $(list ls-files) | lines | with { (fs) list dir $d |
 ## Proposal
 
 1. All three modes join lines while a `{` or `$(` is open, as `-c` does now. `line_length` goes, and `-c` uses `cmdr_join`.
+
 2. Inside `{ }` or `$( )`, a newline is whitespace only in these positions:
+
    - after `{` or the parameter list;
+
    - before or after `|`;
+
    - before `}` or `)`.
 
    Anywhere else it is an error: `newline inside a block must be next to '|'`.
 3. Inside a block, a line whose first non-blank character is `#` is a comment. Blank lines are skipped. This extends the README's rule, "A line starting with `#` is a comment", to block bodies.
+
 4. At top level, only a trailing `|` continues a line. A leading `|` would need the REPL to read ahead.
 
 `tracked` becomes:
@@ -94,9 +99,13 @@ Indentation has no meaning to the parser. A `|` belongs to the innermost open bl
 Here `| keep` and `| empty` belong to `(f)`, not `(bad)`. Moving one `}` changes which, and the layout does not show it. The README would state a convention:
 
 - A block whose body spans lines ends its opening line with `{` or `{ (params)`.
+
 - The body is indented one level.
+
 - Each `|` aligns with the first stage of its block.
+
 - `}` stands on its own line, aligned with the line that opened the block.
+
 - Short blocks stay inline: `{ strip-prefix ./ }`.
 
 `cmdr --fmt` produces this layout; see [Formatter](#formatter).
@@ -104,7 +113,9 @@ Here `| keep` and `| empty` belong to `(f)`, not `(bad)`. Moving one `}` changes
 ## Failure modes
 
 - An unclosed `{` joins every later line. The error names the pipeline's first line, `FILE:12: unclosed '{'`, so its location stays correct.
+
 - Errors name a pipeline's first line. Inside a 20-line `def`, `FILE:12:` is less precise. A line offset in compile errors would fix this; it is not part of this proposal.
+
 - Arguments cannot wrap: `list a b c ...` stays on one line. Add a continuation only when a real case needs it.
 
 ## Changes
@@ -123,7 +134,9 @@ The REPL already prints `...> ` while a pipeline continues.
 ## Decisions
 
 1. **Trailing `|` inside blocks:** allowed, as is leading. One rule for blocks and the top level, where a trailing `|` continues a line. The formatter emits leading `|` inside blocks.
+
 2. **Quotes spanning lines:** not allowed, in any mode. A quote open at a line's end stops joining, so the error is `unclosed quote` on that line, not a block that takes the rest of the file. `cmdr -c $'text "a\nb"'` worked in 0.2.0 and is now an error; write `\n`.
+
 3. **`$(...)` bodies:** same rule as blocks.
 
 ## Formatter
@@ -131,7 +144,11 @@ The REPL already prints `...> ` while a pipeline continues.
 `cmdr --fmt [--flat] [--check | -w] [FILE ...]`, over `cmdr_format` in `src/format.c`. A flag, not a `fmt` subcommand: `cmdr fmt` already runs a script named `fmt`.
 
 - **Splitting.** Pipelines end where `cmdr_join` ends them, so the formatter and the interpreter agree on every pipeline. Each is checked with `cmdr_check_syntax`, which compiles without resolving names. A file with a syntax error is refused, since formatting it could turn an error into a running program.
+
 - **Multiline.** A pipeline that fits in 100 columns stays on one line. Otherwise its blocks and sub-pipelines break, last first, until the line up to the first broken one fits; a block holding a comment always breaks. A top-level pipeline whose lines still overflow, or with comments between its stages, puts each stage on a line after a trailing `|`. Words are never wrapped, so a long quoted string still overflows.
+
 - **Flat.** Each pipeline on one line. Comments inside it move above it, in order; flat has no other place for them.
+
 - **Blank lines** inside a pipeline are dropped. Top-level blank lines are kept.
+
 - **Safety.** Before returning, `cmdr_format` re-reads its output and requires the same pipelines with the same tokens, and the same comments in the same order. Otherwise it fails and returns nothing.

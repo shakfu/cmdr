@@ -1,0 +1,39 @@
+# Checks detached runs with the dry agent and a stub claude that sleeps for
+# AW_STUB_SLEEP seconds. CTest runs it as example_agent_runs, with AW_CMDR set
+# to the cmdr under test.
+
+import agent
+import fs
+
+# A run returns its id at once; result waits for it and returns its output.
+agent.start $(list ask . dry:opus where is it) | as quick
+agent.result $quick | check { contains "[dry read . opus]" } "result did not return the run's output"
+agent.state $quick | check { equals done } "a finished run is not done"
+agent.status $(list $quick) | check { matches "\tdone\t[0-9]+s\task@dry:opus\task [.] dry:opus where is it$" } "status row is wrong"
+agent.runs | check { any { equals $quick } } "runs does not list the run"
+agent.wait $(list $quick) | first | check { equals $quick } "wait did not return its ids"
+agent.cancel $quick | check { equals done } "cancel changed a finished run"
+
+# A slow write run holds its directory: a second write run is refused, an ask is not.
+agent.start $(list edit . claude fix it) | as slow
+agent.state $slow | check { equals running } "a sleeping run is not running"
+try { () agent.start $(list edit . dry other) } rejected | check { equals rejected } "a second write run was accepted"
+agent.start $(list ask . dry meanwhile) | agent.result | check { contains meanwhile } "an ask beside a write run failed"
+retry 50 every 0.1 { () agent.log $slow | check { contains "> Bash" } "no tool call yet" } | check { contains "## edit@claude" } "log does not show the step"
+
+# Cancel stops it; result then fails with why.
+agent.cancel $slow | check { equals cancelled } "cancel did not stop the run"
+try { () agent.result $slow } { (e) $e } | check { contains cancelled } "result of a cancelled run did not fail"
+try { () agent.wait $(list $quick $slow) } rejected | check { equals rejected } "wait passed with a cancelled run"
+
+# A failing command line fails the run, not start; a bad one fails start.
+agent.start $(list ask . nobody hi) | as bad
+try { () agent.result $bad } { (e) $e } | check { contains "unknown agent" } "a failed run did not report its error"
+agent.state $bad | check { equals failed } "a failed run is not failed"
+try { () agent.start $(list frob .) } rejected | check { equals rejected } "start accepted an unknown command"
+try { () agent.start $(list ask /no/such/dir dry hi) } rejected | check { equals rejected } "start accepted a missing directory"
+try { () agent.state no-such-run } rejected | check { equals rejected } "state accepted an unknown run"
+
+# A run recorded as running whose process is gone is lost.
+agent.runs-dir | path-join lost-run | fs.mkdir | with { (d) write running $(path-join $d state) | with { (_) write 999999999 $(path-join $d pid) } }
+agent.state lost-run | check { equals lost } "a run with no process is not lost"

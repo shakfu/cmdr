@@ -7,6 +7,7 @@ Run coding agents on a project with cmdr. You can send one prompt, or run a chai
 | [agent.cmdr](agent.cmdr) | Command-line entry point |
 | [agent/](agent/__init__.cmdr) | The `agent` module: adapters, targets, steps, chains, and the default workflows |
 | [agent/actions/](agent/actions) | One prompt template per action |
+| [agent/run.cmdr](agent/run.cmdr) | The process a detached run starts |
 | [demo.cmdr](demo.cmdr) | Fixes the bug in `sample/` with one agent |
 | [sample/](sample) | A small Python project with a reported bug in `BUG.md` |
 | [tests/](tests) | Checks every entry point of `agent` with the `dry` agent, and the `claude` and `llama` adapters with stub binaries |
@@ -46,10 +47,37 @@ agent.cmdr build ~/src/app spec.md plan@claude:opus implement@cursor verify@code
 
 The words after AGENT form the prompt. A missing argument or an unknown subcommand prints the usage and exits with status 1.
 
+### Detached runs
+
+`start` runs any of those command lines in the background and prints its run id at once:
+
+```sh
+id=$(agent.cmdr start edit ~/src/app claude "write a review; save it as REVIEW.md")
+agent.cmdr status            # one line per run: id, state, time, step, command line
+watch -n1 agent.cmdr status  # the same, live
+agent.cmdr log $id           # the log, then the current step's output so far
+agent.cmdr result $id        # wait, then print the output, or fail with why
+agent.cmdr wait $id ...      # wait for each; exit 1 unless all are done
+agent.cmdr cancel $id        # stop it
+```
+
+A state is `running`, `done`, `failed`, `cancelled`, or `lost`: recorded as running, but its process is gone. A run lives in `$AW_RUNS/ID` and survives the terminal closing. `start` refuses a command other than `ask` while another such run is live in the same directory. A detached `edit` in `auto` mode can run Bash with no one watching. The design is in [docs/dev/agent-runs.md](../../docs/dev/agent-runs.md).
+
+From cmdr, the same commands take a command line as a list and return values:
+
+```text
+agent.start $(list edit ~/src/app claude "write a review") | as r
+agent.result $r | lines | keep { contains TODO }
+each $dirs { (d) agent.start $(list ask $d claude summarise) } | each { (r) agent.result $r }
+```
+
 | Variable | Default | Meaning |
 |-|-|-|
-| `AW_RUNS` | `agent-runs` | Directory for run logs |
+| `AW_RUNS` | `~/.cmdr/runs` | Directory for run logs and detached runs |
+| `AW_CMDR` | `cmdr` | The cmdr a detached run starts |
 | `AW_TIMEOUT` | `1800` | Seconds before an agent is stopped |
+| `AW_SANDBOX` | `0` | `1` runs claude in its sandbox; see [Agents](#agents) |
+| `AW_CLAUDE_WRITE_MODE` | `auto` | claude's WRITE_MODE: `auto` or `acceptEdits` |
 | `AW_LLAMA_URL` | `http://127.0.0.1:8080` | llama-server base URL |
 | `AW_LLAMA_MAX_BYTES` | `200000` | Largest project text the `llama` agent sends |
 
@@ -95,7 +123,7 @@ cmdr> read spec.md | agent.target-feature ~/src/app | with { (t) list plan@claud
 
 In the REPL, `import` searches the current directory first; run it from `examples/agent`, or set `CMDR_PATH`.
 
-`chain` parses and checks every step before any agent runs. It checks that the step matches the grammar, that the agent is known, and that the action file exists with a valid mode. A typo in step 4 costs no agent time on steps 1 to 3. An agent that exits nonzero or times out stops the chain, with the last 20 lines of its stderr in the error. Each run also writes `$AW_RUNS/STAMP-XXXXXX`, with each `## STEP` heading written before its agent starts.
+`chain` parses and checks every step before any agent runs. It checks that the step matches the grammar, that the agent is known, and that the action file exists with a valid mode. A typo in step 4 costs no agent time on steps 1 to 3. An agent that exits nonzero or times out stops the chain, with the last 20 lines of its stderr in the error. Each run also writes `$AW_RUNS/STAMP-XXXXXX`, or a detached run's `log`, with each `## STEP` heading written before its agent starts.
 
 ## Agents
 
@@ -103,17 +131,17 @@ An adapter is `agent-NAME PROMPT DIR MODEL MODE`. `agent NAME ...` dispatches to
 
 | Agent | Version | Command | `read` | `write` |
 |-|-|-|-|-|
-| `claude` | 2.1.303 | `claude -p --permission-prompts none --safe-mode --settings SANDBOX` | `--permission-mode plan` | `--permission-mode acceptEdits` |
+| `claude` | 2.1.303 | `claude -p --output-format stream-json --verbose --permission-prompts none --safe-mode SANDBOX` | `--permission-mode plan` | `--permission-mode WRITE_MODE` |
 | `codex` | 0.163.0 | `codex exec` | `-s read-only` | `-s workspace-write` |
 | `cursor` | 2026.10.16 | `cursor-agent -p --output-format text --sandbox enabled` | `--mode=plan` | `--force` |
 | `llama` | llama.cpp b11669 | `curl` to `/v1/chat/completions` | returns the reply | applies the reply's edit blocks |
 | `dry` | | none | returns the prompt | returns the prompt |
 
-Every agent that runs commands does so in its own sandbox, so agents without one are not adapted:
+Every adapted agent that runs commands has its own sandbox; agents without one are not adapted:
 
-- `claude`: SANDBOX is `claude-sandbox`, Claude Code's sandbox for Bash. Bash may write only in DIR and a temp directory, and a blocked command is never retried unsandboxed. The sandbox does not cover the Edit and Write tools; `acceptEdits` accepts edits in DIR, and `--permission-prompts none` refuses anything else. `--safe-mode` skips CLAUDE.md files, including `~/.claude/CLAUDE.md`, but keeps the login.
+- `claude`: with `AW_SANDBOX=1`, SANDBOX is `--settings claude-sandbox`, Claude Code's sandbox for Bash; otherwise it is empty. In plan mode claude runs no commands. In `auto` mode, claude's classifier may approve Bash calls, which then run unsandboxed as your user; `acceptEdits` with `--permission-prompts none` should refuse them. None of this is tested against a live claude. Bash may write only in DIR and a temp directory, and a blocked command is never retried unsandboxed. The sandbox does not cover the Edit and Write tools; WRITE_MODE decides edits in DIR, and `--permission-prompts none` refuses anything that would prompt. `--safe-mode` skips CLAUDE.md files, including `~/.claude/CLAUDE.md`, but keeps the login. The output is stream-json, so a detached run's `log` shows each tool call as it happens; jq reads the final text from its `result` event. The event format was checked against claude 2.1.309 on 2026-10-23.
 
-  On Linux, each step first runs `bwrap --unshare-net` and fails with its stderr if that fails. Ubuntu 24.04's `kernel.apparmor_restrict_unprivileged_userns=1` makes bwrap fail with `loopback: Failed RTM_NEWADDR`. Claude Code's `failIfUnavailable` misses this: claude exits 0 after every Bash call has failed. To fix the host, give `/usr/bin/bwrap` an AppArmor profile that allows `userns`.
+  With `AW_SANDBOX=1` on Linux, each step first runs `bwrap --unshare-net` and fails with its stderr if that fails. Ubuntu 24.04's `kernel.apparmor_restrict_unprivileged_userns=1` makes bwrap fail with `loopback: Failed RTM_NEWADDR`. Claude Code's `failIfUnavailable` misses this: claude exits 0 after every Bash call has failed. To fix the host, give `/usr/bin/bwrap` an AppArmor profile that allows `userns`.
 - `codex`: `-s read-only` or `-s workspace-write`.
 - `cursor`: `--sandbox enabled`.
 - `llama`: runs no commands. Every `git` call in `agent` disables `core.fsmonitor` and hooks, so a target's `.git/config` runs nothing. It sends every file from `git ls-files` in DIR that is a regular file, not reached through a symbolic link, then the prompt, to llama-server, and fails if the text exceeds `AW_LLAMA_MAX_BYTES`. MODEL becomes the request's `model`. Every prompt says it cannot run commands, since the action templates ask it to run tests. `reproduce` and `verify` steps only write code.

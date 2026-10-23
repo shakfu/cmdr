@@ -21,6 +21,7 @@ Implemented:
 ## Findings
 
 1. **Pipeline input binds only to the first argument.** `cmdr_eval_value` always prepends the piped value to argv.
+
    - `list 'x y' | map text pre` returns `x y pre`; prefixing is impossible.
 
    - `replace` cannot receive piped input as OLD.
@@ -28,6 +29,7 @@ Implemented:
    - Any command whose data argument is not first needs a C wrapper.
 
 2. **`map` takes a command name; `try` takes a pipeline.**
+
    - `list a b | map 'trim | upper'` fails: `unknown command: trim | upper`.
 
    - `map try 'text pre'` works only because `try` re-enters the parser.
@@ -41,6 +43,7 @@ Implemented:
 5. **`help` was not composable.** It printed to stdout and returned no value, so `help | filter list` failed. It rebuilt the registry with `cmdr_commands_init` instead of using the active one, so embedder and runtime commands were invisible. (Fixed.)
 
 6. **Missing primitives.**
+
    - No `lines`; text-to-list conversion required the idiom `map text`. (Fixed.)
 
    - `\n` is not decoded, so `join "\n"` cannot be written in `-c` mode.
