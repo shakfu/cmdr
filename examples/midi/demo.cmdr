@@ -1,8 +1,8 @@
-#!/usr/bin/env cmdr-midi
+#!/usr/bin/env cmdr
 # MIDI generation in cmdr: build scores from scales, chords, rhythms, and
 # chance, add instruments, controllers, and tempo, and write MIDI files.
 #
-#   build/examples/midi/cmdr-midi examples/midi/demo.cmdr
+#   build/cmdr examples/midi/demo.cmdr    # built with -DCMDR_MIDI=ON
 #
 # Files go in MIDI_OUT (default midi-out/ in the current directory). Nothing
 # plays; midi.play SCORE would send a score to the first MIDI output port.

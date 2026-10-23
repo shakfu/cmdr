@@ -2,7 +2,7 @@
 # output file: options and input files, then effects. Definitions that build a
 # chain only add words; out, play, stats, and the splits run it with _snd.run.
 # The C commands come from _snd, and the last line re-exports them, so _snd.run
-# and snd.out share one namespace. See ../../README.md. Needs cmdr-snd.
+# and snd.out share one namespace. See ../../README.md. Needs -DCMDR_SND=ON.
 
 import _snd
 import fs

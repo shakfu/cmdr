@@ -181,7 +181,7 @@ Output: `3`. The second line fails: `all [src/a.c, src/b.c, src/util.h] { (f) pa
 
 ### D5. Coding-agent workflows
 
-[examples/agent-workflows](../../examples/agent-workflows/README.md) chains coding agents (claude, codex, cursor, pi, opencode) over a project, bug, or feature:
+[examples/agent](../../examples/agent/README.md) chains coding agents (claude, codex, cursor, pi, opencode) over a project, bug, or feature:
 
 ```text
 read bug-142.md | target-bug ~/src/app | fix
@@ -199,7 +199,7 @@ read bug-142.md | target-bug ~/src/app | fix
 
   - Steps run one at a time, so a fan-out to two reviewers needs an extension.
 
-- Verdict: useful today for sequential chains. Decisions specific to the example are in [its design record](../../examples/agent-workflows/docs/dev/design.md).
+- Verdict: useful today for sequential chains. Decisions specific to the example are in [its design record](../../examples/agent/docs/dev/design.md).
 
 ## Gaps across scenarios
 

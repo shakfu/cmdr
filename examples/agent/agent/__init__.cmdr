@@ -1,5 +1,5 @@
 # Agent workflows: run coding agents on a target, as one prompt or a chain
-# of steps. `import aw` binds these definitions as aw.NAME; see ../README.md.
+# of steps. `import agent` binds these definitions as agent.NAME; see ../README.md.
 # Needs the env, fs, re, and time extensions.
 
 import env

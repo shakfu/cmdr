@@ -1,6 +1,6 @@
 # run-with, script commands, and push
 
-Decision record, 2026-10-19, against `38ed7c7` plus the working tree. [examples/agent-workflows](../../examples/agent-workflows/README.md) exposed five gaps:
+Decision record, 2026-10-19, against `38ed7c7` plus the working tree. [examples/agent](../../examples/agent/README.md) exposed five gaps:
 
 1. `run` has no working directory.
 

@@ -1,6 +1,6 @@
 # Sox DSL
 
-sox in cmdr. The [snd](ext/snd/README.md) extension runs sox's effects chains in-process through libsox, and adds a `varispeed` effect on libsoxr. `import snd` gives both: the C commands, such as `snd.run` and `snd.info`, from `_snd`, and the [module](ext/snd/snd.cmdr)'s definitions, such as `snd.out` and `snd.mix`, which build a chain as a list of sox's arguments. The module is `ext/snd/snd.cmdr`, built into `cmdr-snd`, so it needs no `CMDR_PATH`.
+sox in cmdr. The [snd](ext/snd/README.md) extension runs sox's effects chains in-process through libsox, and adds a `varispeed` effect on libsoxr. `import snd` gives both: the C commands, such as `snd.run` and `snd.info`, from `_snd`, and the [module](ext/snd/snd.cmdr)'s definitions, such as `snd.out` and `snd.mix`, which build a chain as a list of sox's arguments. The module is `ext/snd/snd.cmdr`, built into `cmdr` with `-DCMDR_SND=ON`, so it needs no `CMDR_PATH`.
 
 | File | Contents |
 |-|-|
@@ -8,15 +8,16 @@ sox in cmdr. The [snd](ext/snd/README.md) extension runs sox's effects chains in
 | [ext/snd/snd.cmdr](ext/snd/snd.cmdr) | The `snd` module: inputs, combining, effects, output, inspection, splitting, presets |
 | [demo.cmdr](demo.cmdr) | Synthesizes tones, then combines, processes, and splits them |
 | [tests/](tests) | Checks every `snd` module definition |
-| [CMakeLists.txt](CMakeLists.txt) | Builds `cmdr-snd` |
+| [extension.cmake](extension.cmake) | Finds libsox and libsoxr for `-DCMDR_SND` |
+| [CMakeLists.txt](CMakeLists.txt) | The tests |
 
 ```sh
 brew install sox libsoxr    # or the distribution's libsox-dev and libsoxr-dev
-make
-./build/examples/sox-dsl/cmdr-snd examples/sox-dsl/demo.cmdr
+make CMAKE_FLAGS=-DCMDR_SND=ON
+./build/cmdr examples/snd/demo.cmdr
 ```
 
-The build makes `build/examples/sox-dsl/cmdr-snd`: `cmdr` with `ext/` and `ext/snd`. pkg-config must find `sox` and `soxr`, or configure skips this example with a status message. `cmdr` itself links neither. The demo writes into `SND_OUT`, default `snd-out/`. CTest runs the demo, `tests/test_snd.cmdr`, and `ext/snd/tests/test.cmdr`. None of them use an audio device.
+`-DCMDR_SND=ON` builds `ext/snd` into `cmdr`. pkg-config must find `sox` and `soxr`, or configure fails; `-DCMDR_SND=AUTO` skips it instead. The demo writes into `SND_OUT`, default `snd-out/`. With snd built in, CTest runs the demo, `tests/test_snd.cmdr`, and `ext/snd/tests/test.cmdr`. None of them use an audio device.
 
 ## Chains
 

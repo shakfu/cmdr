@@ -1,6 +1,6 @@
-"""Ctrl-C during snd.run is not caught by try, and cmdr-snd exits by SIGINT.
+"""Ctrl-C during snd.run is not caught by try, and cmdr exits by SIGINT.
 
-CTest runs this as example_sox_interrupt, with CMDR_SND_BIN set to cmdr-snd.
+CTest runs this as example_sox_interrupt, with CMDR_SND_BIN set to a cmdr built with snd.
 """
 import os
 import signal

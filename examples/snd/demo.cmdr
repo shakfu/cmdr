@@ -1,7 +1,7 @@
-#!/usr/bin/env cmdr-snd
+#!/usr/bin/env cmdr
 # Sox in cmdr: build chains, combine and split files, and inspect results.
 #
-#   build/examples/sox-dsl/cmdr-snd examples/sox-dsl/demo.cmdr
+#   build/cmdr examples/snd/demo.cmdr    # built with -DCMDR_SND=ON
 #
 # Files go in SND_OUT (default snd-out/ in the current directory). Nothing
 # plays; snd.play CHAIN would send a chain to the default audio device.

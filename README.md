@@ -323,7 +323,7 @@ cmdr> list | run-with printf '%s ' $(list --model opus) x | nth 2
 - A job that cannot start fails the stage. The running jobs then get SIGTERM, then SIGKILL a second later, as on Ctrl-C.
 
 ```text
-cmdr> list a b c | each { (d) list $(list dir $d timeout 3600 group 1) aw.cmdr audit . } | run-all 3 | each { first } | join ,
+cmdr> list a b c | each { (d) list $(list dir $d timeout 3600 group 1) agent.cmdr audit . } | run-all 3 | each { first } | join ,
 0,0,timeout
 ```
 
@@ -629,6 +629,8 @@ This installs `cmdr`, `libcmdr.a`, `libcmdr.so`, `cmdr.h`, a CMake package, and 
 
 - `-DCMDR_SHARED=OFF` builds only the static library.
 
+- `-DCMDR_SND=ON` and `-DCMDR_MIDI=ON` build the extensions of [examples/snd](examples/snd/README.md) and [examples/midi](examples/midi/README.md) into `cmdr`. snd needs libsox and libsoxr; midi needs a C++20 compiler and CMake 3.22. Configure fails if they are missing; `AUTO` builds an extension only if they are found. Both default to `OFF`, so `cmdr` needs neither. `import snd` in a `cmdr` built without it fails with the option to set. With `make`, pass them as `make CMAKE_FLAGS=-DCMDR_SND=ON`.
+
 - The shared library's soname is `libcmdr.so.0.2`, since a minor version may break the API before 1.0.
 
 The build needs POSIX-2008 (`getline`, `open_memstream`, `posix_spawn`, `fstatat`).
@@ -639,10 +641,10 @@ The build needs POSIX-2008 (`getline`, `open_memstream`, `posix_spawn`, `fstatat
 
 - It also runs each extension's `tests/`, and [tests/test_api.c](tests/test_api.c) against both libraries.
 
-- It installs into `build/staged` and builds [tests/consumer](tests/consumer) against it.
+- It installs into `build-all/staged` and builds [tests/consumer](tests/consumer) against it.
 
-- Each test method is a CTest test, so `ctest --test-dir build -R test_editor` runs only the editor tests. Tests that need the editor show as skipped in a build without it.
+- Each test method is a CTest test, so `ctest --test-dir build-all -R test_editor` runs only the editor tests. Tests that need the editor show as skipped in a build without it.
 
 - Configure with `-DCMDR_BUILD_TESTS=OFF` to build without Python.
 
-`make` also builds the binaries of [examples/sox-dsl](examples/sox-dsl/README.md) and [examples/midi](examples/midi/README.md), `cmdr-snd` and `cmdr-midi`, and `make test` runs their tests. Each skips itself if its libraries or compiler are missing. Configure with `-DCMDR_EXAMPLES=OFF` to skip both. `cmdr` itself never includes them.
+`make test` builds in `build-all/`, with every optional extension whose libraries are found (see [Install](#install)), and runs their tests too. `make check` tests `build/` as configured.

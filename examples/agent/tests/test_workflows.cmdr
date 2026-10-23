@@ -1,0 +1,35 @@
+# Checks every entry point of the agent module with the dry agent, which returns
+# its prompt. CTest runs it as example_agent_workflows, with CMDR_PATH set to
+# examples/agent.
+
+import agent
+
+# One prompt: ask is read-only, edit may write.
+agent.target-path . | agent.ask dry:opus "List the primitives." | check { contains "[dry read . opus]" } "ask did not run read-only"
+agent.target-path . | agent.edit dry "Rename parse." | check { contains "[dry write . ]" } "edit did not run in write mode"
+
+# chain-from gives its INPUT to the first step as {{input}}.
+agent.target-path . | agent.chain-from $(list review@dry) "the seed" | check { contains "the seed" } "chain-from did not pass its input"
+
+# A chain: diagnose receives reproduce's output as {{input}}.
+text "help | count returns 0" | agent.target-bug . | agent.chain $(list reproduce@dry diagnose@dry:gpt-5) | check { contains "[dry write . ]" } "diagnose did not receive reproduce's output"
+
+# implement reads every earlier output as {{history}}, so it sees the plan.
+text "Add a sum-sq command" | agent.target-feature . | agent.chain $(list plan@dry critique@dry implement@dry) | check { contains "## critique@dry" } "implement did not receive the history"
+
+# workflow runs custom steps on a target of its kind.
+text "Add a sum-sq command" | agent.target-feature . | agent.workflow feature $(list plan@dry) | check { contains "Specification:" } "workflow did not run on a feature target"
+
+# Bad steps fail before any agent runs; a workflow rejects the wrong target kind.
+agent.target-path . | try { (t) agent.chain $t $(list survey@dry survey@nobody) } rejected | check { equals rejected } "unknown agent was accepted"
+agent.target-path . | try { (t) agent.fix $t } rejected | check { equals rejected } "fix accepted a path target"
+agent.target-path . | try { (t) agent.workflow $t feature $(list plan@dry) } rejected | check { equals rejected } "workflow accepted the wrong kind"
+
+# check-sandbox passes an empty probe or one that exits 0, and rejects others.
+list | agent.check-sandbox | check { equals 0 } "empty probe was rejected"
+list true | agent.check-sandbox | check { equals 0 } "passing probe was rejected"
+list false | try { (a) agent.check-sandbox $a } rejected | check { equals rejected } "failing probe was accepted"
+
+# tracked's link scan tolerates a path removed mid-scan, and no other find error.
+list 1 "./a\n" "find: ./x: No such file or directory\n" | agent.find-out | check { equals "./a\n" } "a path removed mid-scan failed the scan"
+try { () list 1 "./a\n" "find: ./y: Permission denied\n" | agent.find-out } rejected | check { equals rejected } "a find error was ignored"

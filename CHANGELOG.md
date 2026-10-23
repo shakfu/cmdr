@@ -6,7 +6,15 @@
 
 - `make check-format` fails if a tracked `.cmdr` file is not in `cmdr --fmt --flat` layout.
 
+### Changed
+
+- Breaking: `cmdr-snd` and `cmdr-midi` are gone. `-DCMDR_SND=ON` and `-DCMDR_MIDI=ON` build those extensions into `cmdr`, so one binary carries any set of them; `AUTO` builds one only if its libraries are found. Both default to `OFF`, so `cmdr` still needs neither library. `make test` builds with both on `AUTO`, in `build-all/`, so it still runs their tests where the libraries are found. `-DCMDR_EXAMPLES` is removed, and scripts starting `#!/usr/bin/env cmdr-snd` need `cmdr`. Importing an extension left out fails with the option to set: `cmdr was built without snd; configure with -DCMDR_SND=ON`.
+
+- Breaking: each example directory now names its module, as `examples/midi` does. `examples/agent-workflows` is `examples/agent`; its package `aw` is `agent` and `aw.cmdr` is `agent.cmdr`, so `import aw` becomes `import agent`. `examples/sox-dsl` is `examples/snd`. `CMDR_PATH` values and `~/.cmdr/lib` symlinks that name the old paths need updating. The `AW_*` environment variables keep their names.
+
 ### Fixed
+
+- `-Werror=implicit-function-declaration` was passed to C++ sources too, where g++ warns it is invalid. It now applies to C only.
 
 - A sub-pipeline holding only comments, such as `$(` and `# note` on the next line, was rejected only when it ran, after earlier stages' effects. The empty check looked for whitespace alone; it is now a compile error, as `$()` is.
 

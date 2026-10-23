@@ -7,29 +7,29 @@
 # sample/ is copied into a fresh git repository under AW_RUNS (default
 # agent-runs/ in the current directory), so agents never touch your files.
 
-import aw
+import agent
 import fs
 import shlex
 
 script-args | or { first } dry | as demo-agent "AGENT[:MODEL] from the command line, or dry"
-aw.runs-dir | fs.mkdir | path-join demo-project | as demo-dir "The copy of sample/"
+agent.runs-dir | fs.mkdir | path-join demo-project | as demo-dir "The copy of sample/"
 def demo-reset { () run rm -rf $demo-dir | $demo-dir | with { (x) run cp -R $(script-dir | path-join sample) $x } | $demo-dir } "Replace the copy with sample/"
-def demo-commit { () list "init -q" "add -A" "commit -q -m 'sample project'" "log --oneline" | each { (c) list -c user.name=demo -c user.email=demo@example.invalid $(shlex.split $c) | with { (a) aw.git-in $demo-dir $a } } | last } "Commit the copy; return the log"
+def demo-commit { () list "init -q" "add -A" "commit -q -m 'sample project'" "log --oneline" | each { (c) list -c user.name=demo -c user.email=demo@example.invalid $(shlex.split $c) | with { (a) agent.git-in $demo-dir $a } } | last } "Commit the copy; return the log"
 
 # 1. Copy sample/ and commit it, so git shows what the agent changes.
 demo-reset
 demo-commit
 
 # 2. Ask about the project. ask is read-only: the agent cannot edit files.
-demo-dir | aw.target-path | aw.ask $demo-agent "Summarize this project in three lines."
+demo-dir | agent.target-path | agent.ask $demo-agent "Summarize this project in three lines."
 
 # 3. Fix the bug in BUG.md: write a failing test, find the cause, patch it,
 #    and review the patch. One agent runs every step.
-list reproduce diagnose patch review | suffix $(concat @ $demo-agent) | with { (steps) path-join $demo-dir BUG.md | read | aw.target-bug $demo-dir | aw.workflow bug $steps }
+list reproduce diagnose patch review | suffix $(concat @ $demo-agent) | with { (steps) path-join $demo-dir BUG.md | read | agent.target-bug $demo-dir | agent.workflow bug $steps }
 
 # 4. What changed, and do the tests pass?
-shlex.split "status --short" | with { (a) aw.git-in $demo-dir $a } | or { nonempty } "(no changes)"
+shlex.split "status --short" | with { (a) agent.git-in $demo-dir $a } | or { nonempty } "(no changes)"
 list dir $demo-dir | run-with python3 -m unittest -q | nth 1 | with { (s) concat "tests: exit status " $s }
 
 # 5. The run logs, one per ask or chain, with every prompt and output.
-aw.runs-dir | files | sort | tail 2
+agent.runs-dir | files | sort | tail 2

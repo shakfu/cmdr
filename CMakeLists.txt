@@ -9,7 +9,7 @@ set(CMAKE_C_EXTENSIONS OFF)
 add_compile_options(-Wall -Wextra -Wpedantic -Wno-unused-parameter)
 # An undeclared POSIX function, such as realpath without _XOPEN_SOURCE, would
 # return int and truncate a pointer. -O2 can hide this through _FORTIFY_SOURCE.
-add_compile_options(-Werror=implicit-function-declaration)
+add_compile_options($<$<COMPILE_LANGUAGE:C>:-Werror=implicit-function-declaration>)
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 include(CmdrExtensions)
@@ -79,7 +79,40 @@ foreach(entry IN LISTS entries)
     list(APPEND CMDR_EXTENSIONS "${entry}")
   endif()
 endforeach()
-cmdr_add_binary(cmdr ${CMDR_EXTENSIONS})
+# Extensions in examples/ that need libraries the core does not. CMDR_NAME is
+# OFF, ON (configure fails if a library is missing), or AUTO (built if found).
+# examples/NAME/extension.cmake finds the libraries: it sets found, or reason,
+# and may set sources and libraries for cmdr.
+set(CMDR_OPTIONAL_EXTENSIONS "")
+set(CMDR_MISSING_EXTENSIONS "")
+set(CMDR_OPTIONAL_SOURCES "")
+set(CMDR_OPTIONAL_LIBRARIES "")
+foreach(ext IN ITEMS snd midi)
+  string(TOUPPER "${ext}" option)
+  set(CMDR_${option} OFF CACHE STRING "Build examples/${ext}'s extension into cmdr: OFF, ON, or AUTO")
+  set_property(CACHE CMDR_${option} PROPERTY STRINGS OFF ON AUTO)
+  set(found FALSE)
+  set(reason "CMDR_${option} is OFF")
+  set(sources "")
+  set(libraries "")
+  if(CMDR_${option} STREQUAL "AUTO" OR CMDR_${option})
+    include("${CMAKE_CURRENT_SOURCE_DIR}/examples/${ext}/extension.cmake")
+  endif()
+  if(found)
+    list(APPEND CMDR_OPTIONAL_EXTENSIONS "${CMAKE_CURRENT_SOURCE_DIR}/examples/${ext}/ext/${ext}")
+    list(APPEND CMDR_OPTIONAL_SOURCES ${sources})
+    list(APPEND CMDR_OPTIONAL_LIBRARIES ${libraries})
+  elseif(CMDR_${option} STREQUAL "AUTO" OR NOT CMDR_${option})
+    message(STATUS "Building cmdr without ${ext}: ${reason}")
+    list(APPEND CMDR_MISSING_EXTENSIONS ${ext})
+  else()
+    message(FATAL_ERROR "CMDR_${option}=${CMDR_${option}}: ${reason}")
+  endif()
+endforeach()
+cmdr_add_binary(cmdr ${CMDR_EXTENSIONS} ${CMDR_OPTIONAL_EXTENSIONS}
+                MISSING ${CMDR_MISSING_EXTENSIONS})
+target_sources(cmdr PRIVATE ${CMDR_OPTIONAL_SOURCES})
+target_link_libraries(cmdr PRIVATE ${CMDR_OPTIONAL_LIBRARIES})
 
 # find_package(cmdr) gives cmdr::static and cmdr::shared; pkg-config gives cmdr.
 install(TARGETS cmdr RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
@@ -130,12 +163,9 @@ if(CMDR_BUILD_TESTS)
   # ctest expects the test file in the build root.
   enable_testing()
   add_subdirectory(tests)
-endif()
-
-# Examples with their own binaries, which need libraries cmdr does not. Each
-# skips itself when its libraries are missing.
-option(CMDR_EXAMPLES "Build the examples' binaries, cmdr-snd and cmdr-midi" ON)
-if(CMDR_EXAMPLES)
-  add_subdirectory(examples/sox-dsl)
-  add_subdirectory(examples/midi)
+  # The tests of each optional extension built into cmdr.
+  foreach(dir IN LISTS CMDR_OPTIONAL_EXTENSIONS)
+    get_filename_component(ext "${dir}" NAME)
+    add_subdirectory(examples/${ext})
+  endforeach()
 endif()

@@ -4,44 +4,44 @@ Run coding agents on a project with cmdr. You can send one prompt, or run a chai
 
 | File | Contents |
 |-|-|
-| [aw.cmdr](aw.cmdr) | Command-line entry point |
-| [aw/](aw/__init__.cmdr) | The `aw` module: adapters, targets, steps, chains, and the default workflows |
-| [aw/actions/](aw/actions) | One prompt template per action |
+| [agent.cmdr](agent.cmdr) | Command-line entry point |
+| [agent/](agent/__init__.cmdr) | The `agent` module: adapters, targets, steps, chains, and the default workflows |
+| [agent/actions/](agent/actions) | One prompt template per action |
 | [demo.cmdr](demo.cmdr) | Fixes the bug in `sample/` with one agent |
 | [sample/](sample) | A small Python project with a reported bug in `BUG.md` |
-| [tests/](tests) | Checks every entry point of `aw` with the `dry` agent, and the `claude` and `llama` adapters with stub binaries |
+| [tests/](tests) | Checks every entry point of `agent` with the `dry` agent, and the `claude` and `llama` adapters with stub binaries |
 
 ```sh
-AW_RUNS=/tmp/aw-runs ./build/cmdr examples/agent-workflows/demo.cmdr                # dry run
-AW_RUNS=/tmp/aw-runs ./build/cmdr examples/agent-workflows/demo.cmdr claude:sonnet  # real run
+AW_RUNS=/tmp/agent-runs ./build/cmdr examples/agent/demo.cmdr                # dry run
+AW_RUNS=/tmp/agent-runs ./build/cmdr examples/agent/demo.cmdr claude:sonnet  # real run
 ```
 
 The demo copies `sample/` into `$AW_RUNS/demo-project` and commits it. It then asks the agent about the project and runs `reproduce`, `diagnose`, `patch`, and `review` on `BUG.md`. Last, it prints `git status` and the exit status of the sample's tests. Without an argument every step uses `dry`, which prints its prompt and changes nothing.
 
-CTest runs `tests/test_workflows.cmdr`, the demo, and `aw.cmdr`, all with `dry`. It runs `tests/test_llama.cmdr` and the claude preflight with `tests/stubs/` first on `PATH`.
+CTest runs `tests/test_workflows.cmdr`, the demo, and `agent.cmdr`, all with `dry`. It runs `tests/test_llama.cmdr` and the claude preflight with `tests/stubs/` first on `PATH`.
 
 ## Using the module
 
-`import aw` binds the module's definitions as `aw.NAME`. `demo.cmdr` and `aw.cmdr` find `aw/` next to them. A script elsewhere finds it through `CMDR_PATH`, or through `~/.cmdr/lib`:
+`import agent` binds the module's definitions as `agent.NAME`. `demo.cmdr` and `agent.cmdr` find `agent/` next to them. A script elsewhere finds it through `CMDR_PATH`, or through `~/.cmdr/lib`:
 
 ```sh
-export CMDR_PATH=~/src/cmdr/examples/agent-workflows      # or:
-ln -s ~/src/cmdr/examples/agent-workflows/aw ~/.cmdr/lib/aw
+export CMDR_PATH=~/src/cmdr/examples/agent      # or:
+ln -s ~/src/cmdr/examples/agent/agent ~/.cmdr/lib/agent
 ```
 
-The module finds `aw/actions/` through `script-dir`, so it works wherever it is installed.
+The module finds `agent/actions/` through `script-dir`, so it works wherever it is installed.
 
 ## Command line
 
-`aw.cmdr` runs with `cmdr` on `PATH`. Each subcommand calls the entry point of the same name. Steps given to `audit`, `fix`, or `build` replace the workflow's default steps.
+`agent.cmdr` runs with `cmdr` on `PATH`. Each subcommand calls the entry point of the same name. Steps given to `audit`, `fix`, or `build` replace the workflow's default steps.
 
 ```sh
-aw.cmdr ask ~/src/app claude:haiku where is the lexer
-aw.cmdr edit ~/src/app codex rename parse to parse_line
-aw.cmdr chain ~/src/app survey@claude review@codex:gpt-5
-aw.cmdr audit ~/src/app
-aw.cmdr fix ~/src/app bug-142.md
-aw.cmdr build ~/src/app spec.md plan@claude:opus implement@cursor verify@codex
+agent.cmdr ask ~/src/app claude:haiku where is the lexer
+agent.cmdr edit ~/src/app codex rename parse to parse_line
+agent.cmdr chain ~/src/app survey@claude review@codex:gpt-5
+agent.cmdr audit ~/src/app
+agent.cmdr fix ~/src/app bug-142.md
+agent.cmdr build ~/src/app spec.md plan@claude:opus implement@cursor verify@codex
 ```
 
 The words after AGENT form the prompt. A missing argument or an unknown subcommand prints the usage and exits with status 1.
@@ -55,7 +55,7 @@ The words after AGENT form the prompt. A missing argument or an unknown subcomma
 
 ## Model
 
-Names below are the module's own; an importer writes `aw.NAME`.
+Names below are the module's own; an importer writes `agent.NAME`.
 
 - **Target**: a list `KIND DIR BRIEF`. KIND is `path`, `bug`, or `feature`. DIR is the agent's working directory. BRIEF opens every prompt. `target` rejects a DIR that is not a directory.
 
@@ -65,7 +65,7 @@ Names below are the module's own; an importer writes `aw.NAME`.
   | `REPORT \| target-bug DIR` | The bug report |
   | `SPEC \| target-feature DIR` | The feature specification |
 
-- **Action**: `aw/actions/NAME.md`. Line 1 is `mode: read` or `mode: write`. The rest is a template with three placeholders:
+- **Action**: `agent/actions/NAME.md`. Line 1 is `mode: read` or `mode: write`. The rest is a template with three placeholders:
   - `{{target}}`: the target's BRIEF.
 
   - `{{input}}`: the previous step's output, or `(none)`.
@@ -84,16 +84,16 @@ Names below are the module's own; an importer writes `aw.NAME`.
   | `fix` | bug | `reproduce@claude diagnose@codex patch@claude review@codex` |
   | `build` | feature | `plan@claude critique@codex implement@claude verify@codex review@cursor` |
 
-- **Prompt**: `ask TARGET AGENT[:MODEL] PROMPT` sends one read-only prompt. `edit` does the same in write mode. Each is a one-step chain, using `aw/actions/ask.md` or `aw/actions/edit.md`.
+- **Prompt**: `ask TARGET AGENT[:MODEL] PROMPT` sends one read-only prompt. `edit` does the same in write mode. Each is a one-step chain, using `agent/actions/ask.md` or `agent/actions/edit.md`.
 
 ```text
-cmdr> import aw
-cmdr> aw.target-path . | with { (t) aw.ask $t claude:haiku "Where is the lexer?" }
-cmdr> read bug-142.md | aw.target-bug ~/src/app | aw.fix
-cmdr> read spec.md | aw.target-feature ~/src/app | with { (t) list plan@claude:opus critique@codex:gpt-5 implement@cursor verify@codex | with { (s) aw.chain $t $s } }
+cmdr> import agent
+cmdr> agent.target-path . | with { (t) agent.ask $t claude:haiku "Where is the lexer?" }
+cmdr> read bug-142.md | agent.target-bug ~/src/app | agent.fix
+cmdr> read spec.md | agent.target-feature ~/src/app | with { (t) list plan@claude:opus critique@codex:gpt-5 implement@cursor verify@codex | with { (s) agent.chain $t $s } }
 ```
 
-In the REPL, `import` searches the current directory first; run it from `examples/agent-workflows`, or set `CMDR_PATH`.
+In the REPL, `import` searches the current directory first; run it from `examples/agent`, or set `CMDR_PATH`.
 
 `chain` parses and checks every step before any agent runs. It checks that the step matches the grammar, that the agent is known, and that the action file exists with a valid mode. A typo in step 4 costs no agent time on steps 1 to 3. An agent that exits nonzero or times out stops the chain, with the last 20 lines of its stderr in the error. Each run also writes `$AW_RUNS/STAMP-XXXXXX`, with each `## STEP` heading written before its agent starts.
 
@@ -116,7 +116,7 @@ Every agent that runs commands does so in its own sandbox, so agents without one
   On Linux, each step first runs `bwrap --unshare-net` and fails with its stderr if that fails. Ubuntu 24.04's `kernel.apparmor_restrict_unprivileged_userns=1` makes bwrap fail with `loopback: Failed RTM_NEWADDR`. Claude Code's `failIfUnavailable` misses this: claude exits 0 after every Bash call has failed. To fix the host, give `/usr/bin/bwrap` an AppArmor profile that allows `userns`.
 - `codex`: `-s read-only` or `-s workspace-write`.
 - `cursor`: `--sandbox enabled`.
-- `llama`: runs no commands. Every `git` call in `aw` disables `core.fsmonitor` and hooks, so a target's `.git/config` runs nothing. It sends every file from `git ls-files` in DIR that is a regular file, not reached through a symbolic link, then the prompt, to llama-server, and fails if the text exceeds `AW_LLAMA_MAX_BYTES`. MODEL becomes the request's `model`. Every prompt says it cannot run commands, since the action templates ask it to run tests. `reproduce` and `verify` steps only write code.
+- `llama`: runs no commands. Every `git` call in `agent` disables `core.fsmonitor` and hooks, so a target's `.git/config` runs nothing. It sends every file from `git ls-files` in DIR that is a regular file, not reached through a symbolic link, then the prompt, to llama-server, and fails if the text exceeds `AW_LLAMA_MAX_BYTES`. MODEL becomes the request's `model`. Every prompt says it cannot run commands, since the action templates ask it to run tests. `reproduce` and `verify` steps only write code.
 
   In write mode the reply gives each change as an edit block, the format aider uses:
 

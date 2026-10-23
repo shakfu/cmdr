@@ -1,6 +1,6 @@
 # midi
 
-MIDI ports and Standard MIDI Files, through [libremidi](../../../../thirdparty/libremidi-5.4.3), and Euclidean rhythms. They are the module `_midi`; the [midi module](midi.cmdr) builds on them and re-exports them, so `import midi` gives both as `midi.NAME`. Built only into `cmdr-midi`; see [../../README.md](../../README.md).
+MIDI ports and Standard MIDI Files, through [libremidi](../../../../thirdparty/libremidi-5.4.3), and Euclidean rhythms. They are the module `_midi`; the [midi module](midi.cmdr) builds on them and re-exports them, so `import midi` gives both as `midi.NAME`. Built into `cmdr` only with `-DCMDR_MIDI=ON`; see [../../README.md](../../README.md).
 
 | Command | Result |
 |-|-|

@@ -7,7 +7,7 @@
 # a score return a new list; play and write, from _midi, send it. Random
 # definitions use the random module, so random.seed repeats them. The last
 # line re-exports the C commands, so midi.play and midi.seq share one
-# namespace. See ../../README.md. Needs cmdr-midi.
+# namespace. See ../../README.md. Needs -DCMDR_MIDI=ON.
 
 import _midi
 import num

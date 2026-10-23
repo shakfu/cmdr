@@ -1,6 +1,6 @@
 # snd
 
-sox in-process, through [libsox](https://sourceforge.net/projects/sox/), plus a `varispeed` effect on [libsoxr](https://sourceforge.net/projects/soxr/). They are the module `_snd`; the [snd module](snd.cmdr) builds on them and re-exports them, so `import snd` gives both as `snd.NAME`. Built only into `cmdr-snd`; see [../../README.md](../../README.md).
+sox in-process, through [libsox](https://sourceforge.net/projects/sox/), plus a `varispeed` effect on [libsoxr](https://sourceforge.net/projects/soxr/). They are the module `_snd`; the [snd module](snd.cmdr) builds on them and re-exports them, so `import snd` gives both as `snd.NAME`. Built into `cmdr` only with `-DCMDR_SND=ON`; see [../../README.md](../../README.md).
 
 | Command | Result |
 |-|-|

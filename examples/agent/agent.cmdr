@@ -1,0 +1,18 @@
+#!/usr/bin/env cmdr
+# Command-line entry point for the agent module. Run without arguments for usage.
+
+import agent
+
+list "usage: agent.cmdr ask DIR AGENT[:MODEL] PROMPT ..." "       agent.cmdr edit DIR AGENT[:MODEL] PROMPT ..." "       agent.cmdr chain DIR STEP ..." "       agent.cmdr audit DIR [STEP ...]" "       agent.cmdr fix DIR REPORT-FILE [STEP ...]" "       agent.cmdr build DIR SPEC-FILE [STEP ...]" | unlines | as cli-usage
+def cli-args { (a n) count $a | check { ge $n } $cli-usage | $a } "Return ARGS if it has at least N items, else fail with usage"
+def after { (xs n) tail $xs $(count $xs | sub $n) } "Drop the first N items"
+def cli-steps { (a n d) after $a $n | or { nonempty } $d } "Items after N, or D if there are none"
+def cli-prompt { (a f) cli-args $a 4 | nth 2 | agent.target-path | list | map $f $(nth $a 3) $(after $a 3 | unwords) | concat }
+def cli-ask { (a) cli-prompt $a agent.ask }
+def cli-edit { (a) cli-prompt $a agent.edit }
+def cli-chain { (a) cli-args $a 3 | nth 2 | agent.target-path | agent.chain $(after $a 2) }
+def cli-audit { (a) cli-args $a 2 | nth 2 | agent.target-path | with { (t) agent.audit-steps | with { (d) cli-steps $a 2 $d | with { (s) agent.workflow $t path $s } } } }
+def cli-fix { (a) cli-args $a 3 | nth 3 | read | agent.target-bug $(nth $a 2) | with { (t) agent.fix-steps | with { (d) cli-steps $a 3 $d | with { (s) agent.workflow $t bug $s } } } }
+def cli-build { (a) cli-args $a 3 | nth 3 | read | agent.target-feature $(nth $a 2) | with { (t) agent.build-steps | with { (d) cli-steps $a 3 $d | with { (s) agent.workflow $t feature $s } } } }
+
+script-args | with { (a) cli-args $a 1 | first | with { (c) list ask edit chain audit fix build | check { any { equals $c } } $cli-usage | $c | with { (n) concat cli- $n } | with { (cmd) list $a | map $cmd | concat } } }

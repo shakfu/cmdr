@@ -18,12 +18,22 @@ endfunction()
 # Build each extension directory NAME/ into TARGET: its .c files, which define
 # `const cmdr cmdr_ext_NAME`, importable as module _NAME, and its .cmdr files,
 # each importable as the module its file names. NAME.cmdr is the module NAME,
-# which imports _NAME. See README.md, "Extensions".
+# which imports _NAME. See README.md, "Extensions". Each name after MISSING
+# becomes a module whose import fails with how to build it in.
 function(cmdr_add_extensions target)
+  cmake_parse_arguments(PARSE_ARGV 1 arg "" "" "MISSING")
   set(code "#include \"extensions.h\"\n")
   set(layers "")
   set(scripts "")
-  foreach(dir IN LISTS ARGN)
+  foreach(name IN LISTS arg_MISSING)
+    string(TOUPPER "${name}" option)
+    set(stub "${CMAKE_CURRENT_BINARY_DIR}/${target}-missing/${name}.cmdr")
+    cmdr_generate("${stub}" "check \"\" { nonempty } \"cmdr was built without ${name}; configure with -DCMDR_${option}=ON\"\n")
+    string(MAKE_C_IDENTIFIER "${name}" id)
+    cmdr_embed(code "${stub}" cmdr_missing_${id})
+    string(APPEND scripts "    {\"ext/${name}/${name}.cmdr\", cmdr_missing_${id}},\n")
+  endforeach()
+  foreach(dir IN LISTS arg_UNPARSED_ARGUMENTS)
     get_filename_component(name "${dir}" NAME)
     if(NOT EXISTS "${dir}/README.md")
       message(FATAL_ERROR "ext/${name}: missing README.md")
@@ -55,7 +65,8 @@ function(cmdr_add_extensions target)
   target_include_directories(${target} PRIVATE "${PROJECT_SOURCE_DIR}/src")
 endfunction()
 
-# The cmdr executable as NAME, built with the extension directories in ARGN.
+# The cmdr executable as NAME, built with the extension directories in ARGN,
+# and MISSING as cmdr_add_extensions takes it.
 function(cmdr_add_binary name)
   add_executable(${name} "${PROJECT_SOURCE_DIR}/src/main.c")
   target_link_libraries(${name} PRIVATE cmdr_static)

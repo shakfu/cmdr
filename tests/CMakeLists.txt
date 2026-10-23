@@ -24,36 +24,43 @@ endif()
 foreach(fixture IN ITEMS probe clash)
   cmdr_add_binary(test_ext_${fixture} "${CMAKE_CURRENT_SOURCE_DIR}/ext/${fixture}")
 endforeach()
-# examples/agent-workflows with its dry agent, which runs no programs.
+# Importing an optional extension built without says how to build it in.
+foreach(ext IN LISTS CMDR_MISSING_EXTENSIONS)
+  string(TOUPPER "${ext}" option)
+  add_test(NAME missing_${ext} COMMAND cmdr -c "import ${ext}")
+  set_tests_properties(missing_${ext} PROPERTIES TIMEOUT 60
+    PASS_REGULAR_EXPRESSION "import ${ext}: ext/${ext}/${ext}.cmdr:1: cmdr was built without ${ext}; configure with -DCMDR_${option}=ON")
+endforeach()
+# examples/agent with its dry agent, which runs no programs.
 add_test(NAME example_agent_workflows
-  COMMAND cmdr "${PROJECT_SOURCE_DIR}/examples/agent-workflows/tests/test_workflows.cmdr"
+  COMMAND cmdr "${PROJECT_SOURCE_DIR}/examples/agent/tests/test_workflows.cmdr"
   WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}")
 set_tests_properties(example_agent_workflows PROPERTIES TIMEOUT 60
-  ENVIRONMENT "AW_RUNS=${CMAKE_CURRENT_BINARY_DIR}/agent-runs;CMDR_PATH=${PROJECT_SOURCE_DIR}/examples/agent-workflows")
+  ENVIRONMENT "AW_RUNS=${CMAKE_CURRENT_BINARY_DIR}/agent-runs;CMDR_PATH=${PROJECT_SOURCE_DIR}/examples/agent")
 # The demo copies its sample into a git repository and runs python3 on it.
 find_program(CMDR_GIT git)
 find_program(CMDR_PYTHON3 python3)
 if(CMDR_GIT AND CMDR_PYTHON3)
   add_test(NAME example_agent_demo
-    COMMAND cmdr "${PROJECT_SOURCE_DIR}/examples/agent-workflows/demo.cmdr")
+    COMMAND cmdr "${PROJECT_SOURCE_DIR}/examples/agent/demo.cmdr")
   set_tests_properties(example_agent_demo PROPERTIES TIMEOUT 60
     ENVIRONMENT "AW_RUNS=${CMAKE_CURRENT_BINARY_DIR}/agent-demo"
     PASS_REGULAR_EXPRESSION "Bug report:.*tests: exit status 0")
 endif()
-# examples/agent-workflows/aw.cmdr, with the dry agent.
-set(CMDR_AW "${PROJECT_SOURCE_DIR}/examples/agent-workflows/aw.cmdr")
+# examples/agent/agent.cmdr, with the dry agent.
+set(CMDR_AW "${PROJECT_SOURCE_DIR}/examples/agent/agent.cmdr")
 add_test(NAME example_aw_ask COMMAND cmdr "${CMDR_AW}" ask . dry:opus where is it)
 add_test(NAME example_aw_fix COMMAND cmdr "${CMDR_AW}" fix . README.md reproduce@dry diagnose@dry)
 add_test(NAME example_aw_usage COMMAND cmdr "${CMDR_AW}")
 set_tests_properties(example_aw_ask PROPERTIES PASS_REGULAR_EXPRESSION "dry read [.] opus.*where is it")
 set_tests_properties(example_aw_fix PROPERTIES PASS_REGULAR_EXPRESSION "Bug report:")
-set_tests_properties(example_aw_usage PROPERTIES PASS_REGULAR_EXPRESSION "usage: aw.cmdr ask DIR")
+set_tests_properties(example_aw_usage PROPERTIES PASS_REGULAR_EXPRESSION "usage: agent.cmdr ask DIR")
 set_tests_properties(example_aw_ask example_aw_fix example_aw_usage PROPERTIES TIMEOUT 60
   WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
   ENVIRONMENT "AW_RUNS=${CMAKE_CURRENT_BINARY_DIR}/agent-runs")
 # The claude adapter's bwrap preflight, with stub bwrap and claude on PATH.
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
-  set(CMDR_AW_STUBS "${PROJECT_SOURCE_DIR}/examples/agent-workflows/tests/stubs")
+  set(CMDR_AW_STUBS "${PROJECT_SOURCE_DIR}/examples/agent/tests/stubs")
   add_test(NAME example_aw_sandbox_blocked COMMAND cmdr "${CMDR_AW}" ask . claude where is it)
   add_test(NAME example_aw_sandbox_ok COMMAND cmdr "${CMDR_AW}" ask . claude where is it)
   set_tests_properties(example_aw_sandbox_blocked PROPERTIES
@@ -69,11 +76,11 @@ endif()
 # The llama agent, with a stub curl; jq and git are real.
 find_program(CMDR_JQ jq)
 if(CMDR_GIT AND CMDR_JQ)
-  set(CMDR_AW_STUBS "${PROJECT_SOURCE_DIR}/examples/agent-workflows/tests/stubs")
+  set(CMDR_AW_STUBS "${PROJECT_SOURCE_DIR}/examples/agent/tests/stubs")
   add_test(NAME example_agent_llama
-    COMMAND cmdr "${PROJECT_SOURCE_DIR}/examples/agent-workflows/tests/test_llama.cmdr")
+    COMMAND cmdr "${PROJECT_SOURCE_DIR}/examples/agent/tests/test_llama.cmdr")
   set_tests_properties(example_agent_llama PROPERTIES TIMEOUT 60 FIXTURES_SETUP aw_llama_project
-    ENVIRONMENT "AW_RUNS=${CMAKE_CURRENT_BINARY_DIR}/agent-llama;CMDR_PATH=${PROJECT_SOURCE_DIR}/examples/agent-workflows;PATH=${CMDR_AW_STUBS}:$ENV{PATH}")
+    ENVIRONMENT "AW_RUNS=${CMAKE_CURRENT_BINARY_DIR}/agent-llama;CMDR_PATH=${PROJECT_SOURCE_DIR}/examples/agent;PATH=${CMDR_AW_STUBS}:$ENV{PATH}")
   # An edit rejected twice fails with the reasons and the reply.
   add_test(NAME example_aw_llama_rejected
     COMMAND cmdr "${CMDR_AW}" edit "${CMAKE_CURRENT_BINARY_DIR}/agent-llama/llama-project" llama ALWAYSBAD)

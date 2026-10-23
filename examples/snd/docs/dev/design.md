@@ -14,7 +14,7 @@ Decision record, 2026-10-19.
 | Commands take paths | Audio as a cmdr value | Values are text without NUL bytes, so samples cannot pass through a pipeline |
 | A chain is a list of words | A registry of `snd:N` handles to audio held in C | cmdr has no finalizers, so handles would leak or need explicit freeing |
 | Named effects with sox's positional arguments and defaults, plus `effect SPEC` | One `def` per sox effect | Defaults ([docs/dev/defaults.md](../../../../docs/dev/defaults.md)) cover sox's optional positional arguments, such as `reverb`'s six; flags such as `reverb -w` need `effect`, which passes sox's own syntax |
-| A separate binary, `cmdr-snd`, configured in `examples/sox-dsl/` | `ext/snd/` in the tree's `ext/` | `cmdr` would then require libsox and libsoxr to build |
+| `-DCMDR_SND`, default `OFF`, builds `ext/snd` into `cmdr` | A separate binary, `cmdr-snd`, until 2026-10-23; or `ext/snd/` in the tree's `ext/` | One binary takes any set of extensions. In `ext/`, `cmdr` would always require libsox and libsoxr |
 | Write to a temporary file, then rename | Write OUT directly | OUT may be an input, and a failed write would otherwise destroy it |
 | One lock around every command | Unrestricted calls | libsox keeps global state, such as its message handler and buffer size |
 | OUT's type checked before effects parse their arguments | Checking when the output opens | Some effects' kill functions assume start ran, such as `channels` dereferencing specs only start allocates, so an effect not yet in a chain is freed without kill. Checking first keeps that leak to failures after parsing |

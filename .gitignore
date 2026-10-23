@@ -7,6 +7,7 @@ __pycache__/
 
 # CMake
 /build/
+/build-all/
 
 # Prerequisites
 *.d
@@ -66,10 +67,10 @@ dkms.conf
 # debug information files
 *.dwo
 
-# examples/agent-workflows run logs and demo copies (AW_RUNS default)
+# examples/agent run logs and demo copies (AW_RUNS default)
 agent-runs/
 
-# examples/sox-dsl output (SND_OUT default)
+# examples/snd output (SND_OUT default)
 snd-out/
 
 # examples/midi output (MIDI_OUT default)

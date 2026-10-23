@@ -1,6 +1,6 @@
 # MIDI
 
-MIDI generation in cmdr. The [midi](ext/midi/README.md) extension plays scores on MIDI ports, reads and writes Standard MIDI Files through the vendored [libremidi](../../thirdparty/libremidi-5.4.3) 5.4.3, and makes Bjorklund's Euclidean rhythms. The [midi](ext/midi/midi.cmdr) module builds, changes, and randomizes scores. `import midi` gives both the C commands from `_midi`, such as `midi.read`, and the module's definitions, such as `midi.seq`. The module is built into `cmdr-midi`, so it needs no `CMDR_PATH`. Its chance definitions draw from [ext/random](../../ext/random/README.md), so `random.seed N` repeats a piece.
+MIDI generation in cmdr. The [midi](ext/midi/README.md) extension plays scores on MIDI ports, reads and writes Standard MIDI Files through the vendored [libremidi](../../thirdparty/libremidi-5.4.3) 5.4.3, and makes Bjorklund's Euclidean rhythms. The [midi](ext/midi/midi.cmdr) module builds, changes, and randomizes scores. `import midi` gives both the C commands from `_midi`, such as `midi.read`, and the module's definitions, such as `midi.seq`. The module is built into `cmdr` with `-DCMDR_MIDI=ON`, so it needs no `CMDR_PATH`. Its chance definitions draw from [ext/random](../../ext/random/README.md), so `random.seed N` repeats a piece.
 
 | File | Contents |
 |-|-|
@@ -8,14 +8,15 @@ MIDI generation in cmdr. The [midi](ext/midi/README.md) extension plays scores o
 | [ext/midi/midi.cmdr](ext/midi/midi.cmdr) | The `midi` module: items, scales and chords, rhythm, chance, transforms, output |
 | [demo.cmdr](demo.cmdr) | Builds bass, pads, drums, and a random melody, and writes them as MIDI files |
 | [tests/](tests) | Checks every `midi` module definition |
-| [CMakeLists.txt](CMakeLists.txt) | Builds `cmdr-midi` |
+| [extension.cmake](extension.cmake) | Adds libremidi for `-DCMDR_MIDI` |
+| [CMakeLists.txt](CMakeLists.txt) | The tests |
 
 ```sh
-make
-./build/examples/midi/cmdr-midi examples/midi/demo.cmdr
+make CMAKE_FLAGS=-DCMDR_MIDI=ON
+./build/cmdr examples/midi/demo.cmdr
 ```
 
-The build makes `build/examples/midi/cmdr-midi`: `cmdr` with `ext/` and `ext/midi`. It needs a C++20 compiler and CMake 3.22, or configure skips this example with a status message. libremidi is built with only the system MIDI API: CoreMIDI on macOS, ALSA on Linux. `cmdr` itself does not link it. The demo writes into `MIDI_OUT`, default `midi-out/`. CTest runs the demo, `tests/test_midi.cmdr`, and `ext/midi/tests/`. Only `test_midi.c` uses the MIDI service, through a virtual port of its own; it is skipped where none runs.
+`-DCMDR_MIDI=ON` builds `ext/midi` into `cmdr`. It needs a C++20 compiler and CMake 3.22, or configure fails; `-DCMDR_MIDI=AUTO` skips it instead. libremidi is built with only the system MIDI API: CoreMIDI on macOS, ALSA on Linux. The demo writes into `MIDI_OUT`, default `midi-out/`. With midi built in, CTest runs the demo, `tests/test_midi.cmdr`, and `ext/midi/tests/`. Only `test_midi.c` uses the MIDI service, through a virtual port of its own; it is skipped where none runs.
 
 ## Scores
 
