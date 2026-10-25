@@ -1,6 +1,6 @@
 #!/bin/sh
 # Stands in for curl to llama-server: saves the request body in
-# $AW_RUNS/llama-request.json, appends it to llama-requests.log, and prints
+# $AW_RUNS/llama-request.json, appends it as a line to llama-requests.log, and prints
 # the reply llama-WORD.json for the first WORD in the prompt:
 #   ESCAPE GITDIR LINK  an edit to a path outside the project
 #   ALWAYSBAD           an edit whose SEARCH matches nothing
@@ -16,7 +16,7 @@
 dir=$(dirname "$0")
 req="$AW_RUNS/llama-request.json"
 cat > "$req"
-cat "$req" >> "$AW_RUNS/llama-requests.log"
+{ cat "$req"; echo; } >> "$AW_RUNS/llama-requests.log" # One line per request.
 body=$(cat "$req")
 for w in ESCAPE GITDIR LINK ALWAYSBAD MULTI PARTIAL INHERIT PROSE MISSING NOPATH ORPHAN AMBIG; do
   case $body in *$w*) cat "$dir/llama-$(echo $w | tr A-Z a-z).json"; exit ;; esac

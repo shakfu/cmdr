@@ -1,0 +1,2 @@
+# The fnmatch module: import fnmatch. C commands come from _fnmatch.
+from _fnmatch import match

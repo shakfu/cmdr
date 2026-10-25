@@ -1,6 +1,6 @@
 # json extension
 
-Design sketch, 2026-10-21. Status: nothing implemented. Examples show intended output.
+Design sketch, 2026-10-21. Status: implemented in `ext/json` on 2026-10-25; [ext/json/README.md](../../ext/json/README.md) is the reference. Open questions 1 to 3 kept the defaults below: `json.get` returns JSON, `json.set` alone, and Python's separators. `json.format` keeps number spelling, a departure from the table below. JSONTestSuite is not vendored; `ext/json/tests/test_json.c` holds cases after its y_ and n_ files.
 
 ## Problem
 

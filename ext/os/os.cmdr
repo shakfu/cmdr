@@ -1,0 +1,2 @@
+# The os module: import os. C commands come from _os.
+from _os import sysname hostname cwd pid

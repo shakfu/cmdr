@@ -1,0 +1,18 @@
+# Each line must succeed; cmdr stops at the first that fails.
+
+import fnmatch
+
+fnmatch.match main.c '*.c' | equals main.c
+fnmatch.match src/main.c '*.c'
+fnmatch.match .c '*.c'
+fnmatch.match a.h 'a.[ch]'
+fnmatch.match a.o 'a.[!ch]'
+fnmatch.match ab '??'
+fnmatch.match 'a*' 'a\*'
+not abc { fnmatch.match '*.c' }
+not ab { fnmatch.match '?' }
+not a.c { fnmatch.match 'a.[!ch]' }
+not ab { fnmatch.match 'a\*' }
+not '' { fnmatch.match '?' }
+fnmatch.match '' '*' | equals ''
+list a.c b.h c.c | keep { fnmatch.match '*.c' } | join , | equals a.c,c.c

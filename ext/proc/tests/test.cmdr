@@ -1,0 +1,18 @@
+# Each line must succeed; cmdr stops at the first that fails.
+
+import proc
+import os
+
+os.pid | proc.alive | equals $(os.pid)
+spawn $(list) sleep 30 | as job
+proc.alive $job | equals $job
+proc.kill $job | equals $job
+# Signalled and reaped by the next spawn, or a zombie until then.
+retry 40 every 0.05 { () not $job { proc.alive } }
+# A process group, as spawn starts one: its leader's pid, negated.
+spawn $(list) sh -c 'sleep 30 & wait' | as group
+retry 40 every 0.05 { () proc.alive $group }
+proc.kill $(concat - $group) KILL | equals $(concat - $group)
+retry 40 every 0.05 { () not $group { proc.alive } }
+proc.kill $(os.pid) 0 | equals $(os.pid)
+proc.kill $(os.pid) SIGCONT | equals $(os.pid)

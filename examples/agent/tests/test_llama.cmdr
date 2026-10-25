@@ -3,6 +3,7 @@
 
 import agent
 import fs
+import json
 import shlex
 
 agent.runs-dir | fs.mkdir | path-join llama-project | as project "A git copy of sample/"
@@ -15,7 +16,7 @@ def edit-fails { (q) project | agent.target-path | try { (t) agent.edit $t llama
 def stages { () agent.runs-dir | fs.dirs | keep { matches 'llama-stage-' } | count } "Staging copies left in AW_RUNS"
 def absent { (p) try { () fs.exists $p | $p } absent | check { equals absent } "a file was written outside the project" }
 
-project | with { (d) run rm -rf $d | $d | with { (x) run cp -R $(script-dir | path-join ../sample) $x } }
+project | with { (d) or { () fs.exists $d | fs.remove-tree } "" | with { (_) script-dir | path-join ../sample | fs.copy $d } }
 project | with { (d) list "init -q" "add -A" "commit -q -m sample" | each { (c) git-in $d $(shlex.split $c) } }
 
 # ask sends every tracked file and returns the reply without applying it.
@@ -26,7 +27,8 @@ stats | check { contains "(len(xs) - 1)" } "ask changed a file"
 
 # edit applies the reply's edit block, sends MODEL, and deletes its staging copy.
 stages | with { (n) project | agent.target-path | agent.edit llama:qwen "Fix mean." | check { contains "off by one" } "edit did not return the reply" | $n | with { (k) stages | sub $k } | check { equals 0 } "a staging copy was left after its edits applied" }
-request | check { contains '"model":"qwen"' } "the request lacked the model"
+request | json.text model | check { equals qwen } "the request lacked the model"
+request | json.text messages 0 content | check { contains "Fix mean." } "the request lacked the prompt"
 request | check { contains "<<<<<<< SEARCH" } "the request did not describe edit blocks"
 stats | check { contains "return sum(xs) / len(xs)\n" } "edit did not apply the block"
 
@@ -78,10 +80,10 @@ edit-fails ESCAPE
 agent.runs-dir | path-join escape.txt | absent
 edit-fails GITDIR
 project | path-join .git/hooks/pre-commit | absent
-project | with { (d) run ln -s $(agent.runs-dir) $(path-join $d link) }
+project | with { (d) fs.symlink $(agent.runs-dir) $(path-join $d link) }
 edit-fails LINK
 agent.runs-dir | path-join escape.txt | absent
-run rm $(project | path-join link)
+project | path-join link | fs.remove
 
 # .git is rejected in any case, since APFS and NTFS ignore case.
 list .GIT/hooks/pre-commit .Git/config | each { (p) project | try { (d) agent.edit-safe $d $p | text accepted } rejected | check { equals rejected } "a .git path in another case was accepted" }
@@ -104,13 +106,13 @@ stats | check { contains "(len(xs) - 1)" } "an ambiguous block changed stats.py"
 agent.runs-dir | path-join llama-evil | as evil
 agent.runs-dir | path-join llama-secret.txt | as secret
 agent.runs-dir | path-join llama-pwned | as pwned
-run rm -rf $evil $pwned
+list $evil $pwned | each { (p) or { () fs.exists $p | fs.remove-tree } "" }
 fs.mkdir $evil | path-join a.txt | with { (a) text hi | write $a }
 evil | path-join plain.md | with { (p) text plain | write $p }
 text SECRET-A1 | write $secret
-run ln -s $secret $(path-join $evil notes.md)
+fs.symlink $secret $(path-join $evil notes.md)
 list "init -q" "add -A" "commit -q -m evil" | each { (c) git-in $evil $(shlex.split $c) }
-run rm $(path-join $evil plain.md) | with { (_) run ln -s $secret $(path-join $evil plain.md) }
+path-join $evil plain.md | fs.remove | with { (p) fs.symlink $secret $p }
 format "touch '{}'; false" $pwned | with { (cmd) git-in $evil $(list config core.fsmonitor $cmd) }
 agent.llama-context $evil | check { contains "### a.txt" } "llama-context lost a.txt" | check { not { contains SECRET-A1 } } "llama-context read through a link"
 try { () agent.edit-infer $evil SECRET-A1 } none | check { equals none } "edit-infer read through a link"

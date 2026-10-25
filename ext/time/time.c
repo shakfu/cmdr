@@ -69,10 +69,34 @@ static int format(int utc, const char *name, size_t argc, const cmdr_value *argv
 COMMAND(local_command) { return format(0, "time.local", argc, argv, result, error); }
 COMMAND(utc_command) { return format(1, "time.utc", argc, argv, result, error); }
 
+static double monotonic(void)
+{
+    struct timespec t;
+    clock_gettime(CLOCK_MONOTONIC, &t);
+    return (double)t.tv_sec + (double)t.tv_nsec / 1e9;
+}
+
+/* In slices, so an interrupt ends it, as retry's wait does. */
+COMMAND(sleep_command)
+{
+    if (argc != 1) return cmdr_error(error, "usage: time.sleep SECONDS");
+    double seconds;
+    if (cmdr_number(argv[0].text, &seconds, error)) return 1;
+    if (seconds < 0) return cmdr_error(error, "time.sleep: SECONDS %s is below 0", argv[0].text);
+    double deadline = monotonic() + seconds, left;
+    while (!cmdr_interrupted() && (left = deadline - monotonic()) > 0) {
+        double d = left < 0.05 ? left : 0.05;
+        nanosleep(&(struct timespec){(time_t)d, (long)((d - (double)(time_t)d) * 1e9)}, NULL);
+    }
+    if (cmdr_interrupted()) return cmdr_error(error, "time.sleep: interrupted");
+    return 0;
+}
+
 #define TEXT(n, u, d, f) {.name = n, .usage = u, .docstring = d, .run = f, .text = 1}
 static const cmdr_command commands[] = {
     TEXT("now", "now", "Return the time in epoch seconds", now_command),
     TEXT("local", "local [EPOCH] FORMAT", "Format a time with strftime, in local time", local_command),
     TEXT("utc", "utc [EPOCH] FORMAT", "Format a time with strftime, in UTC", utc_command),
+    TEXT("sleep", "sleep SECONDS", "Wait SECONDS, a number; Ctrl-C ends the wait", sleep_command),
 };
 const cmdr cmdr_ext_time = {commands, sizeof(commands) / sizeof(commands[0]), NULL};

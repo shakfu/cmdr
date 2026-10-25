@@ -740,6 +740,13 @@ class Commands(unittest.TestCase):
             ('list $(list a b) $(list c d) | first | join ,', 'a,b\n'),
             ('list $(list a b) $(list c d) | last | join ,', 'c,d\n'),
             ('list $(list a b) $(list c d) e | nth 2 | join ,', 'c,d\n'),
+            ('text "x\\ny\\n" | nth 2', 'y\n'),
+            ('text "x\\ny" | nth 2', 'y\n'),
+            ('text "x\\n\\nz" | nth 2 | length', '0\n'),
+            # Out of range mismatches, so or and not see it.
+            ('or { () list a | nth 2 } miss', 'miss\n'),
+            ('or { () list a | nth 0 } miss', 'miss\n'),
+            ('or { () text "" | nth 1 } miss', 'miss\n'),
             ('text "x\\ny\\n" | first', 'x\n'),
             ("list '' b | first | length", '0\n'),
             ('list a b c | init | join ,', 'a,b\n'),
@@ -779,8 +786,11 @@ class Commands(unittest.TestCase):
             with self.subTest(source=source):
                 self.run_line(source, expected)
         errors = [
-            ('list a b c | nth 4', 'nth [a, b, c] 4: le: 4 is not at most 3'),
-            ('list a b c | nth 0', 'nth [a, b, c] 0: gt: 0 is not greater than 0'),
+            ('list a b c | nth 4', 'nth: 4 is out of range for 3 items'),
+            ('list a b c | nth 0', 'nth: 0 is out of range for 3 items'),
+            ('text "a\\nb\\n" | nth 3', 'nth: 3 is out of range for 2 items'),
+            ('list a b c | nth 1.5', 'nth: N is not an integer: 1.5'),
+            ('list a | nth x', 'invalid finite number: x'),
             ('list | init', 'init []: nonempty: empty list'),
             ('list | first', 'first []: nonempty: empty list'),
             ('list | last', 'last []: nonempty: empty list'),

@@ -6,6 +6,7 @@
 
 import _snd
 import fs
+import lists
 import num
 import str
 
@@ -63,8 +64,8 @@ def stats-field { (chain name) stats $chain | lines | field $name | words | firs
 # returns the paths written.
 def numbered { (path i) path-basename $path | length | with { (k) take $path $(length $path | sub $k) } | concat $(path-stem $path) $(str.pad-left $i 3 0) . $(path-ext $path) } "PATH with I in 3 digits before its extension"
 def render { (chain path) out $chain $(numbered $path 0) } "Run CHAIN into PATH numbered 0"
-def cut { (whole path cuts) count $cuts | num.range | each { (i) numbered $path $i | _snd.run $whole $(nth $cuts $i | words) } | with { (written) fs.remove $whole | $written } } "Apply effect item I of CUTS to WHOLE, writing PATH numbered I; delete WHOLE"
-def split-at { (chain points path) words $points | with { (ps) fold $ps $(list 0) { (c p) push $c $p } | with { (starts) count $ps | num.range | each { (i) format "trim {} ={}" $(nth $starts $i) $(nth $ps $i) } | with { (cuts) last $ps | with { (p) push $cuts $(concat "trim " $p) } } } } | with { (cuts) render $chain $path | cut $path $cuts } } "Split CHAIN's audio at POINTS, seconds in order such as \"1.5 3\""
+def cut { (whole path cuts) lists.enumerate $cuts | each { (p) numbered $path $(nth $p 1) | _snd.run $whole $(nth $p 2 | words) } | with { (written) fs.remove $whole | $written } } "Apply effect item I of CUTS to WHOLE, writing PATH numbered I; delete WHOLE"
+def split-at { (chain points path) words $points | with { (ps) fold $ps $(list 0) { (c p) push $c $p } | with { (starts) lists.zip $starts $ps | each { (p) format "trim {} ={}" $(nth $p 1) $(nth $p 2) } | with { (cuts) last $ps | with { (p) push $cuts $(concat "trim " $p) } } } } | with { (cuts) render $chain $path | cut $path $cuts } } "Split CHAIN's audio at POINTS, seconds in order such as \"1.5 3\""
 def split-silence { (chain db seconds path) render $chain $path | with { (w) _snd.segments $w $db $seconds | prefix "trim " | with { (cuts) cut $w $path $cuts } } } "Split CHAIN's audio at each silence at or below DB dBFS lasting SECONDS, dropping the silences"
 def split-channels { (chain path) render $chain $path | with { (w) info-field $w channels | num.range | prefix "remix " | with { (cuts) cut $w $path $cuts } } } "Write each channel of CHAIN's audio to its own file"
 

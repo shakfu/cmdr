@@ -1,0 +1,19 @@
+# Each line must succeed; cmdr stops at the first that fails. JSON escapes
+# give non-ASCII text without non-ASCII source.
+
+import utf8
+import json
+
+json.text '"caf\u00e9 \ud83d\ude00!"' | as mixed
+length $mixed | equals 11
+utf8.length $mixed | equals 7
+utf8.take $mixed 4 | json.str | equals '"caf\u00e9"'
+utf8.drop $mixed 5 | json.str | equals '"\ud83d\ude00!"'
+utf8.take $mixed 100 | equals $mixed
+utf8.drop $mixed 100 | equals ""
+utf8.chars $mixed | count | equals 7
+utf8.chars $mixed | nth 6 | length | equals 4
+utf8.valid $mixed | equals $mixed
+utf8.length "" | equals 0
+utf8.chars "" | count | equals 0
+utf8.take abc 0 | equals ""

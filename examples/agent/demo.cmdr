@@ -13,7 +13,7 @@ import shlex
 
 script-args | or { first } dry | as demo-agent "AGENT[:MODEL] from the command line, or dry"
 agent.runs-dir | fs.mkdir | path-join demo-project | as demo-dir "The copy of sample/"
-def demo-reset { () run rm -rf $demo-dir | $demo-dir | with { (x) run cp -R $(script-dir | path-join sample) $x } | $demo-dir } "Replace the copy with sample/"
+def demo-reset { () or { () fs.exists $demo-dir | fs.remove-tree } "" | with { (_) script-dir | path-join sample | fs.copy $demo-dir } } "Replace the copy with sample/"
 def demo-commit { () list "init -q" "add -A" "commit -q -m 'sample project'" "log --oneline" | each { (c) list -c user.name=demo -c user.email=demo@example.invalid $(shlex.split $c) | with { (a) agent.git-in $demo-dir $a } } | last } "Commit the copy; return the log"
 
 # 1. Copy sample/ and commit it, so git shows what the agent changes.

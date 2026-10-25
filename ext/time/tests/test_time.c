@@ -3,7 +3,20 @@
 #include "cmdr.h"
 #include "ext_check.h"
 
+#include <signal.h>
+#include <sys/time.h>
+#include <time.h>
+
 extern const cmdr cmdr_ext_time;
+
+static double monotonic(void)
+{
+    struct timespec t;
+    clock_gettime(CLOCK_MONOTONIC, &t);
+    return (double)t.tv_sec + (double)t.tv_nsec / 1e9;
+}
+
+static void on_alarm(int signal) { cmdr_interrupt(1); }
 
 int main(void)
 {
@@ -25,6 +38,22 @@ int main(void)
     for (int i = 0; i < 17500; ++i) p += sprintf(p, "%%Y");
     expect_error(table, line, 1, "time.utc: output exceeds 65536 bytes");
     free(line);
+
+    double start = monotonic();
+    expect(table, "time.sleep 0.12", "");
+    CHECK(monotonic() - start >= 0.12);
+    expect(table, "time.sleep 0", "");
+    expect_error(table, "time.sleep -1", 1, "time.sleep: SECONDS -1 is below 0");
+    expect_error(table, "time.sleep x", 1, "invalid finite number: x");
+    expect_error(table, "time.sleep", 1, "usage: time.sleep SECONDS");
+    /* An interrupt during the wait ends it. */
+    struct sigaction action = {.sa_handler = on_alarm};
+    CHECK(!sigaction(SIGALRM, &action, NULL));
+    CHECK(!setitimer(ITIMER_REAL, &(struct itimerval){.it_value = {0, 100000}}, NULL));
+    start = monotonic();
+    expect_error(table, "time.sleep 60", 1, "time.sleep: interrupted");
+    CHECK(monotonic() - start < 5);
+    cmdr_interrupt(0);
     puts("test_time: ok");
     return 0;
 }

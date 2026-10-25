@@ -92,9 +92,9 @@ each $runs { (r) agent.result $r }
 | `result` or `error` | run | the output, or why the run failed |
 | `run.err` | run | cmdr's own stderr, such as an interrupt's message |
 
-Every file is replaced by a rename, so a reader never sees part of one. The run writes its own state, so no daemon is needed. `state` reports `lost` when the file says `running` but `ps -o stat=` finds no process, or a zombie, for the pid. It reads the file again after that check, since the run may have finished between the two reads. Pid reuse can make a lost run look live; nothing checks for it.
+Every file is replaced by a rename, so a reader never sees part of one. The run writes its own state, so no daemon is needed. `state` reports `lost` when the file says `running` but `proc.alive` finds no process, or a zombie, for the pid. It reads the file again after that check, since the run may have finished between the two reads. Pid reuse can make a lost run look live; nothing checks for it.
 
-`out` and `err` hold only the current step; earlier steps' outputs are in `log`. claude runs with `--output-format stream-json --verbose`, so `out` gains a line per event. `agent.log` renders text and tool calls with jq and passes other agents' lines unchanged.
+`out` and `err` hold only the current step; earlier steps' outputs are in `log`. claude runs with `--output-format stream-json --verbose`, so `out` gains a line per event. `agent.log` renders text and tool calls with the `json` extension and passes other agents' lines unchanged.
 
 `AW_RUNS` defaults to `~/.cmdr/runs`, so that `status` works from any directory. This also moves the blocking calls' logs.
 

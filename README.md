@@ -401,19 +401,25 @@ Inside a module, `from` binds names the module exports, as in Python; `import` b
 | Module | Commands |
 |-|-|
 | [env](ext/env/README.md) | Environment variables |
-| [fs](ext/fs/README.md) | Path tests, sizes, times, `fs.mkdir`, `fs.remove`, `fs.move` |
+| [fnmatch](ext/fnmatch/README.md) | Shell-style name patterns, with fnmatch(3) |
+| [fs](ext/fs/README.md) | Path tests, sizes, times, links, recursive listing, temporary paths, `fs.mkdir`, `fs.copy`, `fs.move`, `fs.remove`, `fs.remove-tree` |
+| [json](ext/json/README.md) | Read JSON by path and build it, keeping it as text |
+| [lists](ext/lists/README.md) | Enumerate, zip, chain, flatten, replace an item, sort and group by a key, batch, accumulate |
 | [num](ext/num/README.md) | `num.seq`, modulo, rounding |
+| [os](ext/os/README.md) | The system's name, the host name, the working directory, and cmdr's pid |
+| [proc](ext/proc/README.md) | Test and signal processes, such as those `spawn` starts |
 | [random](ext/random/README.md) | Seeded random numbers, choices, shuffles, and samples, as Python's `random` |
 | [re](ext/re/README.md) | Regex extraction, splitting, and replacement |
 | [shlex](ext/shlex/README.md) | Shell-style word splitting and quoting, as Python's `shlex` |
 | [str](ext/str/README.md) | Byte offsets, repetition, padding, reversal |
-| [time](ext/time/README.md) | The current time, and strftime formatting |
+| [time](ext/time/README.md) | The current time, strftime formatting, and `time.sleep` |
+| [utf8](ext/utf8/README.md) | Length, cutting, and splitting by code points |
 
 After `import NAME`, `help NAME.DEF` shows a command's usage and docstring.
 
 ### Commands
 
-These are the primitives, in [src/primitives.c](src/primitives.c). The prelude defines more, such as `first`, `nth`, `sum`, `words`, and `path-join`; `help` lists every command.
+These are the primitives, in [src/primitives.c](src/primitives.c). The prelude defines more, such as `first`, `sum`, `words`, and `path-join`; `help` lists every command.
 
 | Commands | Behavior |
 | --- | --- |
@@ -430,6 +436,7 @@ These are the primitives, in [src/primitives.c](src/primitives.c). The prelude d
 | `join VALUE SEPARATOR` | Join text items |
 | `sort`, `sort-n`, `uniq`, `count` VALUE | Byte-order or numeric sort, adjacent dedup, item count |
 | `head`, `tail` VALUE N; `filter VALUE TEXT` | Select items |
+| `nth VALUE N` | Item N, counting from 1, whole; a mismatch if out of range |
 | `map VALUE COMMAND [ARG ...]` | Call a command per item; COMMAND is looked up when `map` runs |
 | `each VALUE BLOCK [ARG ...]` | Call a block per item |
 | `keep VALUE BLOCK [ARG ...]` | Keep items whose block holds |
@@ -492,7 +499,7 @@ Put definitions in a file, such as `ext.cmdr`, and run `load ext.cmdr` in a sess
 
 `help` lists the commands. It returns text, so `help | filter map` works, and `help NAME` shows one command's full usage and documentation.
 
-- The prompt is light green, except on terminals without escape sequences (`dumb`, `cons25`, `emacs`). The first line names the version and prelude, such as `cmdr 0.4.0 (prelude: standard)`.
+- The prompt is light green, except on terminals without escape sequences (`dumb`, `cons25`, `emacs`). The first line names the version and prelude, such as `cmdr 0.5.0 (prelude: standard)`.
 
 - Highlighting colors commands, references, blocks, sub-pipelines, and strings. Names bound by `as` are bold magenta, where bound and where used. Unknown commands are red.
 

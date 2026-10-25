@@ -1,6 +1,6 @@
 # str
 
-Search, repeat, pad, split, and reverse text. Like `take` and `drop`, these count bytes, so they split multibyte UTF-8 characters.
+Search, repeat, pad, split, and reverse text. Like `take` and `drop`, these count bytes, so they split multibyte UTF-8 characters; [utf8](../utf8/README.md) counts code points.
 
 | Command | Result |
 |-|-|

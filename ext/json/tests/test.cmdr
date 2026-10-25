@@ -1,0 +1,64 @@
+# Each line must succeed; cmdr stops at the first that fails.
+
+import json
+
+text '{"choices": [{"message": {"content": "Hello."}}], "usage": {"n": 1.10}}' | as reply
+json.text $reply choices 0 message content | equals Hello.
+json.get $reply choices -1 message | equals '{"content": "Hello."}'
+# Readers return source slices, so numbers keep their spelling.
+json.get $reply usage n | equals 1.10
+json.get $reply usage n | add 1 | equals 2.1
+json.get '{"id": 12345678901234567890}' id | equals 12345678901234567890
+json.type $reply | equals object
+json.type $reply choices | equals array
+json.type '[1, "a", true, null]' 3 | equals null
+json.type '[1, "a", true, null]' 2 | equals bool
+json.get '[1, "a", true, null]' 1 | equals '"a"'
+json.keys $reply | join , | equals choices,usage
+json.values '[1, [2], {"a": 3}]' | nth 3 | equals '{"a": 3}'
+json.values '{"a": 1, "b": "x"}' | join , | equals '1,"x"'
+json.values '[]' | count | equals 0
+json.has $reply usage n | equals $reply
+# A missing key or index mismatches, so or gives a default.
+or { () json.text $reply model } unknown | equals unknown
+or { () json.get $reply choices 1 } none | equals none
+not $reply { json.has usage m }
+# Path segments are separate arguments, so keys may hold dots and spaces.
+json.text '{"a.b c": "x"}' "a.b c" | equals x
+# The last duplicate key wins, at the first one's place, as in Python.
+json.get '{"a": 1, "b": 2, "a": 3}' a | equals 3
+json.keys '{"a": 1, "b": 2, "a": 3}' | join , | equals a,b
+json.format '{"a": 1, "b": 2, "a": 3}' | equals '{"a": 3, "b": 2}'
+# Escapes decode; keys compare decoded.
+json.text '"tab\there \/"' | equals "tab\there /"
+# Non-ASCII decodes to UTF-8, and json.str escapes it again.
+json.text '"\u00e9"' | length | equals 2
+json.text '"\ud83d\ude00"' | length | equals 4
+json.text '"caf\u00e9 \ud83d\ude00"' | json.str | equals '"caf\u00e9 \ud83d\ude00"'
+json.get '{"a": 1}' a | equals 1
+json.valid ' {"a": [1, 2.5e-3, -0, true, false, null]} ' | trim | starts-with '{'
+not 'not json' { json.valid }
+not '{"a": 1,}' { json.valid }
+not '[1] [2]' { json.valid }
+not '01' { json.valid }
+
+# Building.
+json.str "say \"hi\"\n" | equals '"say \"hi\"\n"'
+json.str "" | equals '""'
+json.array 1 '"a"' $(list true null) | equals '[1, "a", true, null]'
+json.array | equals '[]'
+json.object n 3 s '"x"' | equals '{"n": 3, "s": "x"}'
+json.object | equals '{}'
+json.strings role user content "a \"q\"" | equals '{"role": "user", "content": "a \"q\""}'
+# The request body that llama-chat builds with jq.
+json.strings role user content hi | json.array | with { (ms) json.object messages $ms } | json.set model $(json.str m1) | equals '{"messages": [{"role": "user", "content": "hi"}], "model": "m1"}'
+json.set '{"a": {"b": 1}, "c": 2}' a b '[true]' | equals '{"a": {"b": [true]}, "c": 2}'
+json.set '{ }' k 1 | equals '{"k": 1}'
+json.set '[1, 2, 3]' -1 '"z"' | equals '[1, 2, "z"]'
+json.set '{"a": 1, "a": 2}' a 9 | json.get a | equals 9
+or { () json.set '[1]' 5 0 } miss | equals miss
+or { () json.set '{}' a b 0 } miss | equals miss
+json.format '{"a":[1,{"b":"\u00E9\/"}],"c":{}}' | equals '{"a": [1, {"b": "\u00e9/"}], "c": {}}'
+json.format '{"a":[1,2],"b":[]}' 2 | equals "{\n  \"a\": [\n    1,\n    2\n  ],\n  \"b\": []\n}"
+json.format '[1]' 0 | equals "[\n1\n]"
+json.format '"\u00e9\ud800"' | equals '"\u00e9\ud800"'

@@ -1,0 +1,34 @@
+# Each line must succeed; cmdr stops at the first that fails.
+
+import lists
+
+list a b c | lists.enumerate | each { (p) unwords $p } | join , | equals "1 a,2 b,3 c"
+text "a\nb\n" | lists.enumerate 0 | each { (p) unwords $p } | join , | equals "0 a,1 b"
+list | lists.enumerate | count | equals 0
+lists.zip $(list a b c) $(list 1 2) | each { (p) unwords $p } | join , | equals "a 1,b 2"
+lists.zip $(list a b) | each { (p) count $p } | join , | equals 1,1
+lists.zip $(list a) $(list) | count | equals 0
+lists.chain $(list a b) "c\nd" $(list) | join , | equals a,b,c,d
+lists.chain | count | equals 0
+list $(list a b) c $(list) $(list $(list d)) | lists.flatten | count | equals 4
+list $(list a b) c | lists.flatten | join , | equals a,b,c
+list a b c | lists.set-at 2 x | join , | equals a,x,c
+list a b c | lists.set-at 3 $(list y z) | lists.flatten | join , | equals a,b,y,z
+try { () list a | lists.set-at 2 x } out | equals out
+list a b a | lists.index-of a | equals 1
+list a b a | lists.index-of b | equals 2
+or { () list a b | lists.index-of c } none | equals none
+# Sorts are stable; numeric keys sort as sort-n sorts.
+list bb a ccc dd | lists.sort-by { length } | join , | equals a,bb,dd,ccc
+list 10 9 100 | lists.sort-by { (x) $x } | join , | equals 10,100,9
+list 10 9 100 | lists.sort-n-by { (x) $x } | join , | equals 9,10,100
+list b:2 a:1 c:2 | lists.sort-n-by { (x) split $x : | last } | join , | equals a:1,b:2,c:2
+list ab ac b ad | lists.group-by { take 1 } | each { (g) format "{}={}" $(first $g) $(last $g | join +) } | join , | equals a=ab+ac,b=b,a=ad
+list 1 2 3 4 5 | lists.batched 2 | each { (b) join $b + } | join , | equals 1+2,3+4,5
+list | lists.batched 3 | count | equals 0
+list 1 2 3 4 | lists.accumulate { (a x) add $a $x } | join , | equals 1,3,6,10
+list x | lists.accumulate { (a x) add $a $x } | join , | equals x
+text a/b/c | split / | lists.accumulate { (p c) path-join $p $c } | join , | equals a,a/b,a/b/c
+# Extra arguments follow the item, as for each and fold.
+list a bb | lists.sort-by { (x n) length $x | mul $n } -1 | join , | equals a,bb
+list 1 2 | lists.accumulate { (a x k) add $a $x $k } 10 | join , | equals 1,13

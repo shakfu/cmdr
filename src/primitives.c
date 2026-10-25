@@ -1107,6 +1107,36 @@ COMMAND(push_command)
     return 0;
 }
 
+/* Item N, counting from 1, whole. A list is indexed in place, not copied, so a
+ * loop over positions stays linear. N below 1 or past the end mismatches, as a
+ * predicate would; a fraction is an error. */
+COMMAND(nth_command)
+{
+    if (argc != 2) return cmdr_error(error, "usage: nth LIST_OR_LINES N");
+    double x;
+    if (require_text("nth", &argv[1], error) || cmdr_number(argv[1].text, &x, error)) return 1;
+    const cmdr_value *xs = &argv[0];
+    if (xs->kind != CMDR_LIST && require_text("nth", xs, error)) return 1;
+    size_t count = 0;
+    const char *line = NULL, *end = NULL;
+    if (xs->kind == CMDR_LIST) count = xs->count;
+    else /* Lines, as as_list splits them, up to N. */
+        for (const char *p = xs->text; *p && (x < 1 || (double)count < x); ++count) {
+            line = p;
+            end = strchr(p, '\n');
+            p = end ? end + 1 : p + strlen(p);
+            if (!end) end = p;
+        }
+    if (x < 1 || x > (double)count) {
+        cmdr_error(error, "nth: %s is out of range for %zu item%s", argv[1].text, count,
+                   count == 1 ? "" : "s");
+        return CMDR_MISMATCH;
+    }
+    if (x != (double)(size_t)x) return cmdr_error(error, "nth: N is not an integer: %s", argv[1].text);
+    if (xs->kind != CMDR_LIST) { *result = cmdr_text(line, (size_t)(end - line)); return 0; }
+    return cmdr_clone(&xs->items[(size_t)x - 1], result, error);
+}
+
 COMMAND(lines_command)
 {
     if (argc != 1) return cmdr_error(error, "usage: lines LIST_OR_LINES");
@@ -1705,6 +1735,7 @@ static const cmdr_command pure[] = {
     VALUE("list", "list [VALUE ...]", "Construct a list", list_command),
     VALUE("push", "push LIST_OR_LINES [VALUE ...]", "Append values to a list", push_command),
     VALUE("lines", "lines LIST_OR_LINES", "Split text into a list of lines", lines_command),
+    VALUE("nth", "nth LIST_OR_LINES N", "Return item N, counting from 1", nth_command),
     VALUE("join", "join LIST_OR_LINES SEPARATOR", "Join text items", join_command),
     VALUE("sort", "sort LIST_OR_LINES", "Sort text items by byte order", sort_command),
     VALUE("sort-n", "sort-n LIST_OR_LINES", "Sort numbers in ascending order", sort_n_command),

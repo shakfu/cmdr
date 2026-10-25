@@ -2,6 +2,39 @@
 
 ## Unreleased
 
+## [0.5.0]
+
+### Added
+
+- The `json` extension reads JSON by path and builds it, so scripts need no `jq`. JSON stays text: readers return slices of their input, so numbers keep their spelling, and a missing key mismatches, so `or` gives a default. Text over a map value or key and value pairs, because it needs no change to `cmdr_value` and keeps the distinctions pairs lose. See [docs/dev/ext-json.md](docs/dev/ext-json.md).
+
+  ```text
+  read reply.json | json.text choices 0 message content
+  ```
+
+- `fs` gains `fs.is-link`, `fs.walk`, `fs.realpath`, `fs.temp-file`, `fs.temp-dir`, `fs.symlink`, `fs.copy`, and `fs.remove-tree`, for `test -L`, `find`, `mktemp`, `ln -s`, `cp -R`, and `rm -r` through `run`. `fs.remove-tree` removes a link written `link/` itself; GNU `rm -r link/` deletes the target's contents, then fails. `fs.copy` refuses an existing destination, as Python's `shutil.copytree` does, where `cp -R` copies into it.
+
+- The `os` extension: `os.sysname`, `os.hostname`, `os.cwd`, and `os.pid`.
+
+- The `proc` extension: `proc.alive PID` and `proc.kill PID [SIGNAL]`, for the programs `spawn` starts. `proc.alive` reports a zombie as exited, which `kill -0` cannot tell.
+
+- `time.sleep SECONDS`, which Ctrl-C ends.
+
+- The `lists` extension: `enumerate`, `zip`, `chain`, `flatten`, `set-at`, `index-of`, `sort-by`, `sort-n-by`, `group-by`, `batched`, and `accumulate`. `nth` walks the list, so a loop of `nth` over `num.range` was quadratic; `midi`, `snd`, and `agent` now use these instead. `lists.set-at` out of range is an error, not a mismatch, so `or` cannot hide a bad write.
+
+- The `utf8` extension counts, cuts, and splits text by code points. `agent.log` cut tool input at 120 bytes, which could split a character; it now cuts at 120 code points.
+
+- `nth` is a primitive. As a prelude definition it copied the list through `head` and `tail`, so a loop of `nth` over positions was quadratic; it now indexes a list in place. Out of range is still a mismatch, with a new message: `nth: 4 is out of range for 3 items`.
+
+- The `fnmatch` extension: `fnmatch.match NAME PATTERN`, shell-style patterns with fnmatch(3). Unlike Python's `fnmatch`, `\` escapes, and glibc reads `[^...]` as `[!...]`.
+
+### Changed
+
+- The `agent` example no longer runs `jq`, `mktemp`, `find`, `ps`, `kill`, `test -L`, `uname`, `rm -rf`, `cp -R`, or `sh` for `pwd -P`; it uses `json`, `fs`, `os`, and `proc`. Only its stub claude, a test fixture, still needs jq. Three results differ:
+  - A llama reply without `choices[0].message.content` fails the step. jq printed `null`, which became the reply.
+  - A tracked file that is not UTF-8 goes to llama as `(not UTF-8)`. jq replaced its invalid bytes with U+FFFD.
+  - A tracked file missing from disk is left out of llama's context, not sent as `(unreadable)`.
+
 ## [0.4.0]
 
 ### Added

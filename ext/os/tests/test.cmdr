@@ -1,0 +1,13 @@
+# Each line must succeed; cmdr stops at the first that fails. cmdr runs this
+# in ext/os/tests.
+
+import os
+import fs
+
+os.sysname | equals $(run uname -s | trim)
+os.hostname | equals $(run uname -n | trim)
+os.cwd | path-basename | equals tests
+os.cwd | fs.realpath | equals $(fs.realpath .)
+os.cwd | starts-with /
+# The parent of a shell that cmdr starts is cmdr.
+os.pid | equals $(sh 'echo $PPID' | trim)

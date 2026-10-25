@@ -3,6 +3,9 @@
 # examples/agent.
 
 import agent
+import json
+import str
+import utf8
 
 # One prompt: ask is read-only, edit may write.
 agent.target-path . | agent.ask dry:opus "List the primitives." | check { contains "[dry read . opus]" } "ask did not run read-only"
@@ -30,6 +33,17 @@ list | agent.check-sandbox | check { equals 0 } "empty probe was rejected"
 list true | agent.check-sandbox | check { equals 0 } "passing probe was rejected"
 list false | try { (a) agent.check-sandbox $a } rejected | check { equals rejected } "failing probe was accepted"
 
-# tracked's link scan tolerates a path removed mid-scan, and no other find error.
-list 1 "./a\n" "find: ./x: No such file or directory\n" | agent.find-out | check { equals "./a\n" } "a path removed mid-scan failed the scan"
-try { () list 1 "./a\n" "find: ./y: Permission denied\n" | agent.find-out } rejected | check { equals rejected } "a find error was ignored"
+
+# claude-result returns the last result event's text, or fails with its error.
+list '{"type": "system"}' '{"type": "result", "is_error": false, "result": "a"}' '{"type": "result", "is_error": false, "result": "b"}' | unlines | agent.claude-result | check { equals b } "claude-result did not return the last result"
+text '{"type": "result", "is_error": true, "result": "over quota"}' | try { (o) agent.claude-result $o } { (e) $e } | check { contains "over quota" } "claude-result did not fail with the result"
+text '{"type": "result", "is_error": true, "result": null, "subtype": "error_max_turns"}' | try { (o) agent.claude-result $o } { (e) $e } | check { contains error_max_turns } "claude-result did not fall back to the subtype"
+text '{"type": "assistant"}' | try { (o) agent.claude-result $o } { (e) $e } | check { contains "no result event" } "claude-result accepted output without a result"
+
+# stream-line renders an assistant event's text and tool calls; other lines pass unchanged.
+agent.stream-line '{"type": "assistant", "message": {"content": [{"type": "text", "text": "hi"}, {"type": "tool_use", "name": "Bash", "input": {"command": "ls"}}]}}' | check { equals "hi\n> Bash {\"command\": \"ls\"}" } "stream-line did not render the event"
+agent.stream-line '{"type": "user", "message": {}}' | check { equals "" } "stream-line rendered a user event"
+agent.stream-line "plain {text" | check { equals "plain {text" } "stream-line changed a plain line"
+agent.stream-line 3 | check { equals 3 } "stream-line changed a JSON number"
+# stream-line cuts tool input at 120 code points, not inside a character.
+json.text '"\u00e9"' | with { (e) concat '{"type": "assistant", "message": {"content": [{"type": "tool_use", "name": "B", "input": "' $(str.repeat x 118) $e $e '"}]}}' } | agent.stream-line | check { utf8.valid } "stream-line split a character" | utf8.length | check { equals 124 } "stream-line did not keep 120 code points of the input"

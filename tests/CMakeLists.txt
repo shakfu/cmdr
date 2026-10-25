@@ -58,8 +58,7 @@ set_tests_properties(example_aw_usage PROPERTIES PASS_REGULAR_EXPRESSION "usage:
 set_tests_properties(example_aw_ask example_aw_fix example_aw_usage PROPERTIES TIMEOUT 60
   WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
   ENVIRONMENT "AW_RUNS=${CMAKE_CURRENT_BINARY_DIR}/agent-runs")
-# The claude adapter reads claude's stream-json with jq, as the stub claude
-# writes it.
+# The stub claude writes its stream-json with jq.
 find_program(CMDR_JQ jq)
 # The claude adapter's sandbox, with stub bwrap and claude on PATH. With
 # AW_SANDBOX=1, a failing bwrap stops claude; without it, bwrap is not run.
