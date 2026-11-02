@@ -15,6 +15,8 @@ Read and build JSON kept as text. A path is the arguments after the JSON: each s
 | `json.array [JSON ...]` | An array of the arguments. A list argument adds its items. |
 | `json.object [KEY JSON ...]` | An object. Each KEY is text; each value must be JSON. |
 | `json.strings [KEY TEXT ...]` | An object whose values are strings. |
+| `json.to-dict JSON [SEG ...]` | The object at the path as a [dict](../dict/README.md) whose values are JSON. |
+| `json.from-dict DICT` | An object of DICT, whose values must be JSON. |
 | `json.set JSON SEG [SEG ...] VALUE` | JSON with VALUE, itself JSON, at the path. The last key may be new. |
 | `json.format JSON [INDENT]` | JSON laid out as Python's `json.dumps(json.loads(JSON), indent=INDENT)`. |
 
@@ -31,6 +33,8 @@ cmdr> json.strings role user content hi | json.array | with { (ms) json.object m
 An array index counts from 0, and a negative one from the end, as in Python and jq. So a path copied from jq or API docs selects the same item; `nth` counts from 1.
 
 A missing key or an index out of range is a mismatch, so `or` supplies a default. Malformed JSON, nesting deeper than 512, and a segment applied to a string, number, bool, or null are errors.
+
+`json.to-dict` converts one level: values stay JSON, so `null` and `"null"` stay distinct, and `json.text` decodes a string. Keys are decoded; a duplicate keeps its first place and its last value.
 
 Builders take JSON, never guess: `json.object n 3` is `{"n": 3}`, and `json.object n x` is an error. Text becomes a string only through `json.str` or `json.strings`. `json.set` splices VALUE into the source, so the rest keeps its layout.
 

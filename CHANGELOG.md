@@ -2,7 +2,68 @@
 
 ## Unreleased
 
+### Added
+
+- Dicts, through the `dict` module: text keys mapped to any values, in insertion order. Only `dict.*` commands and `json.to-dict` make one, so no existing command returns a dict and no script changes meaning. A dict prints as KEY, tab, VALUE lines, so its output stays data; one with non-text values, tabs, or newlines cannot print. A dict kind over the typed values of [docs/dev/rich-types.md](docs/dev/rich-types.md), because those change what `3`, `true`, and `sort` mean. See [ext/dict/README.md](ext/dict/README.md).
+
+  ```text
+  read reply.json | json.to-dict | dict.get model | json.text
+  ```
+
+- Embedding: `CMDR_DICT`, `cmdr_dict_put`, `cmdr_dict_get`, and `cmdr_renderable`. A host that prints values calls `cmdr_renderable` first; `cmdr_print` cannot report why a dict does not print.
+
 ### Changed
+
+- Breaking, for C hosts and extensions: `cmdr_value`'s fields are private. Code reads a value with `cmdr_kind_of`, `cmdr_text_of`, `cmdr_count`, `cmdr_item`, `cmdr_dict_key`, and `cmdr_dict_value`, and makes one with `cmdr_text`, `cmdr_text_owned`, `cmdr_list`, `cmdr_dict`, `cmdr_push`, `cmdr_take`, and `cmdr_dict_put`. The size stays 6 pointers, so values still live in arrays and on the stack, and `{0}` is still none. Fixed-size storage over pointer handles, because handles change every callback's signature and allocate per result; the cost is that the layout cannot grow past 6 pointers.
+
+- Breaking: `or [INPUT] BLOCK FALLBACK` calls a block FALLBACK with the mismatch message, as `try` calls its handler. It returned the block unevaluated. Calling it over documenting that FALLBACK is never called, so `or` and `try` treat a block FALLBACK alike.
+
+- `map`'s COMMAND, when it is a literal word in the line or its sub-pipelines, is checked before any stage runs. `text x | write f | map uppr` wrote `f`, then failed. Inside a block it is still resolved when `map` runs, since a def's body may name a command defined later.
+
+- Breaking: `as` or `def` while a block runs is an error: `as cannot run inside a block; bind names at the top level`. An `as` in a def's body bound its name for the whole session each time the def ran. An error over documenting session-wide binding, so names stay lexical.
+
+- Breaking: `nth` parses N as `head` does, so `1.0`, `-1`, and fractions are errors. 0 and past the end still mismatch.
+
+- `replace` reports its usage as `replace TEXT OLD NEW`, as `help` shows, and an empty OLD as `replace: OLD is empty`.
+
+- Breaking: a comment where a line or body starts hides quotes and brackets to the end of its line, so `{ # note }` on one line leaves the block open. Bracket matching read such a comment as code while joining skipped it, so `{ # a } b` closed the block. Skipping it over documenting it as code, so joining, parsing, and `--fmt` agree.
+
+- Breaking: `\` before a newline is an error, `unfinished escape`, in scripts, `-c`, and `--fmt`. Outside a block it put a newline in the word; inside one it stopped joining, giving `unclosed '{'`. `--fmt` added a newline per pass.
+
+- Breaking: a NUL byte in a script, loaded file, module, `--fmt` input, or piped stdin is an error, `NUL byte`. It ended the line silently: `text a\0b c` printed `a`, and `--fmt -w` wrote the truncated file back.
+
+- Blocks and sub-pipelines share one nesting limit of 127 levels, with the error `blocks and sub-pipelines nested too deeply`. Each bracket kind was counted separately, plain `(` included, and syntax allowed 128 levels where evaluation allowed 127. Plain parentheses in a sub-pipeline nest without counting, so `$(text (a))` gives `(a)`. A `)` in a block in a sub-pipeline no longer closes the sub-pipeline.
+
+- A parameter list that declares a name twice is an error, `parameter $x is declared twice`. `(x x)` failed only as `parameter $x is never used`. `_` may repeat, and an inner block may reuse an outer block's name.
+
+- `cmdr --fmt` accepts every script that runs. It checked comment lines with the code, so a comment holding `'` inside a multi-line block gave `unclosed quote`.
+
+- Breaking, for C hosts: a host's own command tables shadow the prelude as well as the primitives, so a host's `last` replaces the prelude's. A later `def` still shadows the host's commands.
+
+- A session without effects has `import` and `from`. They find only the modules the host adds with `cmdr_session_add_module` or `cmdr_session_add_source`; another NAME fails with `import NAME: not a module this host provides`. `load` still needs effects.
+
+- Ctrl-C at an interactive prompt drops the pipeline in plain mode too, with `TERM=dumb` or `-DCMDR_EDITOR=OFF`. There it ended cmdr.
+
+- `-DCMDR_MIDI` checks at configure for the C++20 compiler and standard library that libremidi needs. It checked only for a C++ compiler.
+
+- Two extensions that define one module name fail at configure. At run time the first registered won, without a diagnostic.
+
+- `make check` keeps an existing build type unless `BUILD_TYPE` is given. It reset the type to `RelWithDebInfo`.
+
+- `libcmdr.so` no longer exports `cmdr_prelude_source` and `cmdr_prelude_effects_source`, which no header declares.
+
+- Prelude parameter names match their docstrings, as in `reject XS TEXT`. Only `help` output changes.
+
+- The Vim, Sublime, VS Code, and tree-sitter grammars follow the new comment rule, and the first three mark a backslash at a line's end as an error.
+
+- `test_syntax_corpus` checks each case in `tests/syntax/corpus.txt` with cmdr, tree-sitter, and Vim: they must agree on accepting it, and give each byte the token class `cmdr_scan` gives. It found four disagreements, now fixed:
+
+  - `$` inside a word, as in `a$x`, is text, not a reference (Vim, Sublime, VS Code).
+  - A `)` inside a block in a sub-pipeline is text, and does not end the sub-pipeline (tree-sitter, Vim).
+  - Parentheses inside a word are text outside a sub-pipeline (tree-sitter).
+  - Braces inside a word are text at top level and balance in a block or sub-pipeline, so `matches $s ^[0-9]{3}$` is one word (tree-sitter, Vim).
+
+  Sublime Text and VS Code are not run, since the test has neither regex engine.
 
 - Breaking: the `agent` example's environment variables take the prefix `CMDR_AGENT_`, as `CMDR_AGENT_RUNS`, in place of `AW_`, which named the module before its rename. Old names are not read. `CMDR_AGENT_` over `AGENT_`, because Azure Pipelines sets `AGENT_*` variables on its build agents.
 

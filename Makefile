@@ -2,6 +2,9 @@
 BUILD_DIR ?= build
 CMAKE ?= cmake
 BUILD_TYPE ?= RelWithDebInfo
+# Passed to a new build directory, or when BUILD_TYPE is set, so reconfiguring
+# keeps a type chosen another way.
+BUILD_TYPE_FLAG = $(if $(filter-out file,$(origin BUILD_TYPE))$(if $(wildcard $(BUILD_DIR)/CMakeCache.txt),,new),-DCMAKE_BUILD_TYPE=$(BUILD_TYPE))
 # Extra configure flags, such as -DCMDR_SND=ON -DCMDR_MIDI=ON.
 CMAKE_FLAGS ?=
 # make install: where, and which optional extensions, such as WITH="snd midi".
@@ -14,7 +17,7 @@ all: configure
 	$(CMAKE) --build $(BUILD_DIR)
 
 configure:
-	$(CMAKE) -S . -B $(BUILD_DIR) -DCMAKE_BUILD_TYPE=$(BUILD_TYPE) $(CMAKE_FLAGS)
+	$(CMAKE) -S . -B $(BUILD_DIR) $(BUILD_TYPE_FLAG) $(CMAKE_FLAGS)
 
 check: all
 	$(CMAKE) --build $(BUILD_DIR) --target check

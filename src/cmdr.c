@@ -15,6 +15,8 @@ enum { MAX_CALL_DEPTH = 128, MAX_VALUE_DEPTH = 1024 };
 /* Calls and sub-pipelines in progress on this thread. Both recurse through
  * evaluate, so one count bounds the stack. */
 static _Thread_local unsigned call_depth;
+/* Block bodies running since this thread's current cmdr_eval began. */
+static _Thread_local unsigned block_depth;
 
 static void (*out_of_memory)(void *data, size_t size);
 static void *out_of_memory_data;
@@ -45,10 +47,43 @@ char *cmdr_strndup(const char *text, size_t n)
     return copy;
 }
 
+/* Hosts see cmdr_value as this shape; the layout must fit it exactly. */
+typedef struct { void *reserved_[6]; } public_value;
+_Static_assert(sizeof(cmdr_value) == sizeof(public_value), "cmdr_value size");
+_Static_assert(_Alignof(cmdr_value) == _Alignof(public_value), "cmdr_value alignment");
+
 cmdr_value cmdr_text(const char *text, size_t n)
 {
     return (cmdr_value){.kind = CMDR_TEXT, .text = cmdr_strndup(text, n)};
 }
+
+cmdr_value cmdr_text_owned(char *text) { return (cmdr_value){.kind = CMDR_TEXT, .text = text}; }
+cmdr_value cmdr_list(void) { return (cmdr_value){.kind = CMDR_LIST}; }
+cmdr_value cmdr_dict(void) { return (cmdr_value){.kind = CMDR_DICT}; }
+
+cmdr_kind cmdr_kind_of(const cmdr_value *value) { return value->kind; }
+
+const char *cmdr_text_of(const cmdr_value *value)
+{
+    return value->kind == CMDR_TEXT || value->kind == CMDR_BLOCK ? value->text : NULL;
+}
+
+size_t cmdr_count(const cmdr_value *value)
+{
+    return value->kind == CMDR_LIST ? value->count : value->kind == CMDR_DICT ? value->count / 2 : 0;
+}
+
+const cmdr_value *cmdr_item(const cmdr_value *list, size_t i) { return &list->items[i]; }
+
+cmdr_value cmdr_take(cmdr_value *list, size_t i)
+{
+    cmdr_value item = list->items[i];
+    list->items[i] = (cmdr_value){0};
+    return item;
+}
+
+const char *cmdr_dict_key(const cmdr_value *dict, size_t i) { return dict->items[2 * i].text; }
+const cmdr_value *cmdr_dict_value(const cmdr_value *dict, size_t i) { return &dict->items[2 * i + 1]; }
 
 void cmdr_push(cmdr_value *list, cmdr_value item)
 {
@@ -106,6 +141,65 @@ void cmdr_render(const cmdr_value *value, FILE *out)
         cmdr_render(&value->items[i], out);
         fputc('\n', out);
     }
+    for (size_t i = 0; value->kind == CMDR_DICT && i + 1 < value->count; i += 2) {
+        const cmdr_value *v = &value->items[i + 1];
+        fprintf(out, "%s\t", value->items[i].text);
+        if (v->kind == CMDR_TEXT) fputs(v->text, out);
+        else {
+            char *d = cmdr_describe(v);
+            fputs(d, out);
+            free(d);
+        }
+        fputc('\n', out);
+    }
+}
+
+static int renderable(const cmdr_value *value, unsigned depth, char **error)
+{
+    if (depth > MAX_VALUE_DEPTH) return cmdr_error(error, "value is nested too deeply");
+    if (value->kind == CMDR_LIST)
+        for (size_t i = 0; i < value->count; ++i)
+            if (renderable(&value->items[i], depth + 1, error)) return 1;
+    for (size_t i = 0; value->kind == CMDR_DICT && i + 1 < value->count; i += 2) {
+        const char *key = value->items[i].text;
+        const cmdr_value *v = &value->items[i + 1];
+        if (v->kind != CMDR_TEXT) {
+            char *d = cmdr_describe(v);
+            int failed = cmdr_error(error, "cannot print dict: value of %s is %s; "
+                                    "convert it to text first", key, d);
+            free(d);
+            return failed;
+        }
+        if (strpbrk(key, "\t\n"))
+            return cmdr_error(error, "cannot print dict: key holds a tab or newline");
+        if (strpbrk(v->text, "\t\n"))
+            return cmdr_error(error, "cannot print dict: value of %s holds a tab or newline", key);
+    }
+    return 0;
+}
+
+int cmdr_renderable(const cmdr_value *value, char **error)
+{
+    return renderable(value, 0, error);
+}
+
+void cmdr_dict_put(cmdr_value *dict, const char *key, cmdr_value value)
+{
+    for (size_t i = 0; i + 1 < dict->count; i += 2)
+        if (!strcmp(dict->items[i].text, key)) {
+            cmdr_free(&dict->items[i + 1]);
+            dict->items[i + 1] = value;
+            return;
+        }
+    cmdr_push(dict, cmdr_text(key, strlen(key)));
+    cmdr_push(dict, value);
+}
+
+const cmdr_value *cmdr_dict_get(const cmdr_value *dict, const char *key)
+{
+    for (size_t i = 0; i + 1 < dict->count; i += 2)
+        if (!strcmp(dict->items[i].text, key)) return &dict->items[i + 1];
+    return NULL;
 }
 
 typedef struct {
@@ -126,6 +220,23 @@ enum { DESCRIBE_BYTES = 32, DESCRIBE_ITEMS = 5, DESCRIBE_DEPTH = 2 };
 static void describe(const cmdr_value *value, unsigned depth, text_buffer *b)
 {
     if (value->kind == CMDR_NONE) { append(b, "no value", 8); return; }
+    if (value->kind == CMDR_DICT) {
+        if (depth >= DESCRIBE_DEPTH) { append(b, "{...}", 5); return; }
+        size_t n = value->count / 2;
+        append(b, "dict {", 6);
+        for (size_t i = 0; i < n && i < DESCRIBE_ITEMS; ++i) {
+            if (i) append(b, ", ", 2);
+            describe(&value->items[2 * i], depth + 1, b);
+            append(b, ": ", 2);
+            describe(&value->items[2 * i + 1], depth + 1, b);
+        }
+        if (n > DESCRIBE_ITEMS) {
+            char more[48];
+            append(b, more, (size_t)snprintf(more, sizeof(more), ", ... %zu entries", n));
+        }
+        append(b, "}", 1);
+        return;
+    }
     if (value->kind == CMDR_LIST) {
         if (depth >= DESCRIBE_DEPTH) { append(b, "[...]", 5); return; }
         append(b, "[", 1);
@@ -273,20 +384,65 @@ typedef struct {
     const char *problem; /* Why parse rejects it, or NULL. */
 } lexeme;
 
-/* Index of the bracket that closes the one before s[i], or n. Brackets of the
- * same kind nest; quotes and escapes hide them. Sets *deep past MAX_CALL_DEPTH,
- * and *in_quote if the text ends in a quote. */
-static size_t closing(const char *s, size_t i, size_t n, char open, char close, int *deep,
-                      int *in_quote)
+/* Index of the bracket that closes the block, or sub-pipeline when sub, opened
+ * before s[i]; n if none does. Blocks and sub-pipelines nest, and so do plain
+ * parentheses inside a sub-pipeline. Quotes, escapes, and a comment where a
+ * line or body starts hide brackets. Sets *deep when blocks and sub-pipelines
+ * nest MAX_CALL_DEPTH deep, *in_quote if the text ends in a quote, and
+ * *escaped_newline for a '\' before a newline. */
+static size_t closing(const char *s, size_t i, size_t n, int sub, int *deep, int *in_quote,
+                      int *escaped_newline)
 {
+    /* Per level: whether it is a sub-pipeline, and its open plain parentheses. */
+    int subs[MAX_CALL_DEPTH];
+    size_t parens[MAX_CALL_DEPTH];
+    size_t levels = 1;
+    subs[0] = sub;
+    parens[0] = 0;
     char quote = 0;
-    for (size_t depth = 1; i < n; ++i) {
+    int start = 1, params = !sub; /* A body starts; a block may open with (params). */
+    for (; i < n; ++i) {
         char c = s[i];
-        if (c == '\\' && quote != '\'') { if (++i == n) break; }
-        else if (quote) { if (c == quote) quote = 0; }
-        else if (c == '\'' || c == '"') quote = c;
-        else if (c == open && ++depth > MAX_CALL_DEPTH) { *deep = 1; return n; }
-        else if (c == close && !--depth) return i;
+        if (c == '\\' && quote != '\'') {
+            if (++i == n) break;
+            if (s[i] == '\n') *escaped_newline = 1;
+            start = params = 0;
+            continue;
+        }
+        if (quote) { if (c == quote) quote = 0; continue; }
+        if (isspace((unsigned char)c)) {
+            if (c == '\n') start = 1, params = 0;
+            continue;
+        }
+        if (start && c == '#') {
+            while (i + 1 < n && s[i + 1] != '\n') ++i;
+            continue;
+        }
+        if (params && c == '(') { /* Skip a parameter list that closes on its line. */
+            size_t j = i + 1;
+            while (j < n && s[j] != ')' && s[j] != '\n') ++j;
+            params = 0;
+            if (j < n && s[j] == ')') { i = j; continue; }
+        }
+        start = params = 0;
+        int top = subs[levels - 1];
+        int open_sub = c == '$' && i + 1 < n && s[i + 1] == '(';
+        if (c == '{' || open_sub) {
+            if (levels + 1 >= MAX_CALL_DEPTH) { *deep = 1; return n; }
+            subs[levels] = open_sub;
+            parens[levels++] = 0;
+            i += open_sub;
+            start = 1;
+            params = !open_sub;
+        } else if (c == '\'' || c == '"') {
+            quote = c;
+        } else if (top && c == '(') {
+            ++parens[levels - 1];
+        } else if (top && c == ')' && parens[levels - 1]) {
+            --parens[levels - 1];
+        } else if ((top && c == ')') || (!top && c == '}')) {
+            if (!--levels) return i;
+        }
     }
     *in_quote = quote != 0;
     return n;
@@ -301,11 +457,11 @@ static lexeme read_lexeme(const char *s, size_t i, size_t n, char **text, unsign
     int sub = s[i] == '$' && i + 1 < n && s[i + 1] == '(';
     if (s[i] == '{' || sub) {
         lx.kind = sub ? LEX_SUB : LEX_BLOCK;
-        int in_quote = 0;
-        lx.close = sub ? closing(s, i + 2, n, '(', ')', &lx.deep, &in_quote)
-                       : closing(s, i + 1, n, '{', '}', &lx.deep, &in_quote);
+        int in_quote = 0, escaped_newline = 0;
+        lx.close = closing(s, i + (sub ? 2 : 1), n, sub, &lx.deep, &in_quote, &escaped_newline);
         lx.end = lx.close < n ? lx.close + 1 : n;
-        if (lx.deep) lx.problem = sub ? "sub-pipelines nested too deeply" : "blocks nested too deeply";
+        if (lx.deep) lx.problem = "blocks and sub-pipelines nested too deeply";
+        else if (escaped_newline) lx.problem = "unfinished escape";
         else if (lx.close == n && in_quote) lx.problem = "unclosed quote";
         else if (lx.close == n) lx.problem = sub ? "unclosed '$('" : "unclosed '{'";
         else if (lx.end < n && !isspace((unsigned char)s[lx.end]) && s[lx.end] != '|')
@@ -325,7 +481,7 @@ static lexeme read_lexeme(const char *s, size_t i, size_t n, char **text, unsign
         int literal = 1; /* c is part of the word's text, not a quote mark. */
         if (c == '\\' && quote != '\'') {
             lx.plain = 0;
-            if (lx.end == n) { lx.problem = "unfinished escape"; break; }
+            if (lx.end == n || s[lx.end] == '\n') { lx.problem = "unfinished escape"; break; }
             c = s[lx.end++];
             if (quote == '"' && c == 'n') c = '\n';
             else if (quote == '"' && c == 't') c = '\t';
@@ -622,6 +778,12 @@ static int compile_block(const cmdr *repl, const char *text, scope *sc, cmdr_cod
                                     (int)n, p);
                 break;
             }
+            size_t k = outer;
+            while (k < sc->count && (strlen(sc->names[k]) != n || strncmp(sc->names[k], p, n))) ++k;
+            if (k < sc->count) {
+                status = cmdr_error(error, "parameter $%.*s is declared twice", (int)n, p);
+                break;
+            }
             sc->names = cmdr_realloc(sc->names, sc->count + 1, sizeof(*sc->names));
             sc->used = cmdr_realloc(sc->used, sc->count + 1, sizeof(*sc->used));
             sc->used[sc->count] = 0;
@@ -638,6 +800,15 @@ static int compile_block(const cmdr *repl, const char *text, scope *sc, cmdr_cod
         }
     }
     if (!status) status = compile_body(repl, p, sc, &code->body, error);
+    /* A binding made while a block runs would outlive the call, so names are
+     * bound only by top-level lines. */
+    for (size_t i = 0; !status && repl && i < code->body.count; ++i) {
+        const stage *s = &code->body.stages[i];
+        const cmdr_command *c = s->count && !s->words[0].ref ? cmdr_find(repl, s->words[0].text) : NULL;
+        if (c && c->run && (!strcmp(c->name, "as") || !strcmp(c->name, "def")))
+            status = cmdr_error(error, "%s cannot run inside a block; bind names at the top level",
+                                c->name);
+    }
     /* An unused parameter would never receive its argument, since only
      * { ... } pipes its input. */
     for (size_t i = outer; !status && repl && i < sc->count; ++i)
@@ -820,6 +991,27 @@ static int evaluate(const cmdr *repl, const program *pg, const char *name, int l
     return status;
 }
 
+/* map looks up its COMMAND when it runs. Check a literal one in the line and its
+ * sub-pipelines before anything runs; blocks are skipped, since a def's body may
+ * name a command defined later. */
+static int check_map(const cmdr *repl, const program *pg, char **error)
+{
+    const cmdr_command *map = cmdr_find(&cmdr_primitives, "map");
+    for (size_t i = 0; i < pg->count; ++i) {
+        const stage *s = &pg->stages[i];
+        for (size_t k = 0; k < s->count; ++k)
+            if (s->words[k].sub && check_map(repl, s->words[k].pipeline, error)) return 1;
+        size_t at = i ? 1 : 2;
+        if (!s->count || s->words[0].ref || strcmp(s->words[0].text, "map")
+            || cmdr_find(repl, "map") != map || at >= s->count)
+            continue;
+        const word *w = &s->words[at];
+        if (!w->ref && !w->block && !w->sub && !cmdr_find(repl, w->text))
+            return cmdr_error(error, "unknown command: %s", w->text);
+    }
+    return 0;
+}
+
 int cmdr_eval(const cmdr *repl, const char *line, cmdr_value *result, char **error)
 {
     *error = NULL;
@@ -830,7 +1022,12 @@ int cmdr_eval(const cmdr *repl, const char *line, cmdr_value *result, char **err
     free(sc.names);
     free(sc.used); /* compile_block grew it. */
     if (failed) return 1;
+    if (repl && check_map(repl, &pg, error)) { dispose(&pg); return 1; }
+    /* A line, such as a module's run by import from a block, binds at its own top level. */
+    unsigned outer = block_depth;
+    block_depth = 0;
     int status = evaluate(repl, &pg, NULL, 1, NULL, NULL, 0, result, error);
+    block_depth = outer;
     dispose(&pg);
     return status;
 }
@@ -892,8 +1089,10 @@ static int call_block(const cmdr_value *block, const char *name,
                                                    .text = code->defaults[i - code->required]};
         env = bound;
     }
+    ++block_depth;
     int status = evaluate(code->scope, &code->body, name, 0, input, env, block->count + code->params,
                           result, error);
+    --block_depth;
     free(bound);
     return status;
 }
@@ -913,11 +1112,16 @@ int cmdr_call(const cmdr *repl, const char *name, size_t argc,
     if (cmdr_interrupted()) return cmdr_error(error, "interrupted");
     const cmdr_command *command = cmdr_find(repl, name);
     if (!command) return cmdr_error(error, "unknown command: %s", name);
+    /* Compiling catches as and def as a block's stages; this catches the rest,
+     * such as map's COMMAND or a sub-pipeline inside a block. */
+    if (block_depth && command->run && (!strcmp(name, "as") || !strcmp(name, "def")))
+        return cmdr_error(error, "%s cannot run inside a block; bind names at the top level", name);
     for (size_t i = 0; command->text && i < argc; ++i)
         if (argv[i].kind == CMDR_LIST)
             return cmdr_error(error, "command '%s' expects text; use map or join for lists", name);
         else if (argv[i].kind != CMDR_TEXT)
-            return cmdr_error(error, "command '%s' expects text, got a block", name);
+            return cmdr_error(error, "command '%s' expects text, got a %s", name,
+                              argv[i].kind == CMDR_DICT ? "dict" : "block");
     if (call_depth >= MAX_CALL_DEPTH)
         return cmdr_error(error, "command '%s' is nested too deeply "
                           "(possible cycle in composed commands)", name);

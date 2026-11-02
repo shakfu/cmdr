@@ -327,7 +327,7 @@ class Commands(unittest.TestCase):
             ("list a | each { text a", "unclosed '{'"),
             ("text {a}b", "expected a space after '}'"),
             ("text { upper }", "expects text"),
-            ("list a | each " + "{ " * 200 + "}" * 200, 'blocks nested too deeply'),
+            ("list a | each " + "{ " * 200 + "}" * 200, 'blocks and sub-pipelines nested too deeply'),
             ('text "" | nonempty', 'nonempty: empty text'),
             ('list | nonempty', 'nonempty: empty list'),
             ('text a | equals b', "equals: a differs from b"),
@@ -591,6 +591,33 @@ class Commands(unittest.TestCase):
                                 "text b | is-a\n")
         self.assertIn('is-a b: b is not a', result.stderr)
 
+    def test_audit_primitives(self):
+        cases = [
+            # or calls a block FALLBACK with the mismatch message, as try does.
+            ("text a | or { equals b } { (m) text got $m }", 'got equals: a differs from b\n'),
+            ("text a | or { equals b } other", 'other\n'),
+            ("list a b | nth 1", 'a\n'),
+            ("list a b | nth 01", 'a\n'),
+            ("or { () list a b | nth 0 } miss", 'miss\n'),
+            ("or { () list a b | nth 3 } miss", 'miss\n'),
+        ]
+        for source, expected in cases:
+            with self.subTest(source=source):
+                self.run_line(source, expected)
+        errors = [
+            # An error skips the handler block.
+            ("text a | or { add 1 } { (m) text got $m }", 'invalid finite number: a'),
+            ("text a | or { equals b } { (m n) text $m $n }", 'or: block takes 2 arguments, got 1'),
+            ("list a b | nth 1.0", 'invalid nonnegative integer: 1.0'),
+            ("list a b | nth -1", 'invalid nonnegative integer: -1'),
+            ("replace abc '' x", 'replace: OLD is empty'),
+            ("replace abc", 'usage: replace TEXT OLD NEW'),
+        ]
+        for source, error in errors:
+            with self.subTest(source=source):
+                result = self.run_line(source, error=error)
+                self.assertNotIn('got', result.stdout)
+
     def test_matches_and_sort_n(self):
         cases = [
             ("text abc123 | matches '^[a-z]+[0-9]+$'", 'abc123\n'),
@@ -639,7 +666,9 @@ class Commands(unittest.TestCase):
             ('def x { bogus }', 'unknown command: bogus'),
             ("def x {}", 'def x: empty block'),
             ("def x { upper | }", "expected a command after '|'"),
-            ("list a | each { (s) def $s { upper } }", 'def a: block uses enclosing parameters'),
+            # Names are bound only by top-level lines, so a call cannot leave one behind.
+            ("list a | each { (s) def $s { upper } }", 'def cannot run inside a block'),
+            ("def mk { (x) text $x | as inner }", 'as cannot run inside a block'),
         ]
         for source, error in errors:
             with self.subTest(source=source):
@@ -676,7 +705,7 @@ class Commands(unittest.TestCase):
         self.assertIn("each item 1: inner: equals: y differs from x", result.stderr)
         # A block keeps the names it captured after its def returns.
         result = self.run_input(
-            "def adder { (n) or $n { equals never } { (x) add $x $n } }\n"
+            "def adder { (n) list { (x) add $x $n } | first }\n"
             "def call { (b x) try $x $b none }\n"
             "adder 10 | call 5\n"
             "def without { (xs v) keep $xs { not { equals $v } } }\n"
@@ -789,8 +818,8 @@ class Commands(unittest.TestCase):
             ('list a b c | nth 4', 'nth: 4 is out of range for 3 items'),
             ('list a b c | nth 0', 'nth: 0 is out of range for 3 items'),
             ('text "a\\nb\\n" | nth 3', 'nth: 3 is out of range for 2 items'),
-            ('list a b c | nth 1.5', 'nth: N is not an integer: 1.5'),
-            ('list a | nth x', 'invalid finite number: x'),
+            ('list a b c | nth 1.5', 'invalid nonnegative integer: 1.5'),
+            ('list a | nth x', 'invalid nonnegative integer: x'),
             ('list | init', 'init []: nonempty: empty list'),
             ('list | first', 'first []: nonempty: empty list'),
             ('list | last', 'last []: nonempty: empty list'),
@@ -834,7 +863,7 @@ class Commands(unittest.TestCase):
         result = self.run_input("def zz { upper }\ndef upper { lower }\nhelp | lines | each { (row) split $row ' ' | head 1 | join '' }\n")
         names = result.stdout.split()
         self.assertEqual(names[:9], ['help', 'def', 'script-file', 'script-dir', 'script-args',
-                                     'as', 'load', 'import', 'from'])
+                                     'as', 'import', 'from', 'load'])
         self.assertEqual(names.count('upper'), 1)
         self.assertLess(names.index('run-in'), names.index('first'))
         self.assertEqual(names[names.index('first'):names.index('first') + 2], ['first', 'last'])
@@ -991,6 +1020,27 @@ class Commands(unittest.TestCase):
         self.run_line('text x', 'x\n')
         self.assertEqual(self.run_input('text y\n').stdout, 'y\n')
 
+    def test_interrupt_prompt(self):
+        # Ctrl-C at the prompt drops the pipeline and cmdr keeps running, also
+        # where reads are cooked: TERM=dumb, or a build without the editor.
+        for term in ['dumb', 'xterm']:
+            with self.subTest(term=term), tempfile.TemporaryDirectory() as home:
+                keys = [b"text c |\r", b"\x03",  # A continued pipeline.
+                        b"text zz\x03",           # A partial line.
+                        b"text ok\r", b"\x04"]
+                code, out = self.pty_session(keys, home, term=term)
+                self.assertEqual(code, 0, out)
+                self.assertIn(b"\nok\r\n", out)
+                self.assertNotIn(b"\nzz\r\n", out)
+                # A line that runs still stops cmdr by SIGINT after one dropped.
+                pidfile = Path(home) / 'pid'
+                run = self.STUBBORN.format(pid=pidfile).encode()
+                code, out = self.pty_session([b"text zz\x03", run + b"\r", (b"started", b"\x03")],
+                                             home, term=term)
+                self.assertEqual(code, -2, out)
+                self.assertIn(b"run sh: interrupted", out)
+                self.assert_gone(int(pidfile.read_text()))
+
     def test_escapes(self):
         cases = [
             ('list a b | join "\\n"', 'a\nb\n'),
@@ -1087,6 +1137,54 @@ class Commands(unittest.TestCase):
                                     text=True, timeout=20)
             self.assertEqual(result.stdout, 'a\n')
             self.assertIn(f'{script}:2: unknown command: bogus', result.stderr)
+
+    def test_audit_parser(self):
+        fmt = lambda source: subprocess.run([str(BINARY), '--fmt'], input=source,
+                                            capture_output=True, text=True, timeout=20)
+        # --fmt checks what runs: comment lines in a block hide quotes and brackets.
+        source = "list 1 | each {\n  # it's here, a } and a )\n  text x\n}\n"
+        self.run_line(source, '1 x\n')
+        self.assertEqual(fmt(source).returncode, 0)
+        # A comment on a block's first line runs to the line's end.
+        self.run_line("list 1 | each { # a } b\n  text x\n}", '1 x\n')
+        self.run_line("list 1 | each { (x) # c\n  text $x\n}", '1\n')
+        # A backslash before a newline is an unfinished escape, not a newline.
+        for source in ("text a\\\n", "list 1 2 | each { text a\\\n}"):
+            with self.subTest(source=source):
+                self.run_line(source, error='unfinished escape')
+                self.assertIn('unfinished escape', fmt(source).stderr)
+        # Blocks and sub-pipelines share one depth; plain parentheses do not count.
+        nest = lambda k: 'text ' + '$(text ' * k + 'x' + ')' * k
+        self.run_line(nest(127), 'x\n')
+        self.run_line(nest(128), error='blocks and sub-pipelines nested too deeply')
+        self.run_line('text $(text ' + '(' * 200 + ')' * 200 + ')', '(' * 200 + ')' * 200 + '\n')
+        self.run_line('text $(with a { (_) text ) })', ')\n')
+        self.run_line('def f { (x x) text $x }', error='parameter $x is declared twice')
+        # as and def fail whenever a block runs, however they are reached.
+        self.run_line('def m { (x) map $x as q }\nm $(list 7)', error='as cannot run inside a block')
+        self.run_line('with a { (_) text $(text 5 | as v) }', error='as cannot run inside a block')
+        with tempfile.TemporaryDirectory() as tmp:
+            Path(tmp, 'mymod.cmdr').write_text('def hi { () text hello }\n')
+            result = subprocess.run([str(BINARY), '-c', 'with x { (_) import mymod }\nmymod.hi'],
+                                    capture_output=True, text=True, timeout=20, cwd=tmp)
+            self.assertEqual((result.returncode, result.stdout), (0, 'hello\n'), result.stderr)
+        # map's literal COMMAND is checked before any stage runs.
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp, 'out.txt')
+            self.run_line(f'text x | write {quote(path)} | map uppr', error='unknown command: uppr')
+            self.assertFalse(path.exists())
+        self.run_line('list a | map upper', 'A\n')
+        # NUL cannot be in text, so it is an error, never a silent cut.
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp, 'nul.cmdr')
+            path.write_bytes(b'text a\0b\ntext next\n')
+            result = subprocess.run([str(BINARY), str(path)], capture_output=True, timeout=20)
+            self.assertIn(b':1: NUL byte', result.stderr)
+            self.assertEqual(result.stdout, b'')
+            result = subprocess.run([str(BINARY), '--fmt', '-w', str(path)],
+                                    capture_output=True, timeout=20)
+            self.assertIn(b'NUL byte', result.stderr)
+            self.assertEqual(path.read_bytes(), b'text a\0b\ntext next\n')
 
     def test_multiline_blocks(self):
         # A block or sub-pipeline spans lines; its newlines go next to '|' or
@@ -1548,17 +1646,16 @@ class Commands(unittest.TestCase):
             "def shout { () greeting | upper }\n"
             "text bye | as greeting\n"
             "greeting\n"
-            "shout\n"
-            "with x { (v) as $v inner }\n"
-            "inner\n")
+            "shout\n")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout, 'HELLO\n2\nxs\nTwo letters\n1\n'
-                                        'bye\nHELLO\nx\n')
+                                        'bye\nHELLO\n')
         errors = [
             ('as x', 'usage: as VALUE NAME'),
             ("text a | as 'a b'", "as: invalid name 'a b'"),
             ('text a | as def', 'as: cannot redefine def'),
-            ('with { upper } { (b) as $b f }', 'as f: VALUE is a block; use def'),
+            ('as { upper } f', 'as f: VALUE is a block; use def'),
+            ('with x { (v) as $v inner }', 'as cannot run inside a block'),
             # The binding exists only after its line runs, and as returns nothing.
             ('text a | as y | y', 'unknown command: y'),
             ('text a | as y | upper', "command 'upper' received no pipeline value"),
@@ -1802,6 +1899,96 @@ class Commands(unittest.TestCase):
                 self.run_line(source, error='usage: from NAME import DEF [as ALIAS] ...')
         self.run_line('from a.b import c', error="from: invalid module name 'a.b'")
 
+    @unittest.skipUnless(os.environ.get('CMDR_SCAN_BIN'), 'CMDR_SCAN_BIN is not set')
+    def test_syntax_corpus(self):
+        # tests/syntax/corpus.txt: cmdr's verdict on each case is its label, and
+        # every editor grammar found agrees, byte for byte, with cmdr_scan.
+        text = (ROOT / 'tests' / 'syntax' / 'corpus.txt').read_text()
+        cases = [(m.group(1) == 'ok', m.group(2), m.group(3)) for m in re.finditer(
+            r'^=== (ok|error): ([^\n]*)\n(.*?)(?=^===|\Z)', text, re.M | re.S)]
+        self.assertGreater(len(cases), 20)
+        grammar = ROOT / 'editors' / 'tree-sitter-cmdr'
+        vim_groups = {'cmdrComment': '#', 'cmdrCommand': 'c', 'cmdrKeyword': 'c',
+                      'cmdrPipe': '|', 'cmdrParam': 'p', 'cmdrSubDelim': '$',
+                      'cmdrReference': 'r'}
+
+        def compare(tool, name, source, got, want):
+            for number, (line, g, w) in enumerate(zip(source.splitlines(), got, want), 1):
+                with self.subTest(tool=tool, case=name, line=number):
+                    pairs = [(a, b) for c, a, b in zip(line, g, w) if not c.isspace()]
+                    self.assertEqual(''.join(a for a, _ in pairs), ''.join(b for _, b in pairs),
+                                     f'{line!r}: {tool} gives {g!r}, cmdr_scan {w!r}')
+
+        def tree_sitter_classes(path, source):
+            import xml.etree.ElementTree as ET
+            starts = [0] + [i + 1 for i, c in enumerate(source) if c == '\n']
+            offset = lambda e, k: starts[int(e.get(k + 'row'))] + int(e.get(k + 'col'))
+            classes = [None] * len(source)
+            out = subprocess.run(['tree-sitter', 'parse', '-p', str(grammar), '--xml', str(path)],
+                                 capture_output=True, text=True, timeout=60).stdout
+            leaves = {'comment': '#', 'reference': 'r', 'identifier': 'p', 'number': 'w',
+                      'raw_string': 'w', 'string': 'w', 'default': 'w'}
+            for e in ET.fromstring(out).iter():
+                if 'srow' not in e.attrib:
+                    continue
+                a, b = offset(e, 's'), offset(e, 'e')
+                if e.tag == 'word':
+                    classes[a:b] = ['c' if e.get('field') == 'command' else 'w'] * (b - a)
+                elif e.tag in leaves:
+                    classes[a:b] = [leaves[e.tag]] * (b - a)
+                elif e.tag in ('block', 'parameters'):
+                    classes[a] = classes[b - 1] = '{' if e.tag == 'block' else '('
+                elif e.tag == 'sub_pipeline':
+                    classes[a] = classes[a + 1] = classes[b - 1] = '$'
+            classes = [k or ('|' if c == '|' else 'w') for k, c in zip(classes, source)]
+            return [''.join(classes[a:a + len(line)]) for a, line in zip(starts, source.splitlines())]
+
+        def vim_classes(path, directory):
+            out = Path(directory) / 'groups'
+            out.unlink(missing_ok=True)
+            dump = ('for l in range(1, line("$")) | call writefile([join(map(range(1, col([l, "$"]) - 1),'
+                    ' {_, c -> synIDattr(synID(g:l, c, 1), "name")}), " ")], "' + str(out) + '", "a") | endfor')
+            subprocess.run(['vim', '-Nu', 'NONE', '-es', '-i', 'NONE',
+                            '--cmd', f'set rtp^={ROOT / "editors" / "vim"}', '-c', 'filetype on',
+                            '-c', 'syntax on', '-c', f'e {path}', '-c', dump, '-c', 'qa!'],
+                           timeout=20, check=True, stdin=subprocess.DEVNULL)
+            rows = [row.split(' ') if row else [] for row in out.read_text().splitlines()]
+            lines = path.read_text().splitlines()
+            return [''.join(('(' if ch in '()' else '{') if g == 'cmdrBrace' else vim_groups.get(g, 'w')
+                            for ch, g in zip(line, row)) for line, row in zip(lines, rows)]
+
+        checked = []
+        with tempfile.TemporaryDirectory() as directory:
+            paths = []
+            for i, (ok, name, source) in enumerate(cases):
+                path = Path(directory) / f'{i:02}.cmdr'
+                path.write_text(source)
+                paths.append(path)
+                result = subprocess.run([str(BINARY), '--fmt', str(path)], capture_output=True,
+                                        text=True, timeout=20)
+                with self.subTest(tool='cmdr', case=name):
+                    self.assertEqual(result.returncode == 0, ok, result.stderr)
+            want = [subprocess.run([os.environ['CMDR_SCAN_BIN'], str(p)], capture_output=True,
+                                   text=True, timeout=20, check=True).stdout.splitlines()
+                    for p in paths]
+            if shutil.which('tree-sitter'):
+                checked.append('tree-sitter')
+                result = subprocess.run(['tree-sitter', 'parse', '-p', str(grammar), '-q',
+                                         *map(str, paths)], capture_output=True, text=True, timeout=120)
+                failed = {line.split('\t')[0] for line in result.stdout.splitlines() if '\t' in line}
+                for (ok, name, source), path, w in zip(cases, paths, want):
+                    with self.subTest(tool='tree-sitter', case=name):
+                        self.assertEqual(str(path) not in failed, ok)
+                    if ok and str(path) not in failed:
+                        compare('tree-sitter', name, source, tree_sitter_classes(path, source), w)
+            if shutil.which('vim'):
+                checked.append('vim')
+                for (ok, name, source), path, w in zip(cases, paths, want):
+                    if ok:
+                        compare('vim', name, source, vim_classes(path, directory), w)
+        if not checked:
+            self.skipTest('neither tree-sitter nor vim found')
+
     def test_syntax_files(self):
         editors = ROOT / 'editors'
         package = json.loads((editors / 'vscode' / 'package.json').read_text())
@@ -1828,7 +2015,15 @@ class Commands(unittest.TestCase):
                   "list 1 -2.5 a1 | each { gt 0 }\n"
                   "text a#b \\| c\n"
                   "num.seq 1 3 | re.replace x '(a)' '\\1' | str.pad-left 3 0\n"
-                  "text $(upper (a)) $tones.hz $(take $x 3) $($n | length) | each { (_ y) text $y }\n")
+                  "text $(upper (a)) $tones.hz $(take $x 3) $($n | length) | each { (_ y) text $y }\n"
+                  # A comment may start a body and hides brackets to the line's end.
+                  "each { # a } b\n"
+                  "each { (x) # c ) }\n"
+                  "text $( # d )\n"
+                  "  upper x)\n"
+                  # After '|', '#' is a command; a backslash before a newline is an error.
+                  "text a | # e\n"
+                  "text a \\\n")
         expected = [
             [('# note | x', 'cmdrComment')],
             [('def', 'cmdrKeyword'), ('shout', 'cmdrDefName'), ('s', 'cmdrParam'),
@@ -1850,6 +2045,12 @@ class Commands(unittest.TestCase):
              ('$(', 'cmdrSubDelim'), ('$n', 'cmdrReference'), ('length', 'cmdrCommand'),
              (')', 'cmdrSubDelim'), ('each', 'cmdrCommand'), ('_', 'cmdrParam'), ('y', 'cmdrParam'),
              ('text', 'cmdrCommand'), ('$y', 'cmdrReference')],
+            [('each', 'cmdrCommand'), ('{', 'cmdrBrace'), ('# a } b', 'cmdrComment')],
+            [('each', 'cmdrCommand'), ('x', 'cmdrParam'), ('# c ) }', 'cmdrComment')],
+            [('text', 'cmdrCommand'), ('$(', 'cmdrSubDelim'), ('# d )', 'cmdrComment')],
+            [('upper', 'cmdrCommand'), (')', 'cmdrSubDelim')],
+            [('text', 'cmdrCommand'), ('|', 'cmdrPipe'), ('#', 'cmdrCommand')],
+            [('text', 'cmdrCommand'), ('\\', 'cmdrEscapeError')],
         ]
         with tempfile.TemporaryDirectory() as directory:
             sample, out = Path(directory) / 'sample.cmdr', Path(directory) / 'groups'
@@ -1900,7 +2101,8 @@ class Commands(unittest.TestCase):
         rejected = ['text {a', 'text $(a', 'text "a', "text 'a", 'text a\\', '| a', 'text a |',
                     'text a | | b', 'text $_', 'text $', 'text $1', 'text $1x', '$x upper',
                     '$(text a) b', '{ upper } x', 'each { (1x) upper }', 'each { (s }', 'text $()',
-                    'list a | each { text x\nupper }', 'text $(text\na)']
+                    'list a | each { text x\nupper }', 'text $(text\na)', 'each { # note }',
+                    'each { text a\\\n}']
         accepted = ['text {a}b', 'text $(text a)b', 'text $a.', 'text $a..b']
         with tempfile.TemporaryDirectory() as directory:
             paths = {}
@@ -1969,7 +2171,9 @@ class Commands(unittest.TestCase):
                                 capture_output=True, text=True, timeout=20)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout, 'a#b #\n')
-        self.run_line("try { () # skipped } x", '')
+        # A comment runs to its line's end, brackets included.
+        self.run_line("try { ()\n  # skipped }\n} x", '')
+        self.run_line("try { () # skipped } x", error="unclosed '{'")
         # quit and exit end only the interactive REPL.
         result = self.run_input('exit\ntext after\n')
         self.assertEqual(result.returncode, 1)
@@ -2088,8 +2292,9 @@ class Commands(unittest.TestCase):
             self.assertIn(b"run sh: interrupted", out)
             self.assertNotIn(b"\nunreachable", out)
             self.assert_gone(int(pidfile.read_text()))
-            history = (Path(home) / '.cmdr_history').read_text().splitlines()
-            self.assertEqual(history, ['text before', run])
+            if os.environ.get('CMDR_EDITOR') == '1':  # History needs the editor.
+                history = (Path(home) / '.cmdr_history').read_text().splitlines()
+                self.assertEqual(history, ['text before', run])
             loop = (b"run sh -c 'echo loo\"\"ping >&2' | length | with { (n) try { () "
                     b"num.seq 1 100000 | each { (i) num.seq $n 1000 | push $i | count } | count } caught }\r")
             code, out = self.pty_session([b"import num\r", loop, (b"looping", b"\x03")], home)

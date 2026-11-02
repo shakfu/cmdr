@@ -67,11 +67,16 @@ static int finish(buffer *b, cmdr_value *result)
     return 0;
 }
 
+static const char *kind_name(const cmdr_value *v)
+{
+    return v->kind == CMDR_LIST ? "a list" : v->kind == CMDR_DICT ? "a dict" : "a block";
+}
+
 /* NAME is the command reporting the error, or NULL. */
 static int require_text(const char *name, const cmdr_value *v, char **error)
 {
     if (v->kind == CMDR_TEXT) return 0;
-    const char *kind = v->kind == CMDR_LIST ? "a list" : "a block";
+    const char *kind = kind_name(v);
     return name ? cmdr_error(error, "%s: expected text, got %s", name, kind)
                 : cmdr_error(error, "expected text, got %s", kind);
 }
@@ -154,8 +159,8 @@ COMMAND(length_command)
 
 COMMAND(replace_command)
 {
-    if (argc != 3 || !argv[1].text[0])
-        return cmdr_error(error, "usage: replace TEXT NONEMPTY_SEARCH REPLACEMENT");
+    if (argc != 3) return cmdr_error(error, "usage: replace TEXT OLD NEW");
+    if (!argv[1].text[0]) return cmdr_error(error, "replace: OLD is empty");
     const char *p = argv[0].text, *search = argv[1].text, *match;
     buffer b = {0};
     while ((match = strstr(p, search))) {
@@ -1001,6 +1006,8 @@ COMMAND(nonempty_command)
         return cmdr_error(error, "nonempty: empty text"), CMDR_MISMATCH;
     if (argv[0].kind == CMDR_LIST && !argv[0].count)
         return cmdr_error(error, "nonempty: empty list"), CMDR_MISMATCH;
+    if (argv[0].kind == CMDR_DICT && !argv[0].count)
+        return cmdr_error(error, "nonempty: empty dict"), CMDR_MISMATCH;
     return cmdr_clone(&argv[0], result, error);
 }
 
@@ -1107,34 +1114,33 @@ COMMAND(push_command)
     return 0;
 }
 
-/* Item N, counting from 1, whole. A list is indexed in place, not copied, so a
- * loop over positions stays linear. N below 1 or past the end mismatches, as a
- * predicate would; a fraction is an error. */
+/* Item N, counting from 1. A list is indexed in place, not copied, so a loop
+ * over positions stays linear. N of 0 or past the end mismatches, as a predicate
+ * would; N that is not a natural number is an error. */
 COMMAND(nth_command)
 {
     if (argc != 2) return cmdr_error(error, "usage: nth LIST_OR_LINES N");
-    double x;
-    if (require_text("nth", &argv[1], error) || cmdr_number(argv[1].text, &x, error)) return 1;
+    size_t n;
+    if (cmdr_natural(&argv[1], &n, error)) return 1;
     const cmdr_value *xs = &argv[0];
     if (xs->kind != CMDR_LIST && require_text("nth", xs, error)) return 1;
     size_t count = 0;
     const char *line = NULL, *end = NULL;
     if (xs->kind == CMDR_LIST) count = xs->count;
     else /* Lines, as as_list splits them, up to N. */
-        for (const char *p = xs->text; *p && (x < 1 || (double)count < x); ++count) {
+        for (const char *p = xs->text; *p && (n < 1 || count < n); ++count) {
             line = p;
             end = strchr(p, '\n');
             p = end ? end + 1 : p + strlen(p);
             if (!end) end = p;
         }
-    if (x < 1 || x > (double)count) {
+    if (n < 1 || n > count) {
         cmdr_error(error, "nth: %s is out of range for %zu item%s", argv[1].text, count,
                    count == 1 ? "" : "s");
         return CMDR_MISMATCH;
     }
-    if (x != (double)(size_t)x) return cmdr_error(error, "nth: N is not an integer: %s", argv[1].text);
     if (xs->kind != CMDR_LIST) { *result = cmdr_text(line, (size_t)(end - line)); return 0; }
-    return cmdr_clone(&xs->items[(size_t)x - 1], result, error);
+    return cmdr_clone(&xs->items[n - 1], result, error);
 }
 
 COMMAND(lines_command)
@@ -1356,9 +1362,8 @@ COMMAND(concat_command)
             const cmdr_value *t = v->kind == CMDR_LIST ? &v->items[k] : v;
             if (t->kind != CMDR_TEXT) {
                 free(b.data);
-                return cmdr_error(error, "concat: argument %zu %s a %s", i + 1,
-                                  v->kind == CMDR_LIST ? "holds" : "is",
-                                  t->kind == CMDR_LIST ? "list" : "block");
+                return cmdr_error(error, "concat: argument %zu %s %s", i + 1,
+                                  v->kind == CMDR_LIST ? "holds" : "is", kind_name(t));
             }
             put(&b, t->text, strlen(t->text));
         }
@@ -1374,8 +1379,8 @@ COMMAND(format_command)
     if (argc < 1) return cmdr_error(error, "usage: format TEMPLATE [ARG ...]");
     for (size_t i = 0; i < argc; ++i)
         if (argv[i].kind != CMDR_TEXT)
-            return i ? cmdr_error(error, "format: argument %zu is a %s; join it first", i - 1,
-                                  argv[i].kind == CMDR_LIST ? "list" : "block")
+            return i ? cmdr_error(error, "format: argument %zu is %s; join it first", i - 1,
+                                  kind_name(&argv[i]))
                      : cmdr_error(error, "format: TEMPLATE is not text");
     const char *t = argv[0].text;
     size_t args = argc - 1, next = 0;
@@ -1582,12 +1587,27 @@ COMMAND(or_command)
 {
     if (argc != 2 && argc != 3) return cmdr_error(error, "usage: or [INPUT] BLOCK FALLBACK");
     const cmdr_value *body = &argv[argc - 2];
+    const cmdr_value *fallback = &argv[argc - 1];
     if (check_body("or", body, argc - 2, error)) return 1;
-    int failed = cmdr_run(body, argc - 2, argv, result, error);
-    if (failed != CMDR_MISMATCH) return failed;
-    free(*error);
-    *error = NULL;
-    return cmdr_clone(&argv[argc - 1], result, error);
+    if (fallback->kind == CMDR_BLOCK && check_body("or", fallback, 1, error)) return 1;
+    char *detail = NULL;
+    int failed = cmdr_run(body, argc - 2, argv, result, &detail);
+    if (failed != CMDR_MISMATCH) {
+        if (failed) *error = detail;
+        else free(detail);
+        return failed;
+    }
+    if (fallback->kind != CMDR_BLOCK) {
+        free(detail);
+        return cmdr_clone(fallback, result, error);
+    }
+    /* A handler block receives the mismatch message, as try's does. */
+    const char *text = detail ? detail : "mismatch";
+    cmdr_value message = cmdr_text(text, strlen(text));
+    free(detail);
+    int status = cmdr_run(fallback, 1, &message, result, error);
+    cmdr_free(&message);
+    return status;
 }
 
 /* As or, but a mismatch fails with MESSAGE in place of the block's own. */
@@ -1697,7 +1717,9 @@ static int save(const char *mode, const char *name, size_t argc, const cmdr_valu
                 cmdr_value *result, char **error)
 {
     if (argc != 2) return cmdr_error(error, "usage: %s VALUE PATH", name);
-    if (require_text(name, &argv[1], error) || cmdr_clone(&argv[0], result, error)) return 1;
+    if (require_text(name, &argv[1], error) || cmdr_renderable(&argv[0], error)
+        || cmdr_clone(&argv[0], result, error))
+        return 1;
     FILE *file = fopen(argv[1].text, mode);
     if (!file) return cmdr_error(error, "%s %s: %s", name, argv[1].text, strerror(errno));
     cmdr_render(&argv[0], file);
@@ -1731,7 +1753,7 @@ static const cmdr_command pure[] = {
     TEXT("equals", "equals TEXT EXPECTED", "Return TEXT if equal to EXPECTED", equals_command),
     TEXT("contains", "contains TEXT SUBSTRING", "Return TEXT if it contains SUBSTRING", contains_command),
     TEXT("matches", "matches TEXT REGEX", "Return TEXT if it matches the extended REGEX", matches_command),
-    VALUE("nonempty", "nonempty VALUE", "Return VALUE unless empty text or list", nonempty_command),
+    VALUE("nonempty", "nonempty VALUE", "Return VALUE unless empty text, list, or dict", nonempty_command),
     VALUE("list", "list [VALUE ...]", "Construct a list", list_command),
     VALUE("push", "push LIST_OR_LINES [VALUE ...]", "Append values to a list", push_command),
     VALUE("lines", "lines LIST_OR_LINES", "Split text into a list of lines", lines_command),
@@ -1755,7 +1777,7 @@ static const cmdr_command pure[] = {
     VALUE("retry", "retry N [every SECONDS] BLOCK [ARG ...]", "Call a block until it succeeds, at most N times", retry_command),
     VALUE("repeat", "repeat N BLOCK [ARG ...]", "Call a block N times with ARGs; list the results", repeat_command),
     VALUE("try", "try [INPUT] BLOCK FALLBACK", "Return FALLBACK, or a handler block's result for the error, if the block fails", try_command),
-    VALUE("or", "or [INPUT] BLOCK FALLBACK", "Return FALLBACK if the block mismatches", or_command),
+    VALUE("or", "or [INPUT] BLOCK FALLBACK", "Return FALLBACK, or a handler block's result for the mismatch, if the block mismatches", or_command),
     VALUE("if", "if [VALUE] COND THEN [elif COND THEN ...] [else ELSE]",
           "Run THEN for the first COND that holds, else ELSE", if_command),
     VALUE("check", "check [INPUT] BLOCK MESSAGE", "Mismatch with MESSAGE if the block mismatches", check_command),

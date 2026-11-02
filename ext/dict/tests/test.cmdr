@@ -1,0 +1,28 @@
+# Each line must succeed; cmdr stops at the first that fails.
+
+import dict
+
+dict.of name cmdr stars 3 | as d
+dict.get $d name | equals cmdr
+dict.keys $d | join , | equals name,stars
+dict.values $d | join , | equals cmdr,3
+dict.count $d | equals 2
+dict.items $d | each { (p) join $p = } | join , | equals name=cmdr,stars=3
+# A missing key mismatches, so or gives a default.
+or { () dict.get $d version } none | equals none
+not $d { (x) dict.has $x version } | dict.has name | dict.count | equals 2
+# Changes return a new dict; a repeated key keeps its place.
+dict.set $d stars 4 | dict.items | each { (p) join $p = } | join , | equals name=cmdr,stars=4
+dict.of a 1 b 2 a 3 | dict.items | each { (p) join $p = } | join , | equals a=3,b=2
+dict.get $d stars | equals 3
+dict.unset $d name missing | dict.keys | join , | equals stars
+dict.merge $d $(dict.of stars 5 lang c) | dict.items | each { (p) join $p = } | join , | equals name=cmdr,stars=5,lang=c
+# Values may be any value; keys are text.
+dict.of tags $(list a b) | dict.get tags | join , | equals a,b
+dict.of inner $(dict.of x 1) | dict.get inner | dict.get x | equals 1
+# from-items inverts items.
+dict.items $d | dict.from-items | dict.get stars | equals 3
+text "a=1\nb=2" | lines | map split = | dict.from-items | dict.get b | equals 2
+# nonempty mismatches on an empty dict.
+or { () dict.of | nonempty } empty | equals empty
+dict.of | dict.count | equals 0

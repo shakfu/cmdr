@@ -1,14 +1,35 @@
 /**
  * Tree-sitter grammar for cmdr scripts. It follows the lexer, parser, and
  * compiler in src/cmdr.c: words, quotes, escapes, references, blocks with
- * parameters, and sub-pipelines, in pipelines that newlines end.
+ * parameters, and sub-pipelines, in pipelines that newlines end. A backslash
+ * before a newline is an error, since /\\./ does not match a newline.
  */
 
-// A bare word's first character: not a quote, escape, brace, parenthesis,
-// pipe, or space, and not '$', which starts a reference or sub-pipeline.
-const WORD_START = /[^\s|{}()'"\\$]/;
-// Characters after the first. '$' and '#' are literal inside a word: a$x.
-const WORD_REST = /[^\s|{}()'"\\]/;
+// Words, by context. None starts with a quote, escape, '{', '(', pipe, or
+// space, nor with '$', which starts a reference or sub-pipeline; a word
+// cannot start with '(', which would hide a block's parameters. '$' and '#'
+// are literal inside a word: a$x. Escapes, /\\./, may appear anywhere.
+// - At top level, braces and parentheses inside a word are text: a{b x).
+// - In a block, parentheses are text, and braces inside a word balance: a{b}.
+// - In a sub-pipeline, parentheses nest, so a word holds none; braces balance.
+const START = /[^\s|{}('"\\$]/;
+const SUB_START = /[^\s|{}()'"\\$]/;
+const TOP_REST = /[^\s|'"\\]/;
+const BLOCK_REST = choice(/[^\s|{}'"\\]/, /\{[^\s|{}'"\\]*\}/);
+const SUB_REST = choice(/[^\s|{}()'"\\]/, /\{[^\s|{}()'"\\]*\}/);
+const ESCAPE = /\\./;
+
+// A command and its arguments, or a lone reference, which makes its value the
+// result. A sub-pipeline cannot be a command.
+const stage = ($, word, argument) => choice(
+  seq(field('command', word), repeat(argument)),
+  field('value', $.reference),
+);
+
+const argument = ($, word, ...more) => choice(
+  word, $.number, $.raw_string, $.string, $.reference, $.block, $.sub_pipeline, ...more,
+);
+
 const NAME = /[A-Za-z][A-Za-z0-9_-]*/;
 
 module.exports = grammar({
@@ -20,7 +41,7 @@ module.exports = grammar({
 
   // After a body's stage, a newline may lead to '|' or to the body's end;
   // only the token after the gap decides.
-  conflicts: $ => [[$.body_pipeline]],
+  conflicts: $ => [[$.body_pipeline], [$.sub_body]],
 
   rules: {
     // Lines, each a pipeline, a comment, or blank; the last may lack a newline.
@@ -31,35 +52,28 @@ module.exports = grammar({
 
     _line: $ => choice($.pipeline, $.comment),
 
-    // A comment is a whole line: '#' where a command could start. Later in a
-    // line, '#' is text, and the word rule takes it.
+    // A comment is '#' where a line or a body starts: after '{', a block's
+    // parameters, or '$('. It runs to the line's end and hides brackets and
+    // quotes, so { # note } leaves the block open. Elsewhere '#' is text.
     comment: _ => token(prec(2, /#[^\n]*/)),
 
     _newline: _ => /\n/,
 
-    // A '|' may end a line; blank and comment lines after it are skipped.
+    // A '|' may end a line; blank and comment lines after it are skipped. A
+    // '#' on the '|' line itself is text.
     pipeline: $ => seq(
       $.stage,
-      repeat(seq('|', repeat(choice($._newline, $.comment)), $.stage)),
+      repeat(seq('|', repeat(seq($._newline, optional($.comment))), $.stage)),
     ),
 
-    // A command and its arguments, or a lone reference, which makes its value
-    // the result. A sub-pipeline cannot be a command.
-    stage: $ => choice(
-      seq(field('command', $.word), repeat($._argument)),
-      field('value', $.reference),
-    ),
+    stage: $ => stage($, $.word, $._argument),
+    _argument: $ => argument($, $.word),
 
-    _argument: $ => choice(
-      $.word,
-      $.number,
-      $.raw_string,
-      $.string,
-      $.reference,
-      $.block,
-      $.sub_pipeline,
-      $.parenthesized,
-    ),
+    block_stage: $ => stage($, alias($.block_word, $.word), $._block_argument),
+    _block_argument: $ => argument($, alias($.block_word, $.word)),
+
+    sub_stage: $ => stage($, alias($.sub_word, $.word), $._sub_argument),
+    _sub_argument: $ => argument($, alias($.sub_word, $.word), $.parenthesized),
 
     // Defined before word: a token both match at the same length, such as 12,
     // goes to the earlier rule, while a longer word, such as 12a or 8k, wins.
@@ -69,10 +83,9 @@ module.exports = grammar({
 
     // Bare text and escapes, without spaces between them: a\|b is one word.
     // One token, so a missing command shows as (MISSING word).
-    word: _ => token(seq(
-      choice(WORD_START, /\\./),
-      repeat(choice(WORD_REST, /\\./)),
-    )),
+    word: _ => token(seq(choice(START, ESCAPE), repeat(choice(TOP_REST, ESCAPE)))),
+    block_word: _ => token(seq(choice(START, ESCAPE), repeat(choice(BLOCK_REST, ESCAPE)))),
+    sub_word: _ => token(seq(choice(SUB_START, ESCAPE), repeat(choice(SUB_REST, ESCAPE)))),
 
     // Single quotes keep everything, backslashes included.
     raw_string: _ => /'[^'\n]*'/,
@@ -96,6 +109,7 @@ module.exports = grammar({
     block: $ => seq(
       '{',
       optional($.parameters),
+      optional($.comment),
       optional($._gap),
       optional(seq(alias($.body_pipeline, $.pipeline), optional($._gap))),
       '}',
@@ -103,11 +117,12 @@ module.exports = grammar({
 
     // Inside a body, a line may also start with '|'.
     body_pipeline: $ => seq(
-      $.stage,
-      repeat(seq(optional($._gap), '|', optional($._gap), $.stage)),
+      alias($.block_stage, $.stage),
+      repeat(seq(optional($._gap), '|', optional($._gap), alias($.block_stage, $.stage))),
     ),
 
-    _gap: $ => repeat1(choice($._newline, $.comment)),
+    // Newlines, each followed by a comment or nothing: a comment starts a line.
+    _gap: $ => repeat1(seq($._newline, optional($.comment))),
 
     // "(a b)" directly after '{'. _ is a parameter the block ignores; a
     // parameter after the first may have a default, one word or "".
@@ -123,13 +138,19 @@ module.exports = grammar({
     // An argument whose value is PIPELINE's result.
     sub_pipeline: $ => seq(
       '$(',
+      optional($.comment),
       optional($._gap),
-      alias($.body_pipeline, $.pipeline),
+      alias($.sub_body, $.pipeline),
       optional($._gap),
       ')',
     ),
 
+    sub_body: $ => seq(
+      alias($.sub_stage, $.stage),
+      repeat(seq(optional($._gap), '|', optional($._gap), alias($.sub_stage, $.stage))),
+    ),
+
     // Literal parentheses, which balance, so $(text (a)) ends at its own ')'.
-    parenthesized: $ => seq('(', repeat($._argument), ')'),
+    parenthesized: $ => seq('(', repeat($._sub_argument), ')'),
   },
 });

@@ -12,6 +12,7 @@ if(Python3_Interpreter_FOUND)
               "CMDR_EDITOR=$<BOOL:${CMDR_EDITOR}>"
               "CMDR_CLASH_BIN=$<TARGET_FILE:test_ext_clash>"
               "CMDR_PROBE_BIN=$<TARGET_FILE:test_ext_probe>"
+              "CMDR_SCAN_BIN=$<TARGET_FILE:test_scan>"
               "${Python3_EXECUTABLE}" "${CMDR_TESTS}" "Commands.${name}")
     # unittest reports a skip as success; show it as skipped.
     set_tests_properties("${name}" PROPERTIES TIMEOUT 60
@@ -24,6 +25,12 @@ endif()
 foreach(fixture IN ITEMS probe clash)
   cmdr_add_binary(test_ext_${fixture} "${CMAKE_CURRENT_SOURCE_DIR}/ext/${fixture}")
 endforeach()
+# Two extension directories defining one module fail to configure.
+add_test(NAME module_clash
+  COMMAND ${CMAKE_COMMAND} -S "${CMAKE_CURRENT_SOURCE_DIR}/module-clash"
+          -B "${CMAKE_CURRENT_BINARY_DIR}/module-clash" "-DCMDR_SOURCE_DIR=${PROJECT_SOURCE_DIR}")
+set_tests_properties(module_clash PROPERTIES TIMEOUT 60
+  PASS_REGULAR_EXPRESSION "module shared is defined in both[ \n]+[^ \n]*/one[ \n]+and[ \n]+[^ \n]*/two")
 # Importing an optional extension built without says how to build it in.
 foreach(ext IN LISTS CMDR_MISSING_EXTENSIONS)
   string(TOUPPER "${ext}" option)
@@ -191,6 +198,10 @@ foreach(target IN LISTS CMDR_LIBRARIES)
   set_tests_properties(${test} PROPERTIES TIMEOUT 60)
   list(APPEND CMDR_TEST_TARGETS ${test})
 endforeach()
+# cmdr_scan's token class per byte, for test_syntax_corpus.
+add_executable(test_scan scan.c)
+target_link_libraries(test_scan PRIVATE cmdr_static)
+list(APPEND CMDR_TEST_TARGETS test_scan)
 # Install into the build tree, then build and run tests/consumer against it.
 set(CMDR_STAGED "${CMAKE_BINARY_DIR}/staged")
 add_test(NAME install COMMAND ${CMAKE_COMMAND} --install ${CMAKE_BINARY_DIR}

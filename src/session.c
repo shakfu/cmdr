@@ -56,6 +56,7 @@ struct cmdr_session {
     cmdr_command builtins[9];
     int effects;
     FILE *out;
+    const cmdr *host; /* The host's commands, ending in the primitives. */
     definition *nodes;
     module **modules;
     size_t nmodules;
@@ -597,6 +598,9 @@ static module *load_module(const cmdr *repl, cmdr_session *session, const char *
         /* Files' paths are absolute, so these keys cannot collide with them. */
         const char *key = builtin->path ? builtin->path : builtin->name;
         path = cmdr_strndup(key, strlen(key));
+    } else if (!session->effects) {
+        cmdr_error(error, "%s %s: not a module this host provides", verb, name);
+        return NULL;
     } else if (!(path = find_module(repl, verb, name, error))) {
         return NULL;
     }
@@ -760,22 +764,24 @@ cmdr_session *cmdr_session_open(const cmdr *commands, int effects, FILE *out)
             {.name = "as", .usage = "as VALUE NAME [DOC]",
              .docstring = "Bind VALUE to NAME, a command for later lines",
              .run = as_command, .user = s},
-            {.name = "load", .usage = "load PATH [ARG ...]",
-             .docstring = "Run a script in this session, with arguments; PATH is relative to the cwd",
-             .run = load_command, .user = s, .text = 1},
             {.name = "import", .usage = "import NAME [as ALIAS]",
              .docstring = "Run module NAME once; bind its definitions as NAME.DEF",
              .run = import_command, .user = s, .text = 1},
             {.name = "from", .usage = "from NAME import DEF [as ALIAS] ...",
              .docstring = "Run module NAME once; bind each DEF unqualified, if the name is new",
              .run = from_command, .user = s, .text = 1},
+            {.name = "load", .usage = "load PATH [ARG ...]",
+             .docstring = "Run a script in this session, with arguments; PATH is relative to the cwd",
+             .run = load_command, .user = s, .text = 1},
         },
         .effects = effects,
         .out = out,
     };
-    /* load, import, and from are last, so a session without effects omits them. */
-    s->base = (cmdr){s->builtins, effects ? 9 : 6, commands};
+    /* load is last, so a session without effects omits it; import and from then
+     * find only the host's modules. */
+    s->base = (cmdr){s->builtins, effects ? 9 : 8, commands};
     s->head.parent = &s->base;
+    s->host = commands;
     return s;
 }
 
@@ -839,7 +845,8 @@ int cmdr_print(const cmdr_value *value, FILE *out)
     if (value->kind == CMDR_NONE) return 0;
     cmdr_render(value, out);
     size_t n = value->text ? strlen(value->text) : 0;
-    if (value->kind == CMDR_LIST ? !value->count : (!n || value->text[n - 1] != '\n'))
+    if (value->kind == CMDR_LIST || value->kind == CMDR_DICT ? !value->count
+                                                              : (!n || value->text[n - 1] != '\n'))
         fputc('\n', out);
     return fflush(out) != 0;
 }
@@ -932,6 +939,11 @@ static int run_script(cmdr_session *session, FILE *in, const char *path, char **
         if (n >= 0) {
             ++number;
             if (!used) first = number;
+            /* Text cannot hold NUL, and parsing would stop there silently. */
+            if (memchr(line, '\0', (size_t)n)) {
+                status = cmdr_error(error, "%s:%lu: NUL byte", path, number);
+                break;
+            }
             if (cmdr_join(&pipeline, &used, line, (size_t)n)) continue;
         }
         if (!used) break;
@@ -939,6 +951,7 @@ static int run_script(cmdr_session *session, FILE *in, const char *path, char **
         cmdr_value value;
         char *inner;
         status = cmdr_session_eval(session, pipeline, &value, &inner);
+        if (!status && session->out) status = cmdr_renderable(&value, &inner);
         if (!status && session->out && cmdr_print(&value, session->out))
             status = cmdr_error(&inner, "output failed");
         cmdr_free(&value);
@@ -965,11 +978,25 @@ int cmdr_session_source(cmdr_session *session, const char *source, const char *n
     return status;
 }
 
+/* Layer table and its parents in front of the definitions, nearest on top,
+ * stopping at the primitives. */
+static void push_host(cmdr_session *session, const cmdr *table)
+{
+    if (!table || table == &cmdr_primitives || table == &cmdr_pure) return;
+    push_host(session, table->parent);
+    definition *node = new_node(session);
+    node->layer = (cmdr){table->commands, table->count, session->head.parent};
+    session->head.parent = &node->layer;
+}
+
 int cmdr_session_prelude(cmdr_session *session, char **error)
 {
     *error = NULL;
     int status = cmdr_session_source(session, cmdr_prelude_source, "prelude.cmdr", error);
     if (!status && session->effects)
         status = cmdr_session_source(session, cmdr_prelude_effects_source, "prelude-effects.cmdr", error);
+    /* The host's own tables go above the prelude, so they shadow it as they
+     * shadow the primitives; later definitions still shadow them. */
+    if (!status) push_host(session, session->host);
     return status;
 }

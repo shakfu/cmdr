@@ -2,13 +2,14 @@
 
 Highlighting for `.cmdr` files. Vim, Sublime Text, and VS Code use regular-expression grammars. Helix and Zed use the tree-sitter grammar in `tree-sitter-cmdr/`. Each marks:
 
-- comments, on lines that start with `#`
+- comments: `#` where a line or a body starts, after `{`, a block's parameters, or `$(`, to the end of the line
 - the command in each stage
 - `def` and the name it defines
 - `$(...)` sub-pipelines: `$(` and the `)` that balances it, with the first word inside as a command
 - block parameters, including `_`, `$name` and `$MODULE.NAME` references, quoted strings, escapes, numbers, and `|`
+- a backslash at the end of a line, as an error
 
-The grammars match the lexer in `src/cmdr.c`. They color a command by its position, without checking that it exists. The REPL marks unknown commands in red.
+The grammars match the lexer in `src/cmdr.c`; `test_syntax_corpus` checks tree-sitter and Vim against it on `tests/syntax/corpus.txt`. They color a command by its position, without checking that it exists. The REPL marks unknown commands in red.
 
 | Editor | Files | Install |
 |-|-|-|

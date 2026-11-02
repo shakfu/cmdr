@@ -19,7 +19,7 @@ text "pear,apple" | split , | sort
       (word))))
 
 ================================================================================
-Comments are whole lines; '#' later in a line is text
+A comment starts a line; '#' later in a line is text
 ================================================================================
 
 # whole line
@@ -37,6 +37,83 @@ text a#b # c
       (word)
       (word)
       (word))))
+
+================================================================================
+A comment may start a body and runs to the line's end
+================================================================================
+
+each { # a } and )
+  upper
+}
+text $( # c
+  upper a)
+list a | each { (x) # c
+  text $x }
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (pipeline
+    (stage
+      (word)
+      (block
+        (comment)
+        (pipeline
+          (stage
+            (word))))))
+  (pipeline
+    (stage
+      (word)
+      (sub_pipeline
+        (comment)
+        (pipeline
+          (stage
+            (word)
+            (word))))))
+  (pipeline
+    (stage
+      (word)
+      (word))
+    (stage
+      (word)
+      (block
+        (parameters
+          (parameter
+            (identifier)))
+        (comment)
+        (pipeline
+          (stage
+            (word)
+            (reference)))))))
+
+================================================================================
+'#' after '|' or a stage is text
+================================================================================
+
+text a | # x
+each { text b # y
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (pipeline
+    (stage
+      (word)
+      (word))
+    (stage
+      (word)
+      (word)))
+  (pipeline
+    (stage
+      (word)
+      (block
+        (pipeline
+          (stage
+            (word)
+            (word)
+            (word)
+            (word)))))))
 
 ================================================================================
 A trailing pipe continues over blank and comment lines

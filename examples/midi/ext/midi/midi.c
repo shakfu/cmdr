@@ -196,21 +196,22 @@ static int parse_score(const char *name, const cmdr_value *score, item **items, 
 {
     *items = NULL;
     *count = 0;
-    if (score->kind != CMDR_TEXT && score->kind != CMDR_LIST)
+    cmdr_kind kind = cmdr_kind_of(score);
+    if (kind != CMDR_TEXT && kind != CMDR_LIST)
         return cmdr_error(error, "%s: SCORE is not a list or text", name);
     size_t capacity = 0;
-    const char *text = score->kind == CMDR_TEXT ? score->text : NULL;
+    const char *text = kind == CMDR_TEXT ? cmdr_text_of(score) : NULL;
     for (size_t i = 0;; ++i) {
         const char *line;
         size_t n;
-        if (score->kind == CMDR_LIST) {
-            if (i == score->count) break;
-            if (score->items[i].kind != CMDR_TEXT) {
+        if (kind == CMDR_LIST) {
+            if (i == cmdr_count(score)) break;
+            if (cmdr_kind_of(cmdr_item(score, i)) != CMDR_TEXT) {
                 free(*items);
                 *items = NULL;
                 return cmdr_error(error, "%s: item %zu is not text", name, i + 1);
             }
-            line = score->items[i].text;
+            line = cmdr_text_of(cmdr_item(score, i));
             n = strlen(line);
         } else {
             if (!*text) break;
@@ -341,7 +342,7 @@ static void on_port(void *data, const libremidi_midi_out_port *port)
     const char *name;
     size_t n;
     if (libremidi_midi_out_port_name(port, &name, &n)) return;
-    if (s->names.kind == CMDR_LIST) cmdr_push(&s->names, cmdr_text(name, n));
+    if (cmdr_kind_of(&s->names) == CMDR_LIST) cmdr_push(&s->names, cmdr_text(name, n));
     if (s->found || !s->want) return;
     if (!*s->want || (strlen(s->want) == n && !memcmp(s->want, name, n)))
         libremidi_midi_out_port_clone(port, &s->found);
@@ -379,7 +380,7 @@ static int enumerate(port_search *s, midi_error *e)
 COMMAND(ports_command)
 {
     if (argc) return cmdr_error(error, "usage: midi.ports");
-    port_search s = {.names = {.kind = CMDR_LIST}};
+    port_search s = {.names = cmdr_list()};
     midi_error e = {""};
     if (enumerate(&s, &e)) {
         cmdr_free(&s.names);
@@ -448,14 +449,17 @@ static libremidi_midi_out_handle *open_output(const char *name, const char *want
 COMMAND(play_command)
 {
     if (argc < 1 || argc > 3) return cmdr_error(error, "usage: midi.play SCORE [BPM] [PORT]");
-    if ((argc > 1 && argv[1].kind != CMDR_TEXT) || (argc == 3 && argv[2].kind != CMDR_TEXT))
+    if ((argc > 1 && cmdr_kind_of(&argv[1]) != CMDR_TEXT) ||
+        (argc == 3 && cmdr_kind_of(&argv[2]) != CMDR_TEXT))
         return cmdr_error(error, "midi.play: BPM and PORT are text");
+    const char *tempo = argc > 1 ? cmdr_text_of(&argv[1]) : DEFAULT_BPM;
+    const char *port = argc == 3 ? cmdr_text_of(&argv[2]) : "";
     item *items;
     size_t count, n;
     double bpm;
-    if (parse_bpm("midi.play", argc > 1 ? argv[1].text : DEFAULT_BPM, &bpm, error)) return 1;
+    if (parse_bpm("midi.play", tempo, &bpm, error)) return 1;
     if (parse_score("midi.play", &argv[0], &items, &count, error)) return 1;
-    libremidi_midi_out_handle *out = open_output("midi.play", argc == 3 ? argv[2].text : "", error);
+    libremidi_midi_out_handle *out = open_output("midi.play", port, error);
     if (!out) {
         free(items);
         return 1;
@@ -539,12 +543,13 @@ static long tick_of(double beat) { return (long)round(beat * TPQ); }
 COMMAND(write_command)
 {
     if (argc < 2 || argc > 3) return cmdr_error(error, "usage: midi.write SCORE PATH [BPM]");
-    if (argv[1].kind != CMDR_TEXT || (argc == 3 && argv[2].kind != CMDR_TEXT))
+    if (cmdr_kind_of(&argv[1]) != CMDR_TEXT || (argc == 3 && cmdr_kind_of(&argv[2]) != CMDR_TEXT))
         return cmdr_error(error, "midi.write: PATH and BPM are text");
     item *items;
     size_t count, n;
     double bpm;
-    if (parse_bpm("midi.write", argc == 3 ? argv[2].text : DEFAULT_BPM, &bpm, error)) return 1;
+    const char *tempo = argc == 3 ? cmdr_text_of(&argv[2]) : DEFAULT_BPM;
+    if (parse_bpm("midi.write", tempo, &bpm, error)) return 1;
     if (parse_score("midi.write", &argv[0], &items, &count, error)) return 1;
     double end = score_end(items, count);
     if (round(end * TPQ) > MAX_TICK) {
@@ -576,10 +581,10 @@ COMMAND(write_command)
     int status = smf_encode(out, used, TPQ, tick_of(end), &data, &size);
     free(out);
     if (status) return cmdr_error(error, "midi.write: libremidi cannot encode the score");
-    status = write_file("midi.write", argv[1].text, data, size, error);
+    status = write_file("midi.write", cmdr_text_of(&argv[1]), data, size, error);
     free(data);
     if (status) return 1;
-    *result = cmdr_text(argv[1].text, strlen(argv[1].text));
+    *result = cmdr_text(cmdr_text_of(&argv[1]), strlen(cmdr_text_of(&argv[1])));
     return 0;
 }
 
@@ -653,28 +658,29 @@ static cmdr_value bpm_value(long mpqn)
 static cmdr_value item_text(const item *t)
 {
     cmdr_value start = cmdr_number_value(t->start), length = cmdr_number_value(t->length);
-    const char *k = kind_names[t->kind];
+    const char *k = kind_names[t->kind], *at = cmdr_text_of(&start),
+               *len = cmdr_text_of(&length);
     char line[160];
     int n = 0;
     switch (t->kind) {
     case NOTE:
-        n = snprintf(line, sizeof(line), "%s %s %s %d %d %d", k, start.text, length.text, t->a,
-                     t->b, t->channel);
+        n = snprintf(line, sizeof(line), "%s %s %s %d %d %d", k, at, len, t->a, t->b,
+                     t->channel);
         break;
     case CC:
-        n = snprintf(line, sizeof(line), "%s %s %d %d %d", k, start.text, t->a, t->b, t->channel);
+        n = snprintf(line, sizeof(line), "%s %s %d %d %d", k, at, t->a, t->b, t->channel);
         break;
     case PROGRAM:
     case BEND:
-        n = snprintf(line, sizeof(line), "%s %s %d %d", k, start.text, t->a, t->channel);
+        n = snprintf(line, sizeof(line), "%s %s %d %d", k, at, t->a, t->channel);
         break;
     case TEMPO: {
         cmdr_value bpm = bpm_value(t->a);
-        n = snprintf(line, sizeof(line), "%s %s %s", k, start.text, bpm.text);
+        n = snprintf(line, sizeof(line), "%s %s %s", k, at, cmdr_text_of(&bpm));
         cmdr_free(&bpm);
         break;
     }
-    case REST: n = snprintf(line, sizeof(line), "%s %s %s", k, start.text, length.text); break;
+    case REST: n = snprintf(line, sizeof(line), "%s %s %s", k, at, len); break;
     }
     cmdr_free(&start);
     cmdr_free(&length);
@@ -687,7 +693,7 @@ COMMAND(read_command)
 {
     if (argc != 1) return cmdr_error(error, "usage: midi.read PATH");
     size_t size;
-    unsigned char *data = read_file(argv[0].text, &size, error);
+    unsigned char *data = read_file(cmdr_text_of(&argv[0]), &size, error);
     if (!data) return 1;
     smf_event *events;
     size_t count;
@@ -697,7 +703,7 @@ COMMAND(read_command)
     free(data);
     if (status)
         return cmdr_error(error, "midi.read: %s is not a MIDI file timed in ticks per beat",
-                          argv[0].text);
+                          cmdr_text_of(&argv[0]));
     ordered *sorted = cmdr_realloc(NULL, count ? count : 1, sizeof(ordered));
     for (size_t i = 0; i < count; ++i) sorted[i] = (ordered){events[i], i};
     free(events);
@@ -761,7 +767,7 @@ COMMAND(read_command)
         items[i].length /= tpq;
     }
     qsort(items, made, sizeof(item), by_start);
-    *result = (cmdr_value){.kind = CMDR_LIST};
+    *result = cmdr_list();
     for (size_t i = 0; i < made; ++i) cmdr_push(result, item_text(&items[i]));
     free(items);
     return 0;
@@ -770,9 +776,10 @@ COMMAND(read_command)
 COMMAND(key_command)
 {
     if (argc != 1) return cmdr_error(error, "usage: midi.key KEY");
-    int key = parse_key(argv[0].text);
+    int key = parse_key(cmdr_text_of(&argv[0]));
     if (key < 0)
-        return cmdr_error(error, "midi.key: %s is not 0 to 127 or a name such as C4", argv[0].text);
+        return cmdr_error(error, "midi.key: %s is not 0 to 127 or a name such as C4",
+                          cmdr_text_of(&argv[0]));
     char text[4];
     *result = cmdr_text(text, (size_t)snprintf(text, sizeof(text), "%d", key));
     return 0;
@@ -801,10 +808,11 @@ COMMAND(euclid_command)
 {
     if (argc != 2) return cmdr_error(error, "usage: midi.bjorklund K N");
     int k, n;
-    if (integer(argv[1].text, 1, MAX_STEPS, &n))
-        return cmdr_error(error, "midi.bjorklund: N %s is not 1 to %d", argv[1].text, MAX_STEPS);
-    if (integer(argv[0].text, 0, n, &k))
-        return cmdr_error(error, "midi.bjorklund: K %s is not 0 to %d", argv[0].text, n);
+    if (integer(cmdr_text_of(&argv[1]), 1, MAX_STEPS, &n))
+        return cmdr_error(error, "midi.bjorklund: N %s is not 1 to %d", cmdr_text_of(&argv[1]),
+                          MAX_STEPS);
+    if (integer(cmdr_text_of(&argv[0]), 0, n, &k))
+        return cmdr_error(error, "midi.bjorklund: K %s is not 0 to %d", cmdr_text_of(&argv[0]), n);
     /* One array: the first set's na groups, then the second set's nb. */
     group *g = cmdr_realloc(NULL, (size_t)n, sizeof(group));
     size_t na = (size_t)k, nb = (size_t)(n - k);
@@ -822,7 +830,7 @@ COMMAND(euclid_command)
         na = m;
         nb = left;
     }
-    *result = (cmdr_value){.kind = CMDR_LIST};
+    *result = cmdr_list();
     for (size_t i = 0; i < na + nb; ++i) {
         for (size_t j = 0; j < g[i].n; ++j) cmdr_push(result, cmdr_text(&g[i].steps[j], 1));
         free(g[i].steps);

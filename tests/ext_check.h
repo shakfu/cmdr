@@ -64,7 +64,7 @@ static inline void expect_error(const cmdr *repl, const char *source, int status
     if (got != status || !error || !strstr(error, message))
         fprintf(stderr, "%s: got %d '%s', want %d '%s'\n", source, got,
                 error ? error : "", status, message);
-    CHECK(got == status && value.kind == CMDR_NONE && error && strstr(error, message));
+    CHECK(got == status && cmdr_kind_of(&value) == CMDR_NONE && error && strstr(error, message));
     free(error);
 }
 

@@ -1,35 +1,54 @@
 /* cmdr grammar, in W3C EBNF notation: https://www.w3.org/TR/xml/#sec-notation
  *
- * Follows src/cmdr.c (parse, read_lexeme, compile_block) and src/session.c
- * (cmdr_join). Where they disagree with this file, the code is correct.
+ * This file and README.md define cmdr's syntax. Where the code disagrees with
+ * them, the code has a bug; see docs/dev/stability.md.
+ *
+ * The rules live in these functions:
+ *   src/session.c  cmdr_join        line joining (section 1)
+ *   src/cmdr.c     comment_end      comments (section 2)
+ *                  parse            pipelines and stages (section 2)
+ *                  read_lexeme      words, references, and bracket extents
+ *                                   (sections 3 to 5)
+ *                  check_reference  references (section 4)
+ *                  closing          bracket matching (section 5)
+ *                  compile_block    parameter lists (section 5)
+ *                  default_length   parameter defaults (section 5)
+ *                  scan, cmdr_scan  the same rules, tolerating unfinished
+ *                                   input, for joining and highlighting
+ *   src/format.c   split            joining and checking for --fmt
  *
  * Parsing has three steps:
- *   1. Line joining turns physical lines into pipeline sources.
+ *   1. Line joining groups physical lines into units.
  *   2. Bracket matching finds each block's and sub-pipeline's extent.
- *   3. Each extent's text is parsed again: a block's as block_body, a
- *      sub-pipeline's as body.
+ *   3. Each unit is parsed as body. Each extent's text is parsed again: a
+ *      block's as block_body, a sub-pipeline's as body.
  * Constraints that EBNF cannot express are listed at the end.
  */
 
 /* ---- 1. Scripts and line joining ------------------------------------- */
 
-/* A script, REPL input, or -c text is physical lines, joined alike. The last
- * line may lack NL. */
-script        ::= ( line NL )* line?
-line          ::= blank | comment_line | source_line
-blank         ::= S*
-comment_line  ::= S* comment
+/* A script, a loaded file, a module, REPL input, piped stdin, -c text, and
+ * --fmt input are physical lines. A NUL byte is an error, "NUL byte", and a
+ * script reports it as "PATH:LINE: NUL byte". The last line may lack NL. */
+script        ::= ( physical_line NL )* physical_line?
+physical_line ::= [^#x0#xA]*
 
-/* Joining: while the accumulated text ends in "|", or a block or
- * sub-pipeline is open outside quotes, the next physical line is appended
- * after a NL. Blank and comment lines are dropped while joining. The joined
- * text is parsed as body. A quote never spans lines. */
-source_line   ::= body
+/* Joining (cmdr_join) reads physical lines into a unit. While the unit ends
+ * in "|", or a block or sub-pipeline is open outside quotes, the next
+ * physical line is appended after a NL; a blank or comment line is dropped
+ * there. A quote never spans lines: a unit that ends inside one ends there.
+ * Each unit is parsed as body, checked (section 7), and run before the next
+ * unit is joined. --fmt checks each unit as joined, without running it. */
+unit          ::= body
 
 /* ---- 2. Pipelines ---------------------------------------------------- */
 
-/* A comment is "#" where a line or a body starts. "#" elsewhere is word
- * text: `text a #b` prints "a #b". */
+/* A comment is "#" where a line or a body starts: at a line's first non-S
+ * character, or after "{", after a block's parameter list on the same line,
+ * or after "$(", with only S between. It runs to the end of its line and
+ * hides quotes and brackets there, so "{ # x }" on one line leaves the block
+ * open. "#" elsewhere is word text: `text a #b` prints "a #b", and in
+ * `list a | # x` the second stage calls a command named "#". */
 comment       ::= "#" [^#xA]*
 
 /* NL goes only next to "|" or at a body's ends, so a missing "|" is an
@@ -50,22 +69,24 @@ argument      ::= word | reference | block | sub_pipeline
 /* A word runs to the next unquoted WS or "|". Pieces concatenate:
  * a"b c"d is the one word "ab cd". */
 word          ::= ( piece - ( "{" | "$" ) ) piece*
-piece        ::= bare | escape | sq_string | dq_string
+piece         ::= bare | escape | sq_string | dq_string
 
 /* "$", "{", "}", "(", ")", and "#" are ordinary after a word's first
- * character: a$x, a{b, and x) are literal words. "}" and ")" end a word only
- * where they close an enclosing block or sub-pipeline (step 2 of the
- * header). */
-bare          ::= [^ #x9#xA#xB#xC#xD|'"\]
+ * character: at the top level, a$x, a{b, and x) are literal words. Inside a
+ * block or sub-pipeline, bracket matching (section 5) counts every unquoted
+ * "{" and "$(", so a{b there opens a block. "}" and ")" end a word only
+ * where they close an enclosing block or sub-pipeline. */
+bare          ::= [^#x0 #x9#xA#xB#xC#xD|'"\]
 
-/* Outside quotes, \c is c: \n is "n". A trailing "\" is an error. */
-escape        ::= "\" Char
+/* Outside quotes, \c is c: \n is "n". A "\" before NL or at the end of the
+ * text is an error, "unfinished escape": there is no line continuation. */
+escape        ::= "\" ( Char - NL )
 
 /* Single quotes keep every character, including "\". */
-sq_string     ::= "'" [^']* "'"
+sq_string     ::= "'" [^'#x0#xA]* "'"
 
 /* In double quotes, \n is a newline, \t a tab, and \c is c otherwise. */
-dq_string     ::= '"' ( [^"\] | "\" Char )* '"'
+dq_string     ::= '"' ( [^"\#x0#xA] | "\" ( Char - NL ) )* '"'
 
 /* Every word is text. Numbers have no lexical class; commands parse them. */
 
@@ -83,13 +104,20 @@ identifier    ::= [A-Za-z] [A-Za-z0-9_-]*
 block         ::= "{" brace_text "}"
 sub_pipeline  ::= "$(" paren_text ")"
 
-/* Bracket matching. Only brackets of the same kind nest, and quotes and
- * escapes hide them. Each text is then parsed: brace_text as block_body,
- * paren_text as body. So $(text (a)) passes "(a)" to text. */
-brace_text    ::= ( [^{}'"\] | escape | sq_string | dq_string
-                  | "{" brace_text "}" )*
-paren_text    ::= ( [^()'"\] | escape | sq_string | dq_string
-                  | "(" paren_text ")" )*
+/* Bracket matching (closing). Blocks and sub-pipelines nest together: inside
+ * either, each "{" and "$(" opens a level, and the innermost level's "}" or
+ * ")" closes it. Where "$(" could also be "$" then "(", it opens a
+ * sub-pipeline. Quotes, escapes, and comments hide brackets; a comment is
+ * recognised only where section 2 allows one.
+ *
+ * Inside a sub-pipeline, plain "(" and ")" nest too, so $(text (a)) passes
+ * "(a)" to text. Inside a block they are text, so a ")" in a block in a
+ * sub-pipeline does not close the sub-pipeline. Each text is then parsed:
+ * brace_text as block_body, paren_text as body. */
+brace_text    ::= ( [^{}'"\] | escape | sq_string | dq_string | comment
+                  | block | sub_pipeline )*
+paren_text    ::= ( [^(){}'"\] | escape | sq_string | dq_string | comment
+                  | "(" paren_text ")" | block | sub_pipeline )*
 
 /* A "(" that is the first non-WS character of a block opens its parameter
  * list. The body may follow ")" directly: {(x)text $x}. */
@@ -110,16 +138,30 @@ Char          ::= [#x1-#xFF]            /* any byte except NUL */
 
 /* ---- 7. Constraints checked after parsing ---------------------------- *
  *
- * All are checked for the whole line before any command runs.
+ * All are checked for the whole unit before any of its commands runs.
+ * cmdr_check_syntax, and so --fmt, checks those marked [S]. Only evaluation
+ * checks those marked [E], since they need the session's names.
  *
- * - A command name is a word that names a known command. A block,
- *   reference, or sub-pipeline cannot be one.
- * - A sub-pipeline's text is not all WS. $( # x ) passes this check, then
- *   fails when it runs, returning no value.
- * - A reference names an enclosing block's parameter or a value binding.
- *   $_ is an error.
- * - Parameters: the first has no default; parameters with defaults follow
- *   all required ones; _ has no default, may repeat, and is never
- *   referenced; every other parameter is referenced in its body.
- * - Blocks and sub-pipelines nest at most 128 deep (MAX_CALL_DEPTH).
+ * - [S] A command name is a word. A block, reference, or sub-pipeline
+ *   cannot be one.
+ * - [E] A command name names a known command.
+ * - [E] A literal COMMAND word of map, in the unit or its sub-pipelines,
+ *   names a known command. Inside a block it is resolved when map runs,
+ *   since a def's body may name a command defined later.
+ * - [S] A sub-pipeline holds a stage: $( # x NL ) is an error, "empty
+ *   sub-pipeline $()".
+ * - [S] $_ is an error.
+ * - [E] A reference names an enclosing block's parameter or a value binding.
+ * - [S] Parameters: the first has no default; parameters with defaults follow
+ *   all required ones; _ has no default.
+ * - [S] A name appears once in a parameter list: "parameter $x is declared
+ *   twice". _ may repeat. An inner block may declare an outer block's name,
+ *   which it then shadows.
+ * - [E] Every parameter but _ is referenced in its body.
+ * - [E] as and def do not run while a block runs: as a stage, through map, or
+ *   in a sub-pipeline. "as cannot run inside a block; bind names at the top
+ *   level".
+ * - [S] Blocks and sub-pipelines nest at most 127 deep, counted together;
+ *   plain parentheses do not count. Deeper is an error, "blocks and
+ *   sub-pipelines nested too deeply".
  */

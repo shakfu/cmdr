@@ -8,15 +8,21 @@
  * keep, not, and try treat only this status as false. */
 #define CMDR_MISMATCH 2
 
-typedef enum { CMDR_NONE, CMDR_TEXT, CMDR_LIST, CMDR_BLOCK } cmdr_kind;
+typedef enum { CMDR_NONE, CMDR_TEXT, CMDR_LIST, CMDR_BLOCK, CMDR_DICT } cmdr_kind;
 
 typedef struct cmdr_code cmdr_code;
 
-/* An owned value: text without NUL bytes, a list of values, or a block. A
- * block's text is its source, "(a b) pipeline" or "pipeline"; its items are
- * the values it captured; code is its compiled form, shared by copies. {0} is
- * none. capacity is the slots allocated in items, kept by cmdr_push; 0 means
- * exactly count, as for a list allocated whole. */
+/* An owned value: text without NUL bytes, a list of values, a block, or a
+ * dict. Its fields are private: read it with cmdr_kind_of and the accessors
+ * below, and make one with the constructors. A zeroed value, {0}, is none.
+ * The size is fixed, so values can live in arrays and on the stack. */
+#ifdef CMDR_INTERNAL
+/* libcmdr's own sources see the layout; src/cmdr.c checks that it matches the
+ * public size and alignment. A block's text is its source, its items the
+ * values it captured, and code its compiled form, shared by copies. A dict's
+ * items alternate text keys and values. capacity is the slots allocated in
+ * items, kept by cmdr_push; 0 means exactly count. Two definitions of one tag
+ * are safe only while no translation unit, LTO included, sees both. */
 typedef struct cmdr_value {
     cmdr_kind kind;
     char *text;
@@ -25,6 +31,11 @@ typedef struct cmdr_value {
     cmdr_code *code;
     size_t capacity;
 } cmdr_value;
+#else
+typedef struct cmdr_value {
+    void *reserved_[6];
+} cmdr_value;
+#endif
 
 typedef struct cmdr cmdr;
 
@@ -56,7 +67,7 @@ struct cmdr {
 };
 
 /* Commands written in C; composed ones are defs in prelude.cmdr. cmdr_pure
- * omits read, write, append, files, run, and run-in. */
+ * omits read, write, append, files, run, run-in, run-with, run-all, and spawn. */
 extern const cmdr cmdr_primitives, cmdr_pure;
 
 /* Allocation failure calls the out-of-memory handler, then exits the process
@@ -77,14 +88,44 @@ char *cmdr_strndup(const char *text, size_t n);
 void cmdr_interrupt(int on);
 int cmdr_interrupted(void);
 
+cmdr_kind cmdr_kind_of(const cmdr_value *value);
+/* Text, or a block's source; NULL for other kinds. Borrowed. */
+const char *cmdr_text_of(const cmdr_value *value);
+/* A list's items or a dict's entries; 0 for other kinds. */
+size_t cmdr_count(const cmdr_value *value);
+/* List item i, borrowed; i must be below cmdr_count. */
+const cmdr_value *cmdr_item(const cmdr_value *list, size_t i);
+/* Move list item i out, leaving none in its place. */
+cmdr_value cmdr_take(cmdr_value *list, size_t i);
+/* Dict entry i's key and value, borrowed, in insertion order. */
+const char *cmdr_dict_key(const cmdr_value *dict, size_t i);
+const cmdr_value *cmdr_dict_value(const cmdr_value *dict, size_t i);
+
+/* A copy of n bytes of text. */
 cmdr_value cmdr_text(const char *text, size_t n);
+/* Text that takes ownership of a NUL-terminated string from cmdr_realloc or
+ * malloc; the value frees it. */
+cmdr_value cmdr_text_owned(char *text);
+cmdr_value cmdr_list(void);
+cmdr_value cmdr_dict(void);
 /* Move item into list, doubling its capacity when full. */
 void cmdr_push(cmdr_value *list, cmdr_value item);
 void cmdr_free(cmdr_value *value);
 /* Fails on values nested too deeply, which bounds recursion elsewhere. */
 int cmdr_clone(const cmdr_value *value, cmdr_value *out, char **error);
-/* Write text as is and list items each followed by a newline. */
+/* Write text as is, list items each followed by a newline, and dict entries
+ * as KEY, a tab, VALUE, and a newline. A dict that cmdr_renderable rejects
+ * writes its other values as cmdr_describe does. */
 void cmdr_render(const cmdr_value *value, FILE *out);
+/* Fail unless every dict in value, at any depth, holds only text values, and
+ * no key or value holds a tab or newline, so its rendering reads back. */
+int cmdr_renderable(const cmdr_value *value, char **error);
+
+/* Move value into dict under key, replacing an existing value in place or
+ * appending a new entry. */
+void cmdr_dict_put(cmdr_value *dict, const char *key, cmdr_value value);
+/* The value under key, borrowed, or NULL. Lookup is linear in the entries. */
+const cmdr_value *cmdr_dict_get(const cmdr_value *dict, const char *key);
 
 /* Parse a finite decimal number, or fail with "invalid finite number: TEXT".
  * Numbers use '.' only while LC_NUMERIC is "C", so hosts must not change it. */
@@ -105,7 +146,8 @@ int cmdr_call(const cmdr *repl, const char *name, size_t argc,
               const cmdr_value *argv, cmdr_value *result, char **error);
 /* Evaluate a line, which has no input. */
 int cmdr_eval(const cmdr *repl, const char *line, cmdr_value *result, char **error);
-/* Check a line's syntax, nested blocks included, without resolving names. */
+/* Check a line's syntax, nested blocks included, without resolving names or
+ * checking for unused parameters; docs/grammar.ebnf marks what it checks. */
 int cmdr_check_syntax(const char *line, char **error);
 /* Call a block with argv bound to its parameters; omitted trailing
  * parameters take their defaults. Its commands resolve where it was written,
@@ -148,19 +190,23 @@ typedef struct {
 void cmdr_scan(const char *text, size_t n, unsigned char *quoted,
                int (*visit)(const cmdr_token *, void *), void *data);
 
-/* Format cmdr source. Multiline breaks each block or sub-pipeline that does
- * not fit in 100 columns into one stage per line; flat writes each pipeline
- * on one line, moving its comments above it. Returns 0 and sets *out, which
+/* Format cmdr source. Multiline puts each pipeline, block, and sub-pipeline
+ * on one line if it fits in 100 columns and holds no comment, and breaks the
+ * others into one stage per line; flat writes each pipeline on one line,
+ * moving its comments above it. Returns 0 and sets *out, which
  * the caller frees, or nonzero with *error naming the first bad line. */
 int cmdr_format(const char *source, int flat, char **out, char **error);
 
-/* help, def, and load in front of a host's command table. A session is used
- * by one thread at a time; sessions on different threads are independent. */
+/* help, def, as, import, from, script-file, script-dir, and script-args, and
+ * load with effects, in front of a host's command table. A session is used by
+ * one thread at a time; sessions on different threads are independent. */
 typedef struct cmdr_session cmdr_session;
 
 /* commands, usually ending in &cmdr_primitives, must outlive the session.
- * effects adds load, import, and the prelude's file and program commands; without it,
- * end commands in &cmdr_pure for a session with no file or process access.
+ * effects adds load, lets import and from search files, and adds the
+ * prelude's file and program commands. Without it, import and from find only
+ * modules from cmdr_session_add_module and cmdr_session_add_source; end
+ * commands in &cmdr_pure for a session with no file or process access.
  * Scripts that load runs print their values to out; NULL discards them. */
 cmdr_session *cmdr_session_open(const cmdr *commands, int effects, FILE *out);
 /* Free the session's definitions. Blocks it made must not run afterwards. */
@@ -172,9 +218,10 @@ const cmdr *cmdr_session_commands(const cmdr_session *session);
 int cmdr_session_eval(cmdr_session *session, const char *line, cmdr_value *result,
                       char **error);
 /* Evaluate a script's pipelines, printing values to the session's out. Stops
- * at the first failure, with *error starting "PATH:LINE: ". If PATH exists,
- * script-file and script-dir return it and its directory in code the
- * script compiles, and script-args returns an empty list. */
+ * at the first failure, with *error starting "PATH:LINE: "; a NUL byte is a
+ * failure. If PATH exists, script-file and script-dir return it and its
+ * directory in code the script compiles, and script-args returns an empty
+ * list. */
 int cmdr_session_load(cmdr_session *session, FILE *in, const char *path, char **error);
 /* cmdr_session_load, with argv as the script's script-args. */
 int cmdr_session_load_args(cmdr_session *session, FILE *in, const char *path, size_t argc,
@@ -192,7 +239,8 @@ void cmdr_session_add_module(cmdr_session *session, const char *name, const cmdr
 void cmdr_session_add_source(cmdr_session *session, const char *name, const char *source,
                              const char *path);
 /* Load the standard prelude, embedded by the build: src/prelude.cmdr, then
- * src/prelude-effects.cmdr in a session with effects. */
+ * src/prelude-effects.cmdr in a session with effects. Then the host's own
+ * tables go in front of it, so they shadow it; later definitions shadow them. */
 int cmdr_session_prelude(cmdr_session *session, char **error);
 
 #endif

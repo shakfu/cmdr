@@ -23,7 +23,8 @@ static int echo_command(const cmdr *repl, void *user, size_t argc, const cmdr_va
                         cmdr_value *result, char **error)
 {{
     if (argc != 1) return cmdr_error(error, "usage: {name}.echo TEXT");
-    *result = cmdr_text(argv[0].text, strlen(argv[0].text));
+    const char *text = cmdr_text_of(&argv[0]);
+    *result = cmdr_text(text, strlen(text));
     return 0;
 }}
 

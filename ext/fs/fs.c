@@ -18,7 +18,7 @@
 
 static int same(const cmdr_value *path, cmdr_value *result)
 {
-    *result = cmdr_text(path->text, strlen(path->text));
+    *result = cmdr_text(cmdr_text_of(path), strlen(cmdr_text_of(path)));
     return 0;
 }
 
@@ -35,13 +35,13 @@ static int mismatch(char **error, const char *format, const cmdr_value *path)
 static int look_at(int follow, const char *name, const cmdr_value *path, struct stat *info,
                    char **error)
 {
-    if (!(follow ? stat : lstat)(path->text, info)) return 0;
+    if (!(follow ? stat : lstat)(cmdr_text_of(path), info)) return 0;
     if (errno == ENOENT || errno == ENOTDIR) {
         char format[64];
         snprintf(format, sizeof(format), "%s: %%s does not exist", name);
         return mismatch(error, format, path);
     }
-    return cmdr_error(error, "%s %s: %s", name, path->text, strerror(errno));
+    return cmdr_error(error, "%s %s: %s", name, cmdr_text_of(path), strerror(errno));
 }
 
 static int look(const char *name, const cmdr_value *path, struct stat *info, char **error)
@@ -91,7 +91,8 @@ static int stat_number(int mtime, const char *name, size_t argc, const cmdr_valu
 {
     if (argc != 1) return cmdr_error(error, "usage: %s PATH", name);
     struct stat info;
-    if (stat(argv[0].text, &info)) return cmdr_error(error, "%s %s: %s", name, argv[0].text, strerror(errno));
+    const char *path = cmdr_text_of(&argv[0]);
+    if (stat(path, &info)) return cmdr_error(error, "%s %s: %s", name, path, strerror(errno));
     return integer(mtime ? (long long)info.st_mtime : (long long)info.st_size, result);
 }
 COMMAND(size_command) { return stat_number(0, "fs.size", argc, argv, result, error); }
@@ -99,7 +100,21 @@ COMMAND(mtime_command) { return stat_number(1, "fs.mtime", argc, argv, result, e
 
 static int by_text(const void *a, const void *b)
 {
-    return strcmp(((const cmdr_value *)a)->text, ((const cmdr_value *)b)->text);
+    return strcmp(cmdr_text_of(a), cmdr_text_of(b));
+}
+
+/* Sort a list of text in place. */
+static void sort_texts(cmdr_value *list)
+{
+    size_t n = cmdr_count(list);
+    if (!n) return;
+    cmdr_value *items = cmdr_realloc(NULL, n, sizeof(*items));
+    for (size_t i = 0; i < n; ++i) items[i] = cmdr_take(list, i);
+    qsort(items, n, sizeof(*items), by_text);
+    cmdr_free(list);
+    *list = cmdr_list();
+    for (size_t i = 0; i < n; ++i) cmdr_push(list, items[i]);
+    free(items);
 }
 
 /* DIRECTORY and NAME with one / between them. */
@@ -167,10 +182,10 @@ static DIR *open_dir_at(int at, const char *name)
 COMMAND(dirs_command)
 {
     if (argc > 1) return cmdr_error(error, "usage: fs.dirs [DIRECTORY]");
-    const char *path = argc ? argv[0].text : ".";
+    const char *path = argc ? cmdr_text_of(&argv[0]) : ".";
     DIR *directory = opendir(path);
     if (!directory) return cmdr_error(error, "fs.dirs %s: %s", path, strerror(errno));
-    cmdr_value list = {.kind = CMDR_LIST};
+    cmdr_value list = cmdr_list();
     int status = 0;
     for (;;) {
         errno = 0;
@@ -187,11 +202,11 @@ COMMAND(dirs_command)
             break;
         }
         if (!S_ISDIR(info.st_mode)) continue;
-        cmdr_push(&list, (cmdr_value){.kind = CMDR_TEXT, .text = join(path, entry->d_name)});
+        cmdr_push(&list, cmdr_text_owned(join(path, entry->d_name)));
     }
     closedir(directory);
     if (status) { cmdr_free(&list); return status; }
-    if (list.count) qsort(list.items, list.count, sizeof(*list.items), by_text);
+    sort_texts(&list);
     *result = list;
     return 0;
 }
@@ -200,7 +215,7 @@ COMMAND(dirs_command)
 COMMAND(mkdir_command)
 {
     if (argc != 1) return cmdr_error(error, "usage: fs.mkdir PATH");
-    const char *path = argv[0].text;
+    const char *path = cmdr_text_of(&argv[0]);
     if (!*path) return cmdr_error(error, "fs.mkdir: empty path");
     char *prefix = cmdr_strndup(path, strlen(path));
     int status = 0;
@@ -224,7 +239,8 @@ COMMAND(mkdir_command)
 COMMAND(remove_command)
 {
     if (argc != 1) return cmdr_error(error, "usage: fs.remove PATH");
-    if (remove(argv[0].text)) return cmdr_error(error, "fs.remove %s: %s", argv[0].text, strerror(errno));
+    const char *path = cmdr_text_of(&argv[0]);
+    if (remove(path)) return cmdr_error(error, "fs.remove %s: %s", path, strerror(errno));
     return same(&argv[0], result);
 }
 
@@ -232,8 +248,8 @@ COMMAND(remove_command)
 COMMAND(move_command)
 {
     if (argc != 2) return cmdr_error(error, "usage: fs.move SOURCE DESTINATION");
-    if (rename(argv[0].text, argv[1].text))
-        return cmdr_error(error, "fs.move %s %s: %s", argv[0].text, argv[1].text, strerror(errno));
+    const char *from = cmdr_text_of(&argv[0]), *to = cmdr_text_of(&argv[1]);
+    if (rename(from, to)) return cmdr_error(error, "fs.move %s %s: %s", from, to, strerror(errno));
     return same(&argv[1], result);
 }
 
@@ -259,7 +275,7 @@ static int walk(DIR *directory, const char *path, cmdr_value *list, char **error
             break;
         }
         char *child = join(path, names[i]);
-        cmdr_push(list, (cmdr_value){.kind = CMDR_TEXT, .text = child});
+        cmdr_push(list, cmdr_text_owned(child));
         if (!S_ISDIR(info.st_mode)) continue;
         DIR *sub = open_dir_at(fd, names[i]);
         if (sub) status = walk(sub, child, list, error);
@@ -274,12 +290,12 @@ static int walk(DIR *directory, const char *path, cmdr_value *list, char **error
 COMMAND(walk_command)
 {
     if (argc > 1) return cmdr_error(error, "usage: fs.walk [DIRECTORY]");
-    const char *path = argc ? argv[0].text : ".";
+    const char *path = argc ? cmdr_text_of(&argv[0]) : ".";
     DIR *directory = opendir(path);
     if (!directory) return cmdr_error(error, "fs.walk %s: %s", path, strerror(errno));
-    cmdr_value list = {.kind = CMDR_LIST};
+    cmdr_value list = cmdr_list();
     if (walk(directory, path, &list, error)) { cmdr_free(&list); return 1; }
-    if (list.count) qsort(list.items, list.count, sizeof(*list.items), by_text);
+    sort_texts(&list);
     *result = list;
     return 0;
 }
@@ -288,17 +304,19 @@ COMMAND(walk_command)
 COMMAND(symlink_command)
 {
     if (argc != 2) return cmdr_error(error, "usage: fs.symlink TARGET PATH");
-    if (symlink(argv[0].text, argv[1].text))
-        return cmdr_error(error, "fs.symlink %s %s: %s", argv[0].text, argv[1].text, strerror(errno));
+    const char *target = cmdr_text_of(&argv[0]), *path = cmdr_text_of(&argv[1]);
+    if (symlink(target, path))
+        return cmdr_error(error, "fs.symlink %s %s: %s", target, path, strerror(errno));
     return same(&argv[1], result);
 }
 
 COMMAND(realpath_command)
 {
     if (argc != 1) return cmdr_error(error, "usage: fs.realpath PATH");
-    char *real = realpath(argv[0].text, NULL);
-    if (!real) return cmdr_error(error, "fs.realpath %s: %s", argv[0].text, strerror(errno));
-    *result = (cmdr_value){.kind = CMDR_TEXT, .text = real};
+    const char *path = cmdr_text_of(&argv[0]);
+    char *real = realpath(path, NULL);
+    if (!real) return cmdr_error(error, "fs.realpath %s: %s", path, strerror(errno));
+    *result = cmdr_text_owned(real);
     return 0;
 }
 
@@ -307,10 +325,11 @@ static char *template(const char *name, size_t argc, const cmdr_value *argv, cha
 {
     if (argc > 1) return cmdr_error(error, "usage: %s [TEMPLATE]", name), NULL;
     if (argc) {
-        size_t n = strlen(argv[0].text);
-        if (n < 6 || strcmp(argv[0].text + n - 6, "XXXXXX"))
-            return cmdr_error(error, "%s: TEMPLATE must end in XXXXXX: %s", name, argv[0].text), NULL;
-        return cmdr_strndup(argv[0].text, n);
+        const char *text = cmdr_text_of(&argv[0]);
+        size_t n = strlen(text);
+        if (n < 6 || strcmp(text + n - 6, "XXXXXX"))
+            return cmdr_error(error, "%s: TEMPLATE must end in XXXXXX: %s", name, text), NULL;
+        return cmdr_strndup(text, n);
     }
     const char *directory = getenv("TMPDIR");
     return join(directory && *directory ? directory : "/tmp", "cmdr-XXXXXX");
@@ -327,7 +346,7 @@ COMMAND(temp_file_command)
         return 1;
     }
     close(fd);
-    *result = (cmdr_value){.kind = CMDR_TEXT, .text = path};
+    *result = cmdr_text_owned(path);
     return 0;
 }
 
@@ -340,7 +359,7 @@ COMMAND(temp_dir_command)
         free(path);
         return 1;
     }
-    *result = (cmdr_value){.kind = CMDR_TEXT, .text = path};
+    *result = cmdr_text_owned(path);
     return 0;
 }
 
@@ -436,7 +455,7 @@ static int copy(const char *from, const char *to, char **where)
 COMMAND(copy_command)
 {
     if (argc != 2) return cmdr_error(error, "usage: fs.copy SOURCE DESTINATION");
-    const char *from = argv[0].text, *to = argv[1].text;
+    const char *from = cmdr_text_of(&argv[0]), *to = cmdr_text_of(&argv[1]);
     struct stat info;
     if (lstat(from, &info)) return cmdr_error(error, "fs.copy %s: %s", from, strerror(errno));
     if (S_ISDIR(info.st_mode)) {
@@ -493,7 +512,7 @@ static int remove_at(int at, const char *name, const char *path, char **error)
 COMMAND(remove_tree_command)
 {
     if (argc != 1) return cmdr_error(error, "usage: fs.remove-tree PATH");
-    const char *path = argv[0].text;
+    const char *path = cmdr_text_of(&argv[0]);
     size_t n = strlen(path);
     while (n && path[n - 1] == '/') --n;
     size_t start = n;

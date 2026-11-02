@@ -1,0 +1,100 @@
+Syntax corpus for test_syntax_corpus. Each case starts with a line
+"=== ok: NAME" or "=== error: NAME", saying whether `cmdr --fmt` accepts it;
+its source runs to the next "===" line. Every syntax implementation must
+agree with cmdr on ok and error, and for ok cases the editor grammars must
+give each byte the token class that cmdr_scan gives it (see tests/scan.c).
+The test runs tree-sitter and Vim where installed. It cannot run the
+Sublime Text and VS Code grammars, whose regex engines it does not have.
+
+=== ok: pipeline
+list a b | join ,
+=== ok: comment lines; '#' later in a line is text
+# whole line
+  # indented
+text a#b # c
+=== ok: a comment may start a block and hides brackets
+each { # a } and )
+  upper
+}
+=== ok: a comment after parameters
+list a | each { (x) # c ) }
+  text $x
+}
+=== ok: a comment may start a sub-pipeline
+text $( # c )
+  upper a)
+=== ok: '#' after '|' is a command
+text a | # x
+=== ok: '#' after a stage in a block is text
+each { text b # y
+}
+=== ok: quotes and escapes
+text 'a b' "c\td" e\|f \$x
+=== ok: references and a value stage
+text $a $m.b a$x | $v
+=== ok: parameters with defaults and _
+def f { (a _ b=1 c="") text $a $b $c }
+=== ok: nested blocks
+each { (x) each $x { (y) text $y } }
+=== ok: sub-pipelines nest, and parentheses inside balance
+text $(upper (a (b))) $(text $(text c))
+=== ok: a ')' in a block inside a sub-pipeline
+text $(with a { (_) text ) })
+=== ok: a block spans lines, with comment and blank lines
+def shout { (s)
+    # loud
+
+    upper $s
+    | concat !
+} "Shout S"
+=== ok: a trailing pipe continues over blank and comment lines
+list a |
+
+# skipped
+  upper
+=== ok: a sub-pipeline spans lines
+text $(
+  upper a
+  | lower
+)
+=== ok: parentheses are text outside a sub-pipeline
+text x) a(b | each { (v) text ) $v }
+=== ok: a brace inside a word at top level is text
+text a{b c}d
+=== ok: braces inside a word in a block balance
+each { text a{b} }
+=== ok: parentheses inside a word in a sub-pipeline balance
+text $(text a(b))
+=== ok: numbers and words
+add -1.5e3 2 | text 0x10 12a
+=== error: unclosed block
+text {a
+=== error: unclosed sub-pipeline
+text $(a
+=== error: unclosed double quote
+text "a
+=== error: unclosed single quote
+text 'a
+=== error: a backslash at the end
+text a\
+=== error: a backslash before a newline in a block
+each { text a\
+}
+=== error: a one-line comment hides the block's close
+each { # note }
+=== error: an unbalanced brace inside a word in a block
+each { text a{b }
+=== error: a closing brace inside a word in a block
+each { text a}b }
+=== error: a pipe without a command before it
+| a
+=== error: a pipe without a command after it
+text a |
+=== error: a newline in a block away from '|'
+list a | each { text x
+upper }
+=== error: an empty sub-pipeline
+text $()
+=== error: a newline in a sub-pipeline away from '|'
+text $(text
+a)

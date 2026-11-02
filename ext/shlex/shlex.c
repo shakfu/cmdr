@@ -38,8 +38,8 @@ static int space(char c)
 COMMAND(split_command)
 {
     if (argc != 1) return cmdr_error(error, "usage: shlex.split TEXT");
-    const char *p = argv[0].text;
-    *result = (cmdr_value){.kind = CMDR_LIST};
+    const char *p = cmdr_text_of(&argv[0]);
+    *result = cmdr_list();
     buffer word = {0};
     int in_word = 0;
     for (;;) {
@@ -96,30 +96,30 @@ COMMAND(quote_command)
 {
     if (argc != 1) return cmdr_error(error, "usage: shlex.quote TEXT");
     buffer b = {0};
-    quote(&b, argv[0].text);
-    *result = (cmdr_value){.kind = CMDR_TEXT, .text = b.data};
+    quote(&b, cmdr_text_of(&argv[0]));
+    *result = cmdr_text_owned(b.data);
     return 0;
 }
 
 /* Text is split into lines, as list primitives do, never into words. */
 COMMAND(join_command)
 {
-    if (argc != 1 || argv[0].kind == CMDR_BLOCK) return cmdr_error(error, "usage: shlex.join LIST_OR_LINES");
+    if (argc != 1 || (cmdr_kind_of(&argv[0]) != CMDR_TEXT && cmdr_kind_of(&argv[0]) != CMDR_LIST)) return cmdr_error(error, "usage: shlex.join LIST_OR_LINES");
     cmdr_value lines = {0};
     /* The primitive itself: repl is the caller's scope, where lines may be redefined. */
-    if (argv[0].kind == CMDR_TEXT && cmdr_call(&cmdr_pure, "lines", 1, argv, &lines, error)) return 1;
-    const cmdr_value *list = argv[0].kind == CMDR_TEXT ? &lines : &argv[0];
+    if (cmdr_kind_of(&argv[0]) == CMDR_TEXT && cmdr_call(&cmdr_pure, "lines", 1, argv, &lines, error)) return 1;
+    const cmdr_value *list = cmdr_kind_of(&argv[0]) == CMDR_TEXT ? &lines : &argv[0];
     buffer b = {0};
     int status = 0;
-    for (size_t i = 0; i < list->count && !status; ++i) {
-        const cmdr_value *item = &list->items[i];
-        if (item->kind != CMDR_TEXT) { status = cmdr_error(error, "shlex.join: expected text items"); break; }
+    for (size_t i = 0; i < cmdr_count(list) && !status; ++i) {
+        const cmdr_value *item = cmdr_item(list, i);
+        if (cmdr_kind_of(item) != CMDR_TEXT) { status = cmdr_error(error, "shlex.join: expected text items"); break; }
         if (i) put(&b, ' ');
-        quote(&b, item->text);
+        quote(&b, cmdr_text_of(item));
     }
     cmdr_free(&lines);
     if (status) { free(b.data); return 1; }
-    *result = (cmdr_value){.kind = CMDR_TEXT, .text = b.data ? b.data : cmdr_strndup("", 0)};
+    *result = cmdr_text_owned(b.data ? b.data : cmdr_strndup("", 0));
     return 0;
 }
 

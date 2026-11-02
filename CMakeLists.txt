@@ -14,11 +14,13 @@ add_compile_options($<$<COMPILE_LANGUAGE:C>:-Werror=implicit-function-declaratio
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 include(CmdrExtensions)
 
-set(CMDR_PRELUDE_C "")
+# Hidden, so libcmdr.so does not export them: no public header declares them.
+set(CMDR_PRELUDE_C "#ifdef __GNUC__\n#pragma GCC visibility push(hidden)\n#endif\n")
 foreach(name IN ITEMS prelude prelude-effects)
   string(REPLACE "-" "_" symbol "cmdr_${name}_source")
   cmdr_embed(CMDR_PRELUDE_C "${CMAKE_CURRENT_SOURCE_DIR}/src/${name}.cmdr" ${symbol})
 endforeach()
+string(APPEND CMDR_PRELUDE_C "#ifdef __GNUC__\n#pragma GCC visibility pop\n#endif\n")
 cmdr_generate("${CMAKE_CURRENT_BINARY_DIR}/prelude.c" "${CMDR_PRELUDE_C}")
 
 include(GNUInstallDirs)
@@ -41,7 +43,8 @@ if(NOT CMDR_HAVE_ADDCHDIR)
 endif()
 unset(CMAKE_REQUIRED_DEFINITIONS)
 # The last directory import searches; fixed at configure time.
-target_compile_definitions(cmdr_objects PRIVATE
+# CMDR_INTERNAL shows cmdr_value's fields to libcmdr's sources only.
+target_compile_definitions(cmdr_objects PRIVATE CMDR_INTERNAL
   CMDR_LIBDIR="${CMAKE_INSTALL_FULL_DATADIR}/cmdr/lib")
 foreach(feature IN ITEMS CMDR_HAVE_ADDCHDIR CMDR_HAVE_ADDCHDIR_NP)
   if(${feature})

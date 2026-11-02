@@ -10,11 +10,12 @@ static int match_command(const cmdr *repl, void *user, size_t argc, const cmdr_v
                          cmdr_value *result, char **error)
 {
     if (argc != 2) return cmdr_error(error, "usage: fnmatch.match NAME PATTERN");
-    int status = fnmatch(argv[1].text, argv[0].text, 0);
+    const char *name = cmdr_text_of(&argv[0]), *pattern = cmdr_text_of(&argv[1]);
+    int status = fnmatch(pattern, name, 0);
     if (status == FNM_NOMATCH)
-        return cmdr_error(error, "fnmatch.match: %s does not match %s", argv[0].text, argv[1].text), CMDR_MISMATCH;
-    if (status) return cmdr_error(error, "fnmatch.match: bad pattern %s", argv[1].text);
-    *result = cmdr_text(argv[0].text, strlen(argv[0].text));
+        return cmdr_error(error, "fnmatch.match: %s does not match %s", name, pattern), CMDR_MISMATCH;
+    if (status) return cmdr_error(error, "fnmatch.match: bad pattern %s", pattern);
+    *result = cmdr_text(name, strlen(name));
     return 0;
 }
 

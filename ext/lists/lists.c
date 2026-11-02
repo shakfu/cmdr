@@ -14,7 +14,8 @@
  * the caller's scope, where lines may be redefined. */
 static int items(const char *name, const cmdr_value *value, cmdr_value *out, char **error)
 {
-    if (value->kind != CMDR_TEXT && value->kind != CMDR_LIST)
+    cmdr_kind kind = cmdr_kind_of(value);
+    if (kind != CMDR_TEXT && kind != CMDR_LIST)
         return cmdr_error(error, "%s: expected a list or lines", name);
     return cmdr_call(&cmdr_pure, "lines", 1, value, out, error);
 }
@@ -39,7 +40,7 @@ static cmdr_value copy(const cmdr_value *value)
 static int check_block(const char *name, size_t argc, const cmdr_value *argv, size_t at,
                        size_t fixed, char **error)
 {
-    if (argc <= at || argv[at].kind != CMDR_BLOCK) return cmdr_error(error, "%s: expected a block { ... }", name);
+    if (argc <= at || cmdr_kind_of(&argv[at]) != CMDR_BLOCK) return cmdr_error(error, "%s: expected a block { ... }", name);
     char *detail = NULL;
     if (!cmdr_block_arity(&argv[at], fixed + argc - at - 1, &detail)) return 0;
     cmdr_error(error, "%s: %s", name, detail);
@@ -59,7 +60,7 @@ static int call(const char *name, size_t i, size_t argc, const cmdr_value *argv,
     char *detail = NULL;
     int status = cmdr_run(&argv[at], n, args, out, &detail);
     free(args);
-    if (!status && out->kind == CMDR_NONE) status = 1, detail = cmdr_strndup("block returned no value", 23);
+    if (!status && cmdr_kind_of(out) == CMDR_NONE) status = 1, detail = cmdr_strndup("block returned no value", 23);
     if (status) {
         cmdr_error(error, "%s item %zu: %s", name, i + 1, detail ? detail : "failed");
         cmdr_free(out);
@@ -75,12 +76,11 @@ COMMAND(enumerate_command)
     if (argc == 2 && cmdr_natural(&argv[1], &start, error)) return 1;
     cmdr_value xs;
     if (items("lists.enumerate", &argv[0], &xs, error)) return 1;
-    *result = (cmdr_value){.kind = CMDR_LIST};
-    for (size_t i = 0; i < xs.count; ++i) {
-        cmdr_value pair = {.kind = CMDR_LIST};
+    *result = cmdr_list();
+    for (size_t i = 0; i < cmdr_count(&xs); ++i) {
+        cmdr_value pair = cmdr_list();
         cmdr_push(&pair, number(start + i));
-        cmdr_push(&pair, xs.items[i]);
-        xs.items[i] = (cmdr_value){0};
+        cmdr_push(&pair, cmdr_take(&xs, i));
         cmdr_push(result, pair);
     }
     cmdr_free(&xs);
@@ -96,13 +96,13 @@ COMMAND(zip_command)
     int status = 0;
     for (; got < argc && !status; ++got) {
         status = items("lists.zip", &argv[got], &lists[got], error);
-        if (!status && lists[got].count < n) n = lists[got].count;
+        if (!status && cmdr_count(&lists[got]) < n) n = cmdr_count(&lists[got]);
     }
     if (status) --got;
-    *result = (cmdr_value){.kind = CMDR_LIST};
+    *result = cmdr_list();
     for (size_t i = 0; !status && i < n; ++i) {
-        cmdr_value row = {.kind = CMDR_LIST};
-        for (size_t j = 0; j < argc; ++j) cmdr_push(&row, copy(&lists[j].items[i]));
+        cmdr_value row = cmdr_list();
+        for (size_t j = 0; j < argc; ++j) cmdr_push(&row, copy(cmdr_item(&lists[j], i)));
         cmdr_push(result, row);
     }
     for (size_t j = 0; j < got; ++j) cmdr_free(&lists[j]);
@@ -113,14 +113,11 @@ COMMAND(zip_command)
 
 COMMAND(chain_command)
 {
-    *result = (cmdr_value){.kind = CMDR_LIST};
+    *result = cmdr_list();
     for (size_t i = 0; i < argc; ++i) {
         cmdr_value xs;
         if (items("lists.chain", &argv[i], &xs, error)) { cmdr_free(result); return 1; }
-        for (size_t j = 0; j < xs.count; ++j) {
-            cmdr_push(result, xs.items[j]);
-            xs.items[j] = (cmdr_value){0};
-        }
+        for (size_t j = 0; j < cmdr_count(&xs); ++j) cmdr_push(result, cmdr_take(&xs, j));
         cmdr_free(&xs);
     }
     return 0;
@@ -132,18 +129,15 @@ COMMAND(flatten_command)
     if (argc != 1) return cmdr_error(error, "usage: lists.flatten LIST_OR_LINES");
     cmdr_value xs;
     if (items("lists.flatten", &argv[0], &xs, error)) return 1;
-    *result = (cmdr_value){.kind = CMDR_LIST};
-    for (size_t i = 0; i < xs.count; ++i) {
-        cmdr_value *x = &xs.items[i];
-        if (x->kind != CMDR_LIST) {
-            cmdr_push(result, *x);
-            *x = (cmdr_value){0};
+    *result = cmdr_list();
+    for (size_t i = 0; i < cmdr_count(&xs); ++i) {
+        cmdr_value x = cmdr_take(&xs, i);
+        if (cmdr_kind_of(&x) != CMDR_LIST) {
+            cmdr_push(result, x);
             continue;
         }
-        for (size_t j = 0; j < x->count; ++j) {
-            cmdr_push(result, x->items[j]);
-            x->items[j] = (cmdr_value){0};
-        }
+        for (size_t j = 0; j < cmdr_count(&x); ++j) cmdr_push(result, cmdr_take(&x, j));
+        cmdr_free(&x);
     }
     cmdr_free(&xs);
     return 0;
@@ -157,27 +151,38 @@ COMMAND(set_at_command)
     if (cmdr_natural(&argv[1], &i, error)) return 1;
     cmdr_value xs, value;
     if (items("lists.set-at", &argv[0], &xs, error)) return 1;
-    if (!i || i > xs.count) { /* An error, not a mismatch: or must not hide a bad write. */
-        cmdr_error(error, "lists.set-at: index %zu out of range for %zu items", i, xs.count);
+    size_t n = cmdr_count(&xs);
+    if (!i || i > n) { /* An error, not a mismatch: or must not hide a bad write. */
+        cmdr_error(error, "lists.set-at: index %zu out of range for %zu items", i, n);
         cmdr_free(&xs);
         return 1;
     }
     if (cmdr_clone(&argv[2], &value, error)) { cmdr_free(&xs); return 1; }
-    cmdr_free(&xs.items[i - 1]);
-    xs.items[i - 1] = value;
-    *result = xs;
+    /* No accessor replaces an item in place, so move the items into a new list. */
+    *result = cmdr_list();
+    for (size_t j = 0; j < n; ++j) {
+        cmdr_value x = cmdr_take(&xs, j);
+        if (j == i - 1) cmdr_free(&x), x = value;
+        cmdr_push(result, x);
+    }
+    cmdr_free(&xs);
     return 0;
 }
 
 /* The position, from 1, of the first item equal to VALUE. */
 COMMAND(index_of_command)
 {
-    if (argc != 2 || argv[1].kind != CMDR_TEXT) return cmdr_error(error, "usage: lists.index-of LIST_OR_LINES TEXT");
+    if (argc != 2 || cmdr_kind_of(&argv[1]) != CMDR_TEXT) return cmdr_error(error, "usage: lists.index-of LIST_OR_LINES TEXT");
     cmdr_value xs;
     if (items("lists.index-of", &argv[0], &xs, error)) return 1;
     size_t i = 0;
-    while (i < xs.count && (xs.items[i].kind != CMDR_TEXT || strcmp(xs.items[i].text, argv[1].text))) ++i;
-    int found = i < xs.count;
+    size_t n = cmdr_count(&xs);
+    const char *text = cmdr_text_of(&argv[1]);
+    for (; i < n; ++i) {
+        const cmdr_value *x = cmdr_item(&xs, i);
+        if (cmdr_kind_of(x) == CMDR_TEXT && !strcmp(cmdr_text_of(x), text)) break;
+    }
+    int found = i < n;
     cmdr_free(&xs);
     if (found) { *result = number(i + 1); return 0; }
     char *d = cmdr_describe(&argv[1]);
@@ -196,7 +201,7 @@ typedef struct {
 static int by_key(const void *a, const void *b)
 {
     const keyed *x = a, *y = b;
-    int c = strcmp(x->key.text, y->key.text);
+    int c = strcmp(cmdr_text_of(&x->key), cmdr_text_of(&y->key));
     return c ? c : (x->index > y->index) - (x->index < y->index);
 }
 
@@ -214,18 +219,18 @@ static keyed *keys(const char *name, int numeric, size_t argc, const cmdr_value 
 {
     cmdr_value xs;
     if (check_block(name, argc, argv, 1, 1, error) || items(name, &argv[0], &xs, error)) return NULL;
-    keyed *ks = cmdr_realloc(NULL, xs.count ? xs.count : 1, sizeof(*ks));
+    size_t total = cmdr_count(&xs);
+    keyed *ks = cmdr_realloc(NULL, total ? total : 1, sizeof(*ks));
     size_t n = 0;
     int status = 0;
-    for (; n < xs.count; ++n) {
-        ks[n] = (keyed){.item = xs.items[n], .index = n};
-        xs.items[n] = (cmdr_value){0};
+    for (; n < total; ++n) {
+        ks[n] = (keyed){.item = cmdr_take(&xs, n), .index = n};
         if ((status = call(name, n, argc, argv, 1, &ks[n].item, 1, &ks[n].key, error))) break;
-        if (ks[n].key.kind != CMDR_TEXT) {
+        if (cmdr_kind_of(&ks[n].key) != CMDR_TEXT) {
             status = cmdr_error(error, "%s item %zu: the key must be text", name, n + 1);
             break;
         }
-        if (numeric && cmdr_number(ks[n].key.text, &ks[n].n, error)) {
+        if (numeric && cmdr_number(cmdr_text_of(&ks[n].key), &ks[n].n, error)) {
             status = 1;
             break;
         }
@@ -249,7 +254,7 @@ static int sort_by(const char *name, int numeric, size_t argc, const cmdr_value 
     keyed *ks = keys(name, numeric, argc, argv, &n, error);
     if (!ks) return 1;
     if (n) qsort(ks, n, sizeof(*ks), numeric ? by_number : by_key);
-    *result = (cmdr_value){.kind = CMDR_LIST};
+    *result = cmdr_list();
     for (size_t i = 0; i < n; ++i) {
         cmdr_push(result, ks[i].item);
         cmdr_free(&ks[i].key);
@@ -268,17 +273,19 @@ COMMAND(group_by_command)
     size_t n;
     keyed *ks = keys("lists.group-by", 0, argc, argv, &n, error);
     if (!ks) return 1;
-    *result = (cmdr_value){.kind = CMDR_LIST};
+    /* A run's items collect in members until its key changes. */
+    *result = cmdr_list();
+    cmdr_value members = cmdr_list();
     for (size_t i = 0; i < n; ++i) {
-        if (!i || strcmp(ks[i].key.text, ks[i - 1].key.text)) {
-            cmdr_value group = {.kind = CMDR_LIST};
-            cmdr_push(&group, copy(&ks[i].key));
-            cmdr_push(&group, (cmdr_value){.kind = CMDR_LIST});
-            cmdr_push(result, group);
-        }
-        cmdr_value *last = &result->items[result->count - 1];
-        cmdr_push(&last->items[1], ks[i].item);
+        cmdr_push(&members, ks[i].item);
+        if (i + 1 < n && !strcmp(cmdr_text_of(&ks[i + 1].key), cmdr_text_of(&ks[i].key))) continue;
+        cmdr_value group = cmdr_list();
+        cmdr_push(&group, copy(&ks[i].key));
+        cmdr_push(&group, members);
+        cmdr_push(result, group);
+        members = cmdr_list();
     }
+    cmdr_free(&members);
     for (size_t i = 0; i < n; ++i) cmdr_free(&ks[i].key);
     free(ks);
     return 0;
@@ -293,12 +300,16 @@ COMMAND(batched_command)
     if (!size) return cmdr_error(error, "lists.batched: N must be at least 1");
     cmdr_value xs;
     if (items("lists.batched", &argv[0], &xs, error)) return 1;
-    *result = (cmdr_value){.kind = CMDR_LIST};
-    for (size_t i = 0; i < xs.count; ++i) {
-        if (i % size == 0) cmdr_push(result, (cmdr_value){.kind = CMDR_LIST});
-        cmdr_push(&result->items[result->count - 1], xs.items[i]);
-        xs.items[i] = (cmdr_value){0};
+    *result = cmdr_list();
+    size_t n = cmdr_count(&xs);
+    cmdr_value batch = cmdr_list();
+    for (size_t i = 0; i < n; ++i) {
+        cmdr_push(&batch, cmdr_take(&xs, i));
+        if ((i + 1) % size && i + 1 < n) continue;
+        cmdr_push(result, batch);
+        batch = cmdr_list();
     }
+    cmdr_free(&batch);
     cmdr_free(&xs);
     return 0;
 }
@@ -311,11 +322,11 @@ COMMAND(accumulate_command)
     cmdr_value xs;
     if (check_block("lists.accumulate", argc, argv, 1, 2, error) || items("lists.accumulate", &argv[0], &xs, error))
         return 1;
-    *result = (cmdr_value){.kind = CMDR_LIST};
+    *result = cmdr_list();
     int status = 0;
-    for (size_t i = 0; i < xs.count && !status; ++i) {
-        if (!i) { cmdr_push(result, copy(&xs.items[0])); continue; }
-        cmdr_value args[2] = {result->items[result->count - 1], xs.items[i]}, next;
+    for (size_t i = 0; i < cmdr_count(&xs) && !status; ++i) {
+        if (!i) { cmdr_push(result, copy(cmdr_item(&xs, 0))); continue; }
+        cmdr_value args[2] = {*cmdr_item(result, cmdr_count(result) - 1), *cmdr_item(&xs, i)}, next;
         if (!(status = call("lists.accumulate", i, argc, argv, 1, args, 2, &next, error))) cmdr_push(result, next);
     }
     cmdr_free(&xs);

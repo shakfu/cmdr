@@ -31,7 +31,7 @@ COMMAND(cwd_command)
     for (size_t size = 256;; size *= 2) {
         char *path = cmdr_realloc(NULL, size, 1);
         if (getcwd(path, size)) {
-            *result = (cmdr_value){.kind = CMDR_TEXT, .text = path};
+            *result = cmdr_text_owned(path);
             return 0;
         }
         free(path);

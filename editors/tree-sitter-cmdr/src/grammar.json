@@ -90,15 +90,23 @@
               {
                 "type": "REPEAT",
                 "content": {
-                  "type": "CHOICE",
+                  "type": "SEQ",
                   "members": [
                     {
                       "type": "SYMBOL",
                       "name": "_newline"
                     },
                     {
-                      "type": "SYMBOL",
-                      "name": "comment"
+                      "type": "CHOICE",
+                      "members": [
+                        {
+                          "type": "SYMBOL",
+                          "name": "comment"
+                        },
+                        {
+                          "type": "BLANK"
+                        }
+                      ]
                     }
                   ]
                 }
@@ -175,6 +183,158 @@
         {
           "type": "SYMBOL",
           "name": "sub_pipeline"
+        }
+      ]
+    },
+    "block_stage": {
+      "type": "CHOICE",
+      "members": [
+        {
+          "type": "SEQ",
+          "members": [
+            {
+              "type": "FIELD",
+              "name": "command",
+              "content": {
+                "type": "ALIAS",
+                "content": {
+                  "type": "SYMBOL",
+                  "name": "block_word"
+                },
+                "named": true,
+                "value": "word"
+              }
+            },
+            {
+              "type": "REPEAT",
+              "content": {
+                "type": "SYMBOL",
+                "name": "_block_argument"
+              }
+            }
+          ]
+        },
+        {
+          "type": "FIELD",
+          "name": "value",
+          "content": {
+            "type": "SYMBOL",
+            "name": "reference"
+          }
+        }
+      ]
+    },
+    "_block_argument": {
+      "type": "CHOICE",
+      "members": [
+        {
+          "type": "ALIAS",
+          "content": {
+            "type": "SYMBOL",
+            "name": "block_word"
+          },
+          "named": true,
+          "value": "word"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "number"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "raw_string"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "string"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "reference"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "block"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "sub_pipeline"
+        }
+      ]
+    },
+    "sub_stage": {
+      "type": "CHOICE",
+      "members": [
+        {
+          "type": "SEQ",
+          "members": [
+            {
+              "type": "FIELD",
+              "name": "command",
+              "content": {
+                "type": "ALIAS",
+                "content": {
+                  "type": "SYMBOL",
+                  "name": "sub_word"
+                },
+                "named": true,
+                "value": "word"
+              }
+            },
+            {
+              "type": "REPEAT",
+              "content": {
+                "type": "SYMBOL",
+                "name": "_sub_argument"
+              }
+            }
+          ]
+        },
+        {
+          "type": "FIELD",
+          "name": "value",
+          "content": {
+            "type": "SYMBOL",
+            "name": "reference"
+          }
+        }
+      ]
+    },
+    "_sub_argument": {
+      "type": "CHOICE",
+      "members": [
+        {
+          "type": "ALIAS",
+          "content": {
+            "type": "SYMBOL",
+            "name": "sub_word"
+          },
+          "named": true,
+          "value": "word"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "number"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "raw_string"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "string"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "reference"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "block"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "sub_pipeline"
         },
         {
           "type": "SYMBOL",
@@ -187,6 +347,89 @@
       "value": "-?\\d+(\\.\\d+)?([eE][-+]?\\d+)?"
     },
     "word": {
+      "type": "TOKEN",
+      "content": {
+        "type": "SEQ",
+        "members": [
+          {
+            "type": "CHOICE",
+            "members": [
+              {
+                "type": "PATTERN",
+                "value": "[^\\s|{}('\"\\\\$]"
+              },
+              {
+                "type": "PATTERN",
+                "value": "\\\\."
+              }
+            ]
+          },
+          {
+            "type": "REPEAT",
+            "content": {
+              "type": "CHOICE",
+              "members": [
+                {
+                  "type": "PATTERN",
+                  "value": "[^\\s|'\"\\\\]"
+                },
+                {
+                  "type": "PATTERN",
+                  "value": "\\\\."
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "block_word": {
+      "type": "TOKEN",
+      "content": {
+        "type": "SEQ",
+        "members": [
+          {
+            "type": "CHOICE",
+            "members": [
+              {
+                "type": "PATTERN",
+                "value": "[^\\s|{}('\"\\\\$]"
+              },
+              {
+                "type": "PATTERN",
+                "value": "\\\\."
+              }
+            ]
+          },
+          {
+            "type": "REPEAT",
+            "content": {
+              "type": "CHOICE",
+              "members": [
+                {
+                  "type": "CHOICE",
+                  "members": [
+                    {
+                      "type": "PATTERN",
+                      "value": "[^\\s|{}'\"\\\\]"
+                    },
+                    {
+                      "type": "PATTERN",
+                      "value": "\\{[^\\s|{}'\"\\\\]*\\}"
+                    }
+                  ]
+                },
+                {
+                  "type": "PATTERN",
+                  "value": "\\\\."
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "sub_word": {
       "type": "TOKEN",
       "content": {
         "type": "SEQ",
@@ -210,8 +453,17 @@
               "type": "CHOICE",
               "members": [
                 {
-                  "type": "PATTERN",
-                  "value": "[^\\s|{}()'\"\\\\]"
+                  "type": "CHOICE",
+                  "members": [
+                    {
+                      "type": "PATTERN",
+                      "value": "[^\\s|{}()'\"\\\\]"
+                    },
+                    {
+                      "type": "PATTERN",
+                      "value": "\\{[^\\s|{}()'\"\\\\]*\\}"
+                    }
+                  ]
                 },
                 {
                   "type": "PATTERN",
@@ -335,6 +587,18 @@
           "members": [
             {
               "type": "SYMBOL",
+              "name": "comment"
+            },
+            {
+              "type": "BLANK"
+            }
+          ]
+        },
+        {
+          "type": "CHOICE",
+          "members": [
+            {
+              "type": "SYMBOL",
               "name": "_gap"
             },
             {
@@ -386,8 +650,13 @@
       "type": "SEQ",
       "members": [
         {
-          "type": "SYMBOL",
-          "name": "stage"
+          "type": "ALIAS",
+          "content": {
+            "type": "SYMBOL",
+            "name": "block_stage"
+          },
+          "named": true,
+          "value": "stage"
         },
         {
           "type": "REPEAT",
@@ -423,8 +692,13 @@
                 ]
               },
               {
-                "type": "SYMBOL",
-                "name": "stage"
+                "type": "ALIAS",
+                "content": {
+                  "type": "SYMBOL",
+                  "name": "block_stage"
+                },
+                "named": true,
+                "value": "stage"
               }
             ]
           }
@@ -434,15 +708,23 @@
     "_gap": {
       "type": "REPEAT1",
       "content": {
-        "type": "CHOICE",
+        "type": "SEQ",
         "members": [
           {
             "type": "SYMBOL",
             "name": "_newline"
           },
           {
-            "type": "SYMBOL",
-            "name": "comment"
+            "type": "CHOICE",
+            "members": [
+              {
+                "type": "SYMBOL",
+                "name": "comment"
+              },
+              {
+                "type": "BLANK"
+              }
+            ]
           }
         ]
       }
@@ -541,6 +823,18 @@
           "members": [
             {
               "type": "SYMBOL",
+              "name": "comment"
+            },
+            {
+              "type": "BLANK"
+            }
+          ]
+        },
+        {
+          "type": "CHOICE",
+          "members": [
+            {
+              "type": "SYMBOL",
               "name": "_gap"
             },
             {
@@ -552,7 +846,7 @@
           "type": "ALIAS",
           "content": {
             "type": "SYMBOL",
-            "name": "body_pipeline"
+            "name": "sub_body"
           },
           "named": true,
           "value": "pipeline"
@@ -575,6 +869,65 @@
         }
       ]
     },
+    "sub_body": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "ALIAS",
+          "content": {
+            "type": "SYMBOL",
+            "name": "sub_stage"
+          },
+          "named": true,
+          "value": "stage"
+        },
+        {
+          "type": "REPEAT",
+          "content": {
+            "type": "SEQ",
+            "members": [
+              {
+                "type": "CHOICE",
+                "members": [
+                  {
+                    "type": "SYMBOL",
+                    "name": "_gap"
+                  },
+                  {
+                    "type": "BLANK"
+                  }
+                ]
+              },
+              {
+                "type": "STRING",
+                "value": "|"
+              },
+              {
+                "type": "CHOICE",
+                "members": [
+                  {
+                    "type": "SYMBOL",
+                    "name": "_gap"
+                  },
+                  {
+                    "type": "BLANK"
+                  }
+                ]
+              },
+              {
+                "type": "ALIAS",
+                "content": {
+                  "type": "SYMBOL",
+                  "name": "sub_stage"
+                },
+                "named": true,
+                "value": "stage"
+              }
+            ]
+          }
+        }
+      ]
+    },
     "parenthesized": {
       "type": "SEQ",
       "members": [
@@ -586,7 +939,7 @@
           "type": "REPEAT",
           "content": {
             "type": "SYMBOL",
-            "name": "_argument"
+            "name": "_sub_argument"
           }
         },
         {
@@ -605,6 +958,9 @@
   "conflicts": [
     [
       "body_pipeline"
+    ],
+    [
+      "sub_body"
     ]
   ],
   "precedences": [],

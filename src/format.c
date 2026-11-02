@@ -386,6 +386,8 @@ static int split(const char *source, chunk **chunks, size_t *count, char **error
         }
         p += n;
         if (cmdr_join(&joined, &used, p - n, n) && *p) continue;
+        /* Check what a script runs: the joined text, without comment lines. */
+        size_t joined_length = used;
         used = 0;
         chunk c = {PIPELINE, first_line, first, (size_t)(p - source)};
         const char *q = source + c.start;
@@ -393,7 +395,7 @@ static int split(const char *source, chunk **chunks, size_t *count, char **error
         if (q == p) c.kind = BLANK;
         else if (*q == '#' && line == first_line) c.kind = COMMENT;
         if (c.kind == PIPELINE) {
-            text = cmdr_strndup(source + c.start, c.end - c.start);
+            text = cmdr_strndup(joined, joined_length);
             char *inner;
             if (cmdr_check_syntax(text, &inner)) {
                 status = cmdr_error(error, "%zu: %s", c.line, inner);

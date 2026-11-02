@@ -43,21 +43,22 @@ static int first(int groups, const char *name, size_t argc, const cmdr_value *ar
                  cmdr_value *result, char **error)
 {
     if (argc != 2) return cmdr_error(error, "usage: %s TEXT REGEX", name);
+    const char *text = cmdr_text_of(&argv[0]);
     regex_t re;
-    if (compile(&re, argv[1].text, name, error)) return 1;
+    if (compile(&re, cmdr_text_of(&argv[1]), name, error)) return 1;
     size_t n = re.re_nsub + 1;
     regmatch_t *m = cmdr_realloc(NULL, n, sizeof(*m));
-    int rc = regexec(&re, argv[0].text, n, m, 0);
+    int rc = regexec(&re, text, n, m, 0);
     regfree(&re);
     int status = 0;
     if (rc == REG_NOMATCH) status = no_match(name, &argv[0], &argv[1], error);
     else if (rc) status = cmdr_error(error, "%s: regexec failed", name);
-    else if (!groups) *result = cmdr_text(argv[0].text + m[0].rm_so, (size_t)(m[0].rm_eo - m[0].rm_so));
+    else if (!groups) *result = cmdr_text(text + m[0].rm_so, (size_t)(m[0].rm_eo - m[0].rm_so));
     else {
-        *result = (cmdr_value){.kind = CMDR_LIST};
+        *result = cmdr_list();
         for (size_t i = 0; i < n; ++i) /* An unmatched group is empty text. */
             cmdr_push(result, m[i].rm_so < 0 ? cmdr_text("", 0)
-                      : cmdr_text(argv[0].text + m[i].rm_so, (size_t)(m[i].rm_eo - m[i].rm_so)));
+                      : cmdr_text(text + m[i].rm_so, (size_t)(m[i].rm_eo - m[i].rm_so)));
     }
     free(m);
     return status;
@@ -163,7 +164,7 @@ static int scan(enum mode mode, const char *name, const char *text, const char *
         regfree(&later);
         return cmdr_error(error, "%s: %s", name, strerror(errno));
     }
-    if (mode != REPLACE) *result = (cmdr_value){.kind = CMDR_LIST};
+    if (mode != REPLACE) *result = cmdr_list();
     const char *p = text, *piece = text, *previous = NULL;
     int rc;
     for (;;) {
@@ -196,7 +197,7 @@ static int scan(enum mode mode, const char *name, const char *text, const char *
     if (mode == REPLACE) {
         fputs(piece, out);
         fclose(out);
-        *result = (cmdr_value){.kind = CMDR_TEXT, .text = out_text};
+        *result = cmdr_text_owned(out_text);
     }
     return 0;
 }
@@ -204,19 +205,20 @@ static int scan(enum mode mode, const char *name, const char *text, const char *
 COMMAND(all_command)
 {
     if (argc != 2) return cmdr_error(error, "usage: re.all TEXT REGEX");
-    return scan(ALL, "re.all", argv[0].text, argv[1].text, NULL, result, error);
+    return scan(ALL, "re.all", cmdr_text_of(&argv[0]), cmdr_text_of(&argv[1]), NULL, result, error);
 }
 
 COMMAND(split_command)
 {
     if (argc != 2) return cmdr_error(error, "usage: re.split TEXT REGEX");
-    return scan(SPLIT, "re.split", argv[0].text, argv[1].text, NULL, result, error);
+    return scan(SPLIT, "re.split", cmdr_text_of(&argv[0]), cmdr_text_of(&argv[1]), NULL, result, error);
 }
 
 COMMAND(replace_command)
 {
     if (argc != 3) return cmdr_error(error, "usage: re.replace TEXT REGEX REPLACEMENT");
-    return scan(REPLACE, "re.replace", argv[0].text, argv[1].text, argv[2].text, result, error);
+    return scan(REPLACE, "re.replace", cmdr_text_of(&argv[0]), cmdr_text_of(&argv[1]),
+                cmdr_text_of(&argv[2]), result, error);
 }
 
 #define TEXT(n, u, d, f) {.name = n, .usage = u, .docstring = d, .run = f, .text = 1}

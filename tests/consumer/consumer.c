@@ -15,7 +15,7 @@ int main(void)
         fprintf(stderr, "consumer: %s\n", error);
         return 1;
     }
-    failed = strcmp(value.text, "a b c") != 0;
+    failed = strcmp(cmdr_text_of(&value), "a b c") != 0;
     cmdr_free(&value);
     if (!cmdr_session_eval(session, "run true", &value, &error)) failed = 1;
     free(error);

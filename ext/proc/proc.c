@@ -20,7 +20,7 @@
 
 static int same(const cmdr_value *value, cmdr_value *result)
 {
-    *result = cmdr_text(value->text, strlen(value->text));
+    *result = cmdr_text(cmdr_text_of(value), strlen(cmdr_text_of(value)));
     return 0;
 }
 
@@ -65,14 +65,15 @@ static int zombie(pid_t pid)
 COMMAND(alive_command)
 {
     if (argc != 1) return cmdr_error(error, "usage: proc.alive PID");
+    const char *text = cmdr_text_of(&argv[0]);
     pid_t pid;
-    if (parse_pid("proc.alive", argv[0].text, &pid, error)) return 1;
-    if (pid <= 0) return cmdr_error(error, "proc.alive: PID must be positive: %s", argv[0].text);
+    if (parse_pid("proc.alive", text, &pid, error)) return 1;
+    if (pid <= 0) return cmdr_error(error, "proc.alive: PID must be positive: %s", text);
     if (kill(pid, 0) && errno != EPERM) {
-        if (errno != ESRCH) return cmdr_error(error, "proc.alive %s: %s", argv[0].text, strerror(errno));
-        return cmdr_error(error, "proc.alive: no process %s", argv[0].text), CMDR_MISMATCH;
+        if (errno != ESRCH) return cmdr_error(error, "proc.alive %s: %s", text, strerror(errno));
+        return cmdr_error(error, "proc.alive: no process %s", text), CMDR_MISMATCH;
     }
-    if (zombie(pid)) return cmdr_error(error, "proc.alive: process %s has exited", argv[0].text), CMDR_MISMATCH;
+    if (zombie(pid)) return cmdr_error(error, "proc.alive: process %s has exited", text), CMDR_MISMATCH;
     return same(&argv[0], result);
 }
 
@@ -103,14 +104,15 @@ static int parse_signal(const char *text, int *number, char **error)
 COMMAND(kill_command)
 {
     if (argc < 1 || argc > 2) return cmdr_error(error, "usage: proc.kill PID [SIGNAL]");
+    const char *text = cmdr_text_of(&argv[0]);
     pid_t pid;
     int number = SIGTERM;
-    if (parse_pid("proc.kill", argv[0].text, &pid, error)) return 1;
-    if (pid == 0 || pid == -1) return cmdr_error(error, "proc.kill: refusing PID %s", argv[0].text);
-    if (argc == 2 && parse_signal(argv[1].text, &number, error)) return 1;
+    if (parse_pid("proc.kill", text, &pid, error)) return 1;
+    if (pid == 0 || pid == -1) return cmdr_error(error, "proc.kill: refusing PID %s", text);
+    if (argc == 2 && parse_signal(cmdr_text_of(&argv[1]), &number, error)) return 1;
     if (kill(pid, number)) {
-        if (errno != ESRCH) return cmdr_error(error, "proc.kill %s: %s", argv[0].text, strerror(errno));
-        return cmdr_error(error, "proc.kill: no process %s", argv[0].text), CMDR_MISMATCH;
+        if (errno != ESRCH) return cmdr_error(error, "proc.kill %s: %s", text, strerror(errno));
+        return cmdr_error(error, "proc.kill: no process %s", text), CMDR_MISMATCH;
     }
     return same(&argv[0], result);
 }

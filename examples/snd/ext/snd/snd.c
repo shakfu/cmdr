@@ -203,14 +203,15 @@ static const sox_effect_handler_t *find_effect(const char *name)
 static int flatten(const char *name, const cmdr_value *value, const char ***words, size_t *count,
                    char **error)
 {
-    if (value->kind == CMDR_LIST) {
-        for (size_t i = 0; i < value->count; ++i)
-            if (flatten(name, &value->items[i], words, count, error)) return 1;
+    if (cmdr_kind_of(value) == CMDR_LIST) {
+        for (size_t i = 0; i < cmdr_count(value); ++i)
+            if (flatten(name, cmdr_item(value, i), words, count, error)) return 1;
         return 0;
     }
-    if (value->kind != CMDR_TEXT) return cmdr_error(error, "%s: arguments must be text", name);
+    if (cmdr_kind_of(value) != CMDR_TEXT)
+        return cmdr_error(error, "%s: arguments must be text", name);
     *words = cmdr_realloc(*words, *count + 1, sizeof(**words));
-    (*words)[(*count)++] = value->text;
+    (*words)[(*count)++] = cmdr_text_of(value);
     return 0;
 }
 
@@ -924,7 +925,7 @@ static void push_line(cmdr_value *list, const char *name, const char *value)
 static void push_number(cmdr_value *list, const char *name, double x)
 {
     cmdr_value v = cmdr_number_value(x);
-    push_line(list, name, v.text);
+    push_line(list, name, cmdr_text_of(&v));
     cmdr_free(&v);
 }
 
@@ -940,13 +941,13 @@ COMMAND(info_command)
 {
     if (argc != 1) return cmdr_error(error, "usage: snd.info PATH");
     if (enter("snd.info", error)) return 1;
-    sox_format_t *ft = open_input("snd.info", argv[0].text, error);
+    sox_format_t *ft = open_input("snd.info", cmdr_text_of(&argv[0]), error);
     if (!ft) {
         leave();
         return 1;
     }
     const sox_signalinfo_t *s = &ft->signal;
-    *result = (cmdr_value){.kind = CMDR_LIST};
+    *result = cmdr_list();
     push_line(result, "type", ft->filetype);
     push_number(result, "rate", s->rate);
     push_number(result, "channels", s->channels);
@@ -975,11 +976,12 @@ COMMAND(segments_command)
 {
     if (argc != 3) return cmdr_error(error, "usage: snd.segments PATH DB SECONDS");
     double db, seconds;
-    if (cmdr_number(argv[1].text, &db, error) || cmdr_number(argv[2].text, &seconds, error))
+    if (cmdr_number(cmdr_text_of(&argv[1]), &db, error) ||
+        cmdr_number(cmdr_text_of(&argv[2]), &seconds, error))
         return 1;
     if (seconds < 0) return cmdr_error(error, "snd.segments: SECONDS must be nonnegative");
     if (enter("snd.segments", error)) return 1;
-    sox_format_t *ft = open_input("snd.segments", argv[0].text, error);
+    sox_format_t *ft = open_input("snd.segments", cmdr_text_of(&argv[0]), error);
     if (!ft) {
         leave();
         return 1;
@@ -990,7 +992,7 @@ COMMAND(segments_command)
     int sounding = 0;
     size_t size = sox_globals.bufsiz / ch * ch, n;
     sox_sample_t *buf = cmdr_realloc(NULL, size, sizeof(*buf));
-    *result = (cmdr_value){.kind = CMDR_LIST};
+    *result = cmdr_list();
     while ((n = sox_read(ft, buf, size)) > 0) {
         for (size_t i = 0; i + ch <= n; i += ch, ++frame) {
             double peak = 0;
@@ -1020,7 +1022,7 @@ COMMAND(effects_command)
 {
     if (argc) return cmdr_error(error, "usage: snd.effects");
     if (enter("snd.effects", error)) return 1;
-    *result = (cmdr_value){.kind = CMDR_LIST};
+    *result = cmdr_list();
     for (const sox_effect_fn_t *fn = sox_get_effect_fns(); *fn; ++fn) {
         const sox_effect_handler_t *h = (*fn)();
         if (h && h->name && !(h->flags & SOX_EFF_INTERNAL))
@@ -1035,10 +1037,10 @@ COMMAND(usage_command)
 {
     if (argc != 1) return cmdr_error(error, "usage: snd.usage EFFECT");
     if (enter("snd.usage", error)) return 1;
-    const sox_effect_handler_t *h = find_effect(argv[0].text);
+    const sox_effect_handler_t *h = find_effect(cmdr_text_of(&argv[0]));
     int status = 0;
     if (!h || (h->flags & SOX_EFF_INTERNAL)) {
-        status = cmdr_error(error, "snd.usage: unknown effect: %s", argv[0].text);
+        status = cmdr_error(error, "snd.usage: unknown effect: %s", cmdr_text_of(&argv[0]));
     } else {
         const char *usage = h->usage ? h->usage : "";
         size_t size = strlen(h->name) + strlen(usage) + 2;

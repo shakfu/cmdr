@@ -40,7 +40,7 @@ static void put_text(buffer *b, const char *text) { put(b, text, strlen(text)); 
 
 static cmdr_value taken(buffer *b)
 {
-    return (cmdr_value){.kind = CMDR_TEXT, .text = b->data ? b->data : cmdr_strndup("", 0)};
+    return cmdr_text_owned(b->data ? b->data : cmdr_strndup("", 0));
 }
 
 static int space(char c) { return c == ' ' || c == '\t' || c == '\n' || c == '\r'; }
@@ -436,7 +436,7 @@ static int walk(const char *name, span v, size_t n, const cmdr_value *path, span
                 char **error)
 {
     for (size_t i = 0; i < n; ++i) {
-        const char *seg = path[i].text;
+        const char *seg = cmdr_text_of(&path[i]);
         if (*v.at == '{') {
             const char *p = v.at + 1;
             span key, value, found = {0};
@@ -483,7 +483,7 @@ static int walk(const char *name, span v, size_t n, const cmdr_value *path, span
 static int at_path(const char *name, size_t argc, const cmdr_value *argv, span *v, char **error)
 {
     span root;
-    if (parse(name, argv[0].text, &root, error)) return 1;
+    if (parse(name, cmdr_text_of(&argv[0]), &root, error)) return 1;
     return walk(name, root, argc - 1, argv + 1, v, error);
 }
 
@@ -529,7 +529,7 @@ COMMAND(has_command)
     if (argc < 1) return cmdr_error(error, "usage: json.has JSON [SEG ...]");
     span v;
     int status = at_path("json.has", argc, argv, &v, error);
-    if (!status) *result = cmdr_text(argv[0].text, strlen(argv[0].text));
+    if (!status) *result = cmdr_text(cmdr_text_of(&argv[0]), strlen(cmdr_text_of(&argv[0])));
     return status;
 }
 
@@ -541,7 +541,7 @@ static int items(int keys, const char *name, size_t argc, const cmdr_value *argv
     if (status) return status;
     if (*v.at != '{' && (keys || *v.at != '['))
         return cmdr_error(error, "%s: expected %s, got %s", name, keys ? "an object" : "an object or array", type_of(v));
-    *result = (cmdr_value){.kind = CMDR_LIST};
+    *result = cmdr_list();
     if (*v.at == '[') {
         const char *p = v.at + 1;
         span item;
@@ -580,8 +580,8 @@ COMMAND(valid_command)
 {
     if (argc != 1) return cmdr_error(error, "usage: json.valid TEXT");
     span v;
-    if (parse("json.valid", argv[0].text, &v, error)) return CMDR_MISMATCH;
-    *result = cmdr_text(argv[0].text, strlen(argv[0].text));
+    if (parse("json.valid", cmdr_text_of(&argv[0]), &v, error)) return CMDR_MISMATCH;
+    *result = cmdr_text(cmdr_text_of(&argv[0]), strlen(cmdr_text_of(&argv[0])));
     return 0;
 }
 
@@ -591,7 +591,7 @@ COMMAND(str_command)
 {
     if (argc != 1) return cmdr_error(error, "usage: json.str TEXT");
     buffer b = {0};
-    if (put_string(&b, argv[0].text)) {
+    if (put_string(&b, cmdr_text_of(&argv[0]))) {
         free(b.data);
         return cmdr_error(error, "json.str: TEXT is not UTF-8");
     }
@@ -603,8 +603,8 @@ COMMAND(str_command)
 static int put_json(buffer *b, const char *name, const cmdr_value *value, char **error)
 {
     span v;
-    if (value->kind != CMDR_TEXT) return cmdr_error(error, "%s: expected JSON text", name);
-    if (parse(name, value->text, &v, error)) return 1;
+    if (cmdr_kind_of(value) != CMDR_TEXT) return cmdr_error(error, "%s: expected JSON text", name);
+    if (parse(name, cmdr_text_of(value), &v, error)) return 1;
     put(b, v.at, v.n);
     return 0;
 }
@@ -615,16 +615,29 @@ COMMAND(array_command)
     size_t n = 0;
     put(&b, "[", 1);
     for (size_t i = 0; i < argc; ++i) {
-        int list = argv[i].kind == CMDR_LIST;
-        const cmdr_value *xs = list ? argv[i].items : &argv[i];
-        for (size_t j = 0; j < (list ? argv[i].count : 1); ++j) {
+        int list = cmdr_kind_of(&argv[i]) == CMDR_LIST;
+        for (size_t j = 0; j < (list ? cmdr_count(&argv[i]) : 1); ++j) {
+            const cmdr_value *x = list ? cmdr_item(&argv[i], j) : &argv[i];
             if (n++) put(&b, ", ", 2);
-            if (put_json(&b, "json.array", &xs[j], error)) { free(b.data); return 1; }
+            if (put_json(&b, "json.array", x, error)) { free(b.data); return 1; }
         }
     }
     put(&b, "]", 1);
     *result = taken(&b);
     return 0;
+}
+
+/* Append member key: value, after a comma unless it is the first. */
+static int put_member(buffer *b, const char *name, int strings, int first, const char *key,
+                      const cmdr_value *value, char **error)
+{
+    if (!first) put(b, ", ", 2);
+    int status = put_string(b, key) ? cmdr_error(error, "%s: KEY is not UTF-8", name) : 0;
+    put(b, ": ", 2);
+    if (!status && strings && put_string(b, cmdr_text_of(value)))
+        status = cmdr_error(error, "%s: TEXT is not UTF-8", name);
+    if (!status && !strings) status = put_json(b, name, value, error);
+    return status;
 }
 
 static int object(const char *name, int strings, size_t argc, const cmdr_value *argv,
@@ -633,15 +646,11 @@ static int object(const char *name, int strings, size_t argc, const cmdr_value *
     if (argc % 2) return cmdr_error(error, "usage: %s [KEY %s ...]", name, strings ? "TEXT" : "JSON");
     buffer b = {0};
     put(&b, "{", 1);
-    for (size_t i = 0; i < argc; i += 2) {
-        if (i) put(&b, ", ", 2);
-        int status = put_string(&b, argv[i].text) ? cmdr_error(error, "%s: KEY is not UTF-8", name) : 0;
-        put(&b, ": ", 2);
-        if (!status && strings && put_string(&b, argv[i + 1].text))
-            status = cmdr_error(error, "%s: TEXT is not UTF-8", name);
-        if (!status && !strings) status = put_json(&b, name, &argv[i + 1], error);
-        if (status) { free(b.data); return 1; }
-    }
+    for (size_t i = 0; i < argc; i += 2)
+        if (put_member(&b, name, strings, !i, cmdr_text_of(&argv[i]), &argv[i + 1], error)) {
+            free(b.data);
+            return 1;
+        }
     put(&b, "}", 1);
     *result = taken(&b);
     return 0;
@@ -650,18 +659,59 @@ static int object(const char *name, int strings, size_t argc, const cmdr_value *
 COMMAND(object_command) { return object("json.object", 0, argc, argv, result, error); }
 COMMAND(strings_command) { return object("json.strings", 1, argc, argv, result, error); }
 
+/* The object at the path as a dict whose values stay JSON. */
+COMMAND(to_dict_command)
+{
+    if (argc < 1) return cmdr_error(error, "usage: json.to-dict JSON [SEG ...]");
+    span v;
+    int status = at_path("json.to-dict", argc, argv, &v, error);
+    if (status) return status;
+    if (*v.at != '{') return cmdr_error(error, "json.to-dict: expected an object, got %s", type_of(v));
+    size_t n;
+    member *ms = members(v, &n);
+    *result = cmdr_dict();
+    for (size_t i = 0; i < n && !status; ++i) {
+        if (ms[i].dropped) continue;
+        buffer b = {0};
+        const char *problem;
+        if (decode(ms[i].key, 1, &b, &problem)) status = cmdr_error(error, "json.to-dict: %s", problem);
+        else cmdr_dict_put(result, b.data ? b.data : "", slice(ms[i].value));
+        free(b.data);
+    }
+    free_members(ms, n);
+    if (status) cmdr_free(result);
+    return status;
+}
+
+COMMAND(from_dict_command)
+{
+    if (argc != 1 || cmdr_kind_of(&argv[0]) != CMDR_DICT)
+        return cmdr_error(error, "usage: json.from-dict DICT");
+    buffer b = {0};
+    put(&b, "{", 1);
+    for (size_t i = 0; i < cmdr_count(&argv[0]); ++i)
+        if (put_member(&b, "json.from-dict", 0, !i, cmdr_dict_key(&argv[0], i),
+                       cmdr_dict_value(&argv[0], i), error)) {
+            free(b.data);
+            return 1;
+        }
+    put(&b, "}", 1);
+    *result = taken(&b);
+    return 0;
+}
+
 /* Splice VALUE into JSON at the path, keeping the rest as written. */
 COMMAND(set_command)
 {
     static const char usage[] = "usage: json.set JSON SEG [SEG ...] VALUE";
     if (argc < 3) return cmdr_error(error, usage);
     span root, parent, value;
-    if (parse("json.set", argv[0].text, &root, error)) return 1;
-    if (parse("json.set", argv[argc - 1].text, &value, error)) return 1;
+    if (parse("json.set", cmdr_text_of(&argv[0]), &root, error)) return 1;
+    if (parse("json.set", cmdr_text_of(&argv[argc - 1]), &value, error)) return 1;
     int status = walk("json.set", root, argc - 3, argv + 1, &parent, error);
     if (status) return status;
     const cmdr_value *last = &argv[argc - 2];
-    const char *text = argv[0].text;
+    const char *text = cmdr_text_of(&argv[0]);
     buffer b = {0};
     if (*parent.at == '{') {
         const char *p = parent.at + 1, *end = NULL;
@@ -670,7 +720,8 @@ COMMAND(set_command)
         while (next(&p, 1, &key, &v)) {
             const char *ignored;
             decode(key, 0, &decoded, &ignored);
-            if (decoded.length == strlen(last->text) && !memcmp(decoded.data, last->text, decoded.length))
+            const char *want = cmdr_text_of(last);
+            if (decoded.length == strlen(want) && !memcmp(decoded.data, want, decoded.length))
                 found = v;
             end = v.at + v.n;
         }
@@ -684,7 +735,7 @@ COMMAND(set_command)
             const char *at = end ? end : parent.at + 1;
             put(&b, text, (size_t)(at - text));
             if (end) put(&b, ", ", 2);
-            if (put_string(&b, last->text)) {
+            if (put_string(&b, cmdr_text_of(last))) {
                 free(b.data);
                 return cmdr_error(error, "json.set: key is not UTF-8");
             }
@@ -752,7 +803,7 @@ COMMAND(format_command)
         indent = (long)n;
     }
     span v;
-    if (parse("json.format", argv[0].text, &v, error)) return 1;
+    if (parse("json.format", cmdr_text_of(&argv[0]), &v, error)) return 1;
     buffer b = {0};
     emit(&b, v, indent, 0);
     *result = taken(&b);
@@ -773,6 +824,9 @@ static const cmdr_command commands[] = {
      .docstring = "Return an array of the arguments; a list adds its items", .run = array_command},
     TEXT("object", "object [KEY JSON ...]", "Return an object of keys and JSON values", object_command),
     TEXT("strings", "strings [KEY TEXT ...]", "Return an object whose values are strings", strings_command),
+    TEXT("to-dict", "to-dict JSON [SEG ...]", "Return the object at the path as a dict of JSON values", to_dict_command),
+    {.name = "from-dict", .usage = "from-dict DICT",
+     .docstring = "Return an object of a dict whose values are JSON", .run = from_dict_command},
     TEXT("set", "set JSON SEG [SEG ...] VALUE", "Return JSON with VALUE at the path", set_command),
     TEXT("format", "format JSON [INDENT]", "Reformat JSON, as Python's json.dumps", format_command),
 };

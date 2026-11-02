@@ -31,12 +31,12 @@ static int format(int utc, const char *name, size_t argc, const cmdr_value *argv
     time_t when = time(NULL);
     if (argc == 2) {
         double x;
-        if (cmdr_number(argv[0].text, &x, error)) return 1;
+        if (cmdr_number(cmdr_text_of(&argv[0]), &x, error)) return 1;
         if (x != floor(x))
-            return cmdr_error(error, "%s: EPOCH must be an integer: %s", name, argv[0].text);
+            return cmdr_error(error, "%s: EPOCH must be an integer: %s", name, cmdr_text_of(&argv[0]));
         /* 2^62 fits time_t on every platform with 64-bit time. */
         if (fabs(x) > 4611686018427387904.0)
-            return cmdr_error(error, "%s: EPOCH out of range: %s", name, argv[0].text);
+            return cmdr_error(error, "%s: EPOCH out of range: %s", name, cmdr_text_of(&argv[0]));
         when = (time_t)x;
     }
     struct tm parts;
@@ -46,7 +46,7 @@ static int format(int utc, const char *name, size_t argc, const cmdr_value *argv
     /* A leading byte makes a successful result nonempty, since strftime
      * returns 0 both for empty output and for a buffer too small. Leading, so
      * a trailing % or %E cannot consume it. */
-    const char *spec = argv[argc - 1].text;
+    const char *spec = cmdr_text_of(&argv[argc - 1]);
     size_t n = strlen(spec);
     char *marked = cmdr_realloc(NULL, n + 2, 1);
     marked[0] = 'x';
@@ -63,7 +63,7 @@ static int format(int utc, const char *name, size_t argc, const cmdr_value *argv
         return cmdr_error(error, "%s: output exceeds %d bytes", name, FORMAT_LIMIT);
     }
     memmove(text, text + 1, written); /* Drop the leading byte; keep the NUL. */
-    *result = (cmdr_value){.kind = CMDR_TEXT, .text = text};
+    *result = cmdr_text_owned(text);
     return 0;
 }
 COMMAND(local_command) { return format(0, "time.local", argc, argv, result, error); }
@@ -81,8 +81,8 @@ COMMAND(sleep_command)
 {
     if (argc != 1) return cmdr_error(error, "usage: time.sleep SECONDS");
     double seconds;
-    if (cmdr_number(argv[0].text, &seconds, error)) return 1;
-    if (seconds < 0) return cmdr_error(error, "time.sleep: SECONDS %s is below 0", argv[0].text);
+    if (cmdr_number(cmdr_text_of(&argv[0]), &seconds, error)) return 1;
+    if (seconds < 0) return cmdr_error(error, "time.sleep: SECONDS %s is below 0", cmdr_text_of(&argv[0]));
     double deadline = monotonic() + seconds, left;
     while (!cmdr_interrupted() && (left = deadline - monotonic()) > 0) {
         double d = left < 0.05 ? left : 0.05;

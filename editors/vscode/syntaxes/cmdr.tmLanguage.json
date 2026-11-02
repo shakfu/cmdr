@@ -69,7 +69,15 @@
       "name": "meta.block.cmdr",
       "patterns": [
         {
-          "match": "\\G\\s*(\\()([^)]*)(\\))(?:\\s*([^\\s|{}()'\"$\\\\]+))?",
+          "match": "\\G\\s*(#.*)$",
+          "captures": {
+            "1": {
+              "name": "comment.line.number-sign.cmdr"
+            }
+          }
+        },
+        {
+          "match": "\\G\\s*(\\()([^)]*)(\\))(?:\\s*(#.*)$|\\s*([^\\s|{}()'\"$\\\\]+))?",
           "captures": {
             "1": {
               "name": "punctuation.definition.parameters.begin.cmdr"
@@ -96,8 +104,11 @@
             "3": {
               "name": "punctuation.definition.parameters.end.cmdr"
             },
-            "4": {
+            "5": {
               "name": "entity.name.function.call.cmdr"
+            },
+            "4": {
+              "name": "comment.line.number-sign.cmdr"
             }
           }
         },
@@ -117,7 +128,7 @@
         },
         {
           "name": "variable.other.reference.cmdr",
-          "match": "\\$[A-Za-z][A-Za-z0-9_-]*(?:\\.[A-Za-z][A-Za-z0-9_-]*)*"
+          "match": "(?<![^\\s|{(])\\$[A-Za-z][A-Za-z0-9_-]*(?:\\.[A-Za-z][A-Za-z0-9_-]*)*"
         },
         {
           "name": "string.quoted.single.cmdr",
@@ -129,10 +140,18 @@
           "end": "\"|$",
           "patterns": [
             {
+              "name": "invalid.illegal.escape.cmdr",
+              "match": "\\\\$"
+            },
+            {
               "name": "constant.character.escape.cmdr",
               "match": "\\\\."
             }
           ]
+        },
+        {
+          "name": "invalid.illegal.escape.cmdr",
+          "match": "\\\\$"
         },
         {
           "name": "constant.character.escape.cmdr",
@@ -159,6 +178,14 @@
         }
       },
       "patterns": [
+        {
+          "match": "\\G\\s*(#.*)$",
+          "captures": {
+            "1": {
+              "name": "comment.line.number-sign.cmdr"
+            }
+          }
+        },
         {
           "match": "\\G\\s*([^\\s|{}()'\"$\\\\]+)",
           "captures": {

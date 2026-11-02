@@ -37,9 +37,10 @@ static size_t offset(const char *text, size_t n)
 COMMAND(length_command)
 {
     if (argc != 1) return cmdr_error(error, "usage: utf8.length TEXT");
-    if (check("utf8.length", argv[0].text, error)) return 1;
+    const char *s = cmdr_text_of(&argv[0]);
+    if (check("utf8.length", s, error)) return 1;
     size_t n = 0;
-    for (const char *p = argv[0].text; *p; ++p) n += ((unsigned char)*p & 0xc0) != 0x80;
+    for (const char *p = s; *p; ++p) n += ((unsigned char)*p & 0xc0) != 0x80;
     char text[32];
     snprintf(text, sizeof(text), "%zu", n);
     *result = cmdr_text(text, strlen(text));
@@ -51,8 +52,8 @@ static int cut(int take, size_t argc, const cmdr_value *argv, cmdr_value *result
     const char *name = take ? "utf8.take" : "utf8.drop";
     if (argc != 2) return cmdr_error(error, "usage: %s TEXT N", name);
     size_t n;
-    if (cmdr_natural(&argv[1], &n, error) || check(name, argv[0].text, error)) return 1;
-    const char *text = argv[0].text;
+    if (cmdr_natural(&argv[1], &n, error) || check(name, cmdr_text_of(&argv[0]), error)) return 1;
+    const char *text = cmdr_text_of(&argv[0]);
     size_t at = offset(text, n);
     *result = take ? cmdr_text(text, at) : cmdr_text(text + at, strlen(text + at));
     return 0;
@@ -63,9 +64,10 @@ COMMAND(drop_command) { return cut(0, argc, argv, result, error); }
 COMMAND(chars_command)
 {
     if (argc != 1) return cmdr_error(error, "usage: utf8.chars TEXT");
-    if (check("utf8.chars", argv[0].text, error)) return 1;
-    const unsigned char *p = (const unsigned char *)argv[0].text, *end = p + strlen(argv[0].text);
-    *result = (cmdr_value){.kind = CMDR_LIST};
+    const char *text = cmdr_text_of(&argv[0]);
+    if (check("utf8.chars", text, error)) return 1;
+    const unsigned char *p = (const unsigned char *)text, *end = p + strlen(text);
+    *result = cmdr_list();
     for (size_t n; p < end; p += n) {
         n = utf8_length(p, end);
         cmdr_push(result, cmdr_text((const char *)p, n));
@@ -76,8 +78,8 @@ COMMAND(chars_command)
 COMMAND(valid_command)
 {
     if (argc != 1) return cmdr_error(error, "usage: utf8.valid TEXT");
-    if (check("utf8.valid", argv[0].text, error)) return CMDR_MISMATCH;
-    *result = cmdr_text(argv[0].text, strlen(argv[0].text));
+    if (check("utf8.valid", cmdr_text_of(&argv[0]), error)) return CMDR_MISMATCH;
+    *result = cmdr_text(cmdr_text_of(&argv[0]), strlen(cmdr_text_of(&argv[0])));
     return 0;
 }
 

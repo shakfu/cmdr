@@ -1,6 +1,6 @@
 # Numbers, booleans, null, and dicts
 
-Design sketch, 2026-10-21. Status: nothing implemented. Examples show intended output, not current output.
+Design sketch, 2026-10-21. Status: numbers, bools, and null rejected on 2026-11-02, since they change what existing scripts mean; see [stability.md](stability.md), decision 1. Dicts are implemented differently, as a kind only `ext/dict` and `json.to-dict` make; see [ext/dict/README.md](../../ext/dict/README.md). Examples show the sketch, not current output.
 
 ## Problem
 

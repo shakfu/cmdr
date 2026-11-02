@@ -62,3 +62,13 @@ json.format '{"a":[1,{"b":"\u00E9\/"}],"c":{}}' | equals '{"a": [1, {"b": "\u00e
 json.format '{"a":[1,2],"b":[]}' 2 | equals "{\n  \"a\": [\n    1,\n    2\n  ],\n  \"b\": []\n}"
 json.format '[1]' 0 | equals "[\n1\n]"
 json.format '"\u00e9\ud800"' | equals '"\u00e9\ud800"'
+
+# Dicts: one level, with values kept as JSON.
+import dict
+json.to-dict $reply usage | dict.get n | equals 1.10
+json.to-dict '{"s": "x", "n": null, "q": "null"}' | dict.values | join , | equals '"x",null,"null"'
+json.to-dict '{"a": 1, "b": 2, "a": 3}' | dict.items | each { (p) join $p = } | join , | equals a=3,b=2
+json.to-dict '{"a": {"b": [1]}}' | dict.get a | json.get b 0 | equals 1
+dict.of n 3 s $(json.str x) | json.from-dict | equals '{"n": 3, "s": "x"}'
+json.to-dict $reply | json.from-dict | json.text choices 0 message content | equals Hello.
+try { () json.to-dict '[1]' } no | equals no

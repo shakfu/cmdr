@@ -19,6 +19,7 @@ static int evaluate(cmdr_session *session, const char *line)
     cmdr_value value;
     char *error;
     int status = cmdr_session_eval(session, line, &value, &error);
+    if (!status) status = cmdr_renderable(&value, &error);
     fflush(stdout); /* Keep errors in order with earlier output. */
     if (status) fprintf(stderr, "cmdr: %s\n", error ? error : "command failed");
     else if (cmdr_print(&value, stdout)) { fprintf(stderr, "cmdr: output failed\n"); status = 1; }
@@ -92,8 +93,8 @@ static int evaluate_lines(cmdr_session *session, const char *text)
     return status;
 }
 
-/* The whole of in, or NULL on a read error. */
-static char *read_all(FILE *in)
+/* The whole of in, or NULL on a read error; *size is its length. */
+static char *read_all(FILE *in, size_t *size)
 {
     size_t used = 0, capacity = 4096, n;
     char *text = cmdr_realloc(NULL, capacity, 1);
@@ -101,6 +102,7 @@ static char *read_all(FILE *in)
         if ((used += n) + 1 == capacity) text = cmdr_realloc(text, capacity *= 2, 1);
     text[used] = '\0';
     if (ferror(in)) { free(text); return NULL; }
+    *size = used;
     return text;
 }
 
@@ -145,10 +147,18 @@ static int format_main(int argc, char **argv)
     for (int k = i; k < argc || (stdin_only && k == i); ++k) {
         const char *path = stdin_only || !strcmp(argv[k], "-") ? NULL : argv[k];
         FILE *in = path ? fopen(path, "r") : stdin;
-        char *source = in ? read_all(in) : NULL, *out, *error;
+        size_t size = 0;
+        char *source = in ? read_all(in, &size) : NULL, *out, *error;
         if (in && in != stdin) fclose(in);
         if (!source) {
             fprintf(stderr, "cmdr: %s: %s\n", path ? path : "stdin", strerror(errno));
+            status = 1;
+            continue;
+        }
+        /* Formatting would stop at a NUL, and -w would write the rest away. */
+        if (memchr(source, '\0', size)) {
+            fprintf(stderr, "cmdr: %s: NUL byte\n", path ? path : "stdin");
+            free(source);
             status = 1;
             continue;
         }
@@ -181,7 +191,8 @@ static int quits(const char *pipeline)
 
 /* SIGINT or SIGTERM: the running line fails with "interrupted", stopping its
  * program, and main exits by the first such signal after closing the session.
- * Without SA_RESTART, so the signal also ends a blocking read or wait. */
+ * At an interactive prompt, SIGINT only drops the pipeline. Without
+ * SA_RESTART, so the signal also ends a blocking read or wait. */
 static volatile sig_atomic_t received;
 
 static void interrupt(int number)
@@ -209,15 +220,28 @@ static int run(cmdr_session *session, const char *banner)
 #ifdef CMDR_EDITOR
         if (ed) {
             n = editor_read(ed, editor_prompt(ed, used != 0), &line, &capacity);
-            /* Ctrl-C at the prompt is a key, which drops the pipeline. */
-            if (n == -2 && !cmdr_interrupted()) { used = 0; continue; }
         } else
 #endif
         {
             if (interactive) { fputs(prompt, stdout); fflush(stdout); }
             n = getline(&line, &capacity, stdin);
         }
+        /* Ctrl-C at an interactive prompt drops the pipeline: a key (-2) to the
+         * editor in raw mode, else SIGINT, which ends a cooked read with EINTR. */
+        if (cmdr_interrupted() ? interactive && received != SIGTERM : n == -2) {
+            if (n != -2) { putchar('\n'); clearerr(stdin); }
+            cmdr_interrupt(0);
+            received = 0;
+            used = 0;
+            continue;
+        }
         if (cmdr_interrupted()) break;
+        if (n >= 0 && memchr(line, '\0', (size_t)n)) {
+            fprintf(stderr, "cmdr: NUL byte\n");
+            status = 1;
+            used = 0;
+            continue;
+        }
         if (n >= 0 && cmdr_join(&pipeline, &used, line, (size_t)n)) continue;
         if (!used) break;
         used = 0;

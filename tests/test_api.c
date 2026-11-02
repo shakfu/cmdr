@@ -24,10 +24,11 @@ static int bang(const cmdr *repl, void *user, size_t argc, const cmdr_value *arg
 {
     if (argc != 1) return cmdr_error(error, "usage: bang TEXT");
     ++*(int *)user;
-    size_t n = strlen(argv[0].text);
-    *result = cmdr_text("!", 1);
-    result->text = cmdr_realloc(result->text, n + 2, 1);
-    memcpy(result->text + 1, argv[0].text, n + 1);
+    size_t n = strlen(cmdr_text_of(&argv[0]));
+    char *text = cmdr_realloc(NULL, n + 2, 1);
+    text[0] = '!';
+    memcpy(text + 1, cmdr_text_of(&argv[0]), n + 1);
+    *result = cmdr_text_owned(text);
     return 0;
 }
 
@@ -61,18 +62,19 @@ static void expect_error(cmdr_session *session, const char *source, int status,
     cmdr_value value;
     char *error;
     CHECK(cmdr_session_eval(session, source, &value, &error) == status);
-    CHECK(value.kind == CMDR_NONE && error && strstr(error, message));
+    CHECK(cmdr_kind_of(&value) == CMDR_NONE && error && strstr(error, message));
     free(error);
 }
 
 static void host_commands(void)
 {
     int calls = 0;
+    cmdr_value greeting = cmdr_text("hi", 2);
     const cmdr_command commands[] = {
         {.name = "bang", .usage = "bang TEXT", .docstring = "Mark text", .run = bang,
          .user = &calls, .text = 1},
         {.name = "upper", .run = bang, .user = &calls, .text = 1}, /* Shadows. */
-        {.name = "greeting", .value = &(cmdr_value){.kind = CMDR_TEXT, .text = "hi"}},
+        {.name = "greeting", .value = &greeting},
     };
     const cmdr table = {commands, 3, &cmdr_primitives};
     cmdr_session *session = cmdr_session_open(&table, 1, NULL);
@@ -96,6 +98,17 @@ static void host_commands(void)
     expect(bare, "bang a", "!a\n");
     cmdr_session_close(bare);
     cmdr_session_close(session);
+    /* Host commands shadow the prelude too; a later def shadows them. */
+    const cmdr_command last[] = {{.name = "last", .run = bang, .user = &calls, .text = 1}};
+    session = cmdr_session_open(&(cmdr){last, 1, &cmdr_primitives}, 1, NULL);
+    char *error;
+    CHECK(!cmdr_session_prelude(session, &error) && !error);
+    expect(session, "last x", "!x\n");
+    expect(session, "list a b | first", "a\n");
+    expect(session, "def last { (x) upper $x }", "");
+    expect(session, "last x", "X\n");
+    cmdr_session_close(session);
+    cmdr_free(&greeting);
 }
 
 static void definitions(void)
@@ -118,7 +131,7 @@ static void definitions(void)
     CHECK(!cmdr_find(cmdr_session_commands(b), "g"));
     cmdr_value value, arg = cmdr_text("q", 1);
     CHECK(!cmdr_call(cmdr_session_commands(a), "g", 1, &arg, &value, &error));
-    CHECK(!strcmp(value.text, "Q"));
+    CHECK(!strcmp(cmdr_text_of(&value), "Q"));
     cmdr_free(&value);
     cmdr_free(&arg);
     expect_error(a, "text a | equals b", CMDR_MISMATCH, "equals: a differs from b");
@@ -189,10 +202,16 @@ static void sandbox(void)
     char *error;
     CHECK(!cmdr_session_prelude(session, &error) && !error);
     expect(session, "path-basename a/b.c | path-stem", "b\n");
-    const char *denied[] = {"read x", "run true", "files", "load x", "sh true", "cat x"};
+    const char *denied[] = {"read x", "run true", "files", "load x", "sh true", "cat x",
+                            "run-with $(list) true", "run-all $(list) 1", "spawn $(list) true"};
     for (size_t i = 0; i < sizeof(denied) / sizeof(denied[0]); ++i)
         expect_error(session, denied[i], 1, "unknown command");
     expect(session, "help | filter load | count", "0\n");
+    /* Without effects, import finds only the host's modules. */
+    expect_error(session, "import fs", 1, "import fs: not a module this host provides");
+    cmdr_session_add_source(session, "greet", "def hi { () text hello }\n", "greet.cmdr");
+    expect(session, "import greet", "");
+    expect(session, "greet.hi", "hello\n");
     cmdr_session_close(session);
     /* The effects prelude needs the effect primitives. */
     session = cmdr_session_open(&cmdr_pure, 1, NULL);
@@ -237,24 +256,24 @@ static void out_of_memory(void)
     free(p);
 }
 
-/* cmdr_push grows lists from {0}, from a whole allocation with capacity 0,
- * and from a clone; ASan reports a write past any of them. */
+/* cmdr_push grows lists from empty, from a full allocation, and from a
+ * clone; ASan reports a write past any of them. */
 static void lists(void)
 {
     enum { N = 1000 };
-    cmdr_value grown = {.kind = CMDR_LIST};
+    cmdr_value grown = cmdr_list();
     for (int i = 0; i < N; ++i) cmdr_push(&grown, cmdr_text("x", 1));
-    CHECK(grown.count == N && grown.capacity >= N);
-    cmdr_value whole = {.kind = CMDR_LIST, .count = 3};
-    whole.items = cmdr_realloc(NULL, 3, sizeof(*whole.items));
-    for (int i = 0; i < 3; ++i) whole.items[i] = cmdr_text("w", 1);
+    CHECK(cmdr_count(&grown) == N && !strcmp(cmdr_text_of(cmdr_item(&grown, N - 1)), "x"));
+    /* Four items fill the first allocation, so the fifth grows a full one. */
+    cmdr_value whole = cmdr_list();
+    for (int i = 0; i < 4; ++i) cmdr_push(&whole, cmdr_text("w", 1));
     cmdr_push(&whole, cmdr_text("v", 1));
-    CHECK(whole.count == 4 && !strcmp(whole.items[3].text, "v"));
+    CHECK(cmdr_count(&whole) == 5 && !strcmp(cmdr_text_of(cmdr_item(&whole, 4)), "v"));
     cmdr_value copy;
     char *error = NULL;
     CHECK(!cmdr_clone(&grown, &copy, &error));
     for (int i = 0; i < N; ++i) cmdr_push(&copy, cmdr_text("y", 1));
-    CHECK(copy.count == 2 * N && !strcmp(copy.items[2 * N - 1].text, "y"));
+    CHECK(cmdr_count(&copy) == 2 * N && !strcmp(cmdr_text_of(cmdr_item(&copy, 2 * N - 1)), "y"));
     cmdr_free(&grown);
     cmdr_free(&whole);
     cmdr_free(&copy);
@@ -394,7 +413,8 @@ static void interrupt_waits(void)
 static int keep_block(const cmdr *repl, void *user, size_t argc, const cmdr_value *argv,
                       cmdr_value *result, char **error)
 {
-    if (argc != 1 || argv[0].kind != CMDR_BLOCK) return cmdr_error(error, "usage: keep-block BLOCK");
+    if (argc != 1 || cmdr_kind_of(&argv[0]) != CMDR_BLOCK)
+        return cmdr_error(error, "usage: keep-block BLOCK");
     return cmdr_clone(&argv[0], result, error);
 }
 
@@ -407,16 +427,16 @@ static void block_defaults(void)
     cmdr_value block, out;
     char *error;
     CHECK(!cmdr_session_eval(session, "keep-block { (a b=2) text $a $b }", &block, &error));
-    CHECK(block.kind == CMDR_BLOCK);
+    CHECK(cmdr_kind_of(&block) == CMDR_BLOCK);
     CHECK(!cmdr_block_arity(&block, 1, &error) && !cmdr_block_arity(&block, 2, &error));
     CHECK(cmdr_block_arity(&block, 0, &error) && strstr(error, "block takes 1 to 2 arguments, got 0"));
     free(error);
     CHECK(cmdr_block_arity(&block, 3, &error));
     free(error);
     cmdr_value args[] = {cmdr_text("x", 1), cmdr_text("y", 1)};
-    CHECK(!cmdr_run(&block, 1, args, &out, &error) && !strcmp(out.text, "x 2"));
+    CHECK(!cmdr_run(&block, 1, args, &out, &error) && !strcmp(cmdr_text_of(&out), "x 2"));
     cmdr_free(&out);
-    CHECK(!cmdr_run(&block, 2, args, &out, &error) && !strcmp(out.text, "x y"));
+    CHECK(!cmdr_run(&block, 2, args, &out, &error) && !strcmp(cmdr_text_of(&out), "x y"));
     cmdr_free(&out);
     cmdr_free(&args[0]);
     cmdr_free(&args[1]);
@@ -454,7 +474,9 @@ static void scanning(void)
     CHECK(!strcmp(kinds("text a#b $x | upper", NULL, 0), "cwr|c"));
     CHECK(!strcmp(kinds("each { (x y=1) text $x } | join ,", NULL, 0), "c{(ppw)cr}|cw"));
     CHECK(!strcmp(kinds("text $(upper (a)) b", NULL, 0), "c$cw]w"));
-    CHECK(!strcmp(kinds("each { # note }", NULL, 0), "c{#}"));
+    /* A comment runs to its line's end, so it hides a '}' on that line. */
+    CHECK(!strcmp(kinds("each { # note }", NULL, 0), "c{#"));
+    CHECK(!strcmp(kinds("each { # note\n}", NULL, 0), "c{#}"));
     /* Unclosed: the block and the quote run to the end. */
     CHECK(!strcmp(kinds("each { (x) upper | text \"a } b", NULL, 0), "c{(p)c|cw"));
     CHECK(!strcmp(kinds("text $(upper", NULL, 0), "c$c"));
