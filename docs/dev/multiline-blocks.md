@@ -26,7 +26,7 @@ CHANGELOG 0.2.0 kept this for quoted newlines ("A newline inside quotes or a blo
 
 ### Evidence
 
-The repository's 1163 lines of `.cmdr` hold 60 lines over 200 characters. The longest is 686. Nearly all are `def`s with nested blocks, such as `tracked`, `edit-parse`, and `edit-stage` in `examples/agent-workflows/aw/__init__.cmdr`:
+The repository's 1163 lines of `.cmdr` hold 60 lines over 200 characters. The longest is 686. Nearly all are `def`s with nested blocks, such as `tracked`, `edit-parse`, and `edit-stage` in `examples/agent/agent/__init__.cmdr`:
 
 ```text
 def tracked { (d) git-in $d $(list ls-files) | lines | with { (fs) list dir $d | run-with find . -path ./.git -prune -o ! -type f ! -type d -print | agent-out | lines | each { strip-prefix ./ } | with { (bad) keep $fs { (f) edit-prefixes $f | keep { (x) any $bad { equals $x } } | empty } } } } "Tracked files in DIR that are regular files on disk, not through a link"

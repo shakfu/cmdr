@@ -189,7 +189,7 @@ read bug-142.md | target-bug ~/src/app | fix
 
 - Fit: point 1 and point 4. Every step is checked before the first agent runs, and a failed agent stops the chain at its line.
 
-- Resolved: `run-with` gives a working directory, a timeout, stderr, and the exit status. `import aw` loads the example as a package from any script, and `script-dir` finds its templates. `push` lets `fold` collect each step's output. See [run-with-script-push.md](run-with-script-push.md).
+- Resolved: `run-with` gives a working directory, a timeout, stderr, and the exit status. `import agent` loads the example as a package from any script, and `script-dir` finds its templates. `push` lets `fold` collect each step's output. See [run-with-script-push.md](run-with-script-push.md).
 
 - Blocks:
 

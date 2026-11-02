@@ -36,7 +36,7 @@ add_test(NAME example_agent_workflows
   COMMAND cmdr "${PROJECT_SOURCE_DIR}/examples/agent/tests/test_workflows.cmdr"
   WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}")
 set_tests_properties(example_agent_workflows PROPERTIES TIMEOUT 60
-  ENVIRONMENT "AW_RUNS=${CMAKE_CURRENT_BINARY_DIR}/agent-runs;CMDR_PATH=${PROJECT_SOURCE_DIR}/examples/agent")
+  ENVIRONMENT "CMDR_AGENT_RUNS=${CMAKE_CURRENT_BINARY_DIR}/agent-runs;CMDR_PATH=${PROJECT_SOURCE_DIR}/examples/agent")
 # The demo copies its sample into a git repository and runs python3 on it.
 find_program(CMDR_GIT git)
 find_program(CMDR_PYTHON3 python3)
@@ -44,94 +44,94 @@ if(CMDR_GIT AND CMDR_PYTHON3)
   add_test(NAME example_agent_demo
     COMMAND cmdr "${PROJECT_SOURCE_DIR}/examples/agent/demo.cmdr")
   set_tests_properties(example_agent_demo PROPERTIES TIMEOUT 60
-    ENVIRONMENT "AW_RUNS=${CMAKE_CURRENT_BINARY_DIR}/agent-demo"
+    ENVIRONMENT "CMDR_AGENT_RUNS=${CMAKE_CURRENT_BINARY_DIR}/agent-demo"
     PASS_REGULAR_EXPRESSION "Bug report:.*tests: exit status 0")
 endif()
 # examples/agent/agent.cmdr, with the dry agent.
-set(CMDR_AW "${PROJECT_SOURCE_DIR}/examples/agent/agent.cmdr")
-add_test(NAME example_aw_ask COMMAND cmdr "${CMDR_AW}" ask . dry:opus where is it)
-add_test(NAME example_aw_fix COMMAND cmdr "${CMDR_AW}" fix . README.md reproduce@dry diagnose@dry)
-add_test(NAME example_aw_usage COMMAND cmdr "${CMDR_AW}")
-set_tests_properties(example_aw_ask PROPERTIES PASS_REGULAR_EXPRESSION "dry read [.] opus.*where is it")
-set_tests_properties(example_aw_fix PROPERTIES PASS_REGULAR_EXPRESSION "Bug report:")
-set_tests_properties(example_aw_usage PROPERTIES PASS_REGULAR_EXPRESSION "usage: agent.cmdr ask DIR")
-set_tests_properties(example_aw_ask example_aw_fix example_aw_usage PROPERTIES TIMEOUT 60
+set(CMDR_AGENT_CLI "${PROJECT_SOURCE_DIR}/examples/agent/agent.cmdr")
+add_test(NAME example_agent_ask COMMAND cmdr "${CMDR_AGENT_CLI}" ask . dry:opus where is it)
+add_test(NAME example_agent_fix COMMAND cmdr "${CMDR_AGENT_CLI}" fix . README.md reproduce@dry diagnose@dry)
+add_test(NAME example_agent_usage COMMAND cmdr "${CMDR_AGENT_CLI}")
+set_tests_properties(example_agent_ask PROPERTIES PASS_REGULAR_EXPRESSION "dry read [.] opus.*where is it")
+set_tests_properties(example_agent_fix PROPERTIES PASS_REGULAR_EXPRESSION "Bug report:")
+set_tests_properties(example_agent_usage PROPERTIES PASS_REGULAR_EXPRESSION "usage: agent.cmdr ask DIR")
+set_tests_properties(example_agent_ask example_agent_fix example_agent_usage PROPERTIES TIMEOUT 60
   WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
-  ENVIRONMENT "AW_RUNS=${CMAKE_CURRENT_BINARY_DIR}/agent-runs")
+  ENVIRONMENT "CMDR_AGENT_RUNS=${CMAKE_CURRENT_BINARY_DIR}/agent-runs")
 # The stub claude writes its stream-json with jq.
 find_program(CMDR_JQ jq)
 # The claude adapter's sandbox, with stub bwrap and claude on PATH. With
-# AW_SANDBOX=1, a failing bwrap stops claude; without it, bwrap is not run.
+# CMDR_AGENT_SANDBOX=1, a failing bwrap stops claude; without it, bwrap is not run.
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMDR_JQ)
-  set(CMDR_AW_STUBS "${PROJECT_SOURCE_DIR}/examples/agent/tests/stubs")
+  set(CMDR_AGENT_STUBS "${PROJECT_SOURCE_DIR}/examples/agent/tests/stubs")
   foreach(case IN ITEMS blocked ok off)
-    add_test(NAME example_aw_sandbox_${case} COMMAND cmdr "${CMDR_AW}" ask . claude where is it)
-    set_tests_properties(example_aw_sandbox_${case} PROPERTIES TIMEOUT 60
+    add_test(NAME example_agent_sandbox_${case} COMMAND cmdr "${CMDR_AGENT_CLI}" ask . claude where is it)
+    set_tests_properties(example_agent_sandbox_${case} PROPERTIES TIMEOUT 60
       WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}")
   endforeach()
-  set_tests_properties(example_aw_sandbox_blocked PROPERTIES
+  set_tests_properties(example_agent_sandbox_blocked PROPERTIES
     PASS_REGULAR_EXPRESSION "sandbox unavailable: stub bwrap" FAIL_REGULAR_EXPRESSION "stub claude ran"
-    ENVIRONMENT "AW_RUNS=${CMAKE_CURRENT_BINARY_DIR}/agent-runs;PATH=${CMDR_AW_STUBS}:$ENV{PATH};AW_SANDBOX=1")
-  set_tests_properties(example_aw_sandbox_ok PROPERTIES PASS_REGULAR_EXPRESSION "stub claude ran.*--settings"
-    ENVIRONMENT "AW_RUNS=${CMAKE_CURRENT_BINARY_DIR}/agent-runs;PATH=${CMDR_AW_STUBS}:$ENV{PATH};AW_SANDBOX=1;AW_STUB_BWRAP=0")
-  set_tests_properties(example_aw_sandbox_off PROPERTIES
+    ENVIRONMENT "CMDR_AGENT_RUNS=${CMAKE_CURRENT_BINARY_DIR}/agent-runs;PATH=${CMDR_AGENT_STUBS}:$ENV{PATH};CMDR_AGENT_SANDBOX=1")
+  set_tests_properties(example_agent_sandbox_ok PROPERTIES PASS_REGULAR_EXPRESSION "stub claude ran.*--settings"
+    ENVIRONMENT "CMDR_AGENT_RUNS=${CMAKE_CURRENT_BINARY_DIR}/agent-runs;PATH=${CMDR_AGENT_STUBS}:$ENV{PATH};CMDR_AGENT_SANDBOX=1;CMDR_AGENT_STUB_BWRAP=0")
+  set_tests_properties(example_agent_sandbox_off PROPERTIES
     PASS_REGULAR_EXPRESSION "stub claude ran" FAIL_REGULAR_EXPRESSION "--settings|sandbox unavailable"
-    ENVIRONMENT "AW_RUNS=${CMAKE_CURRENT_BINARY_DIR}/agent-runs;PATH=${CMDR_AW_STUBS}:$ENV{PATH}")
+    ENVIRONMENT "CMDR_AGENT_RUNS=${CMAKE_CURRENT_BINARY_DIR}/agent-runs;PATH=${CMDR_AGENT_STUBS}:$ENV{PATH}")
 endif()
-# claude's write steps run in auto mode, or AW_CLAUDE_WRITE_MODE from a fixed
+# claude's write steps run in auto mode, or CMDR_AGENT_CLAUDE_WRITE_MODE from a fixed
 # set; read steps always run in plan mode.
-set(CMDR_AW_ENV "AW_RUNS=${CMAKE_CURRENT_BINARY_DIR}/agent-runs;PATH=${PROJECT_SOURCE_DIR}/examples/agent/tests/stubs:$ENV{PATH}")
+set(CMDR_AGENT_ENV "CMDR_AGENT_RUNS=${CMAKE_CURRENT_BINARY_DIR}/agent-runs;PATH=${PROJECT_SOURCE_DIR}/examples/agent/tests/stubs:$ENV{PATH}")
 if(CMDR_JQ)
   foreach(case IN ITEMS auto read accept bad)
     set(cmd edit . claude fix it)
     if(case STREQUAL "read")
       set(cmd ask . claude where is it)
     endif()
-    add_test(NAME example_aw_claude_${case} COMMAND cmdr "${CMDR_AW}" ${cmd})
-    set_tests_properties(example_aw_claude_${case} PROPERTIES TIMEOUT 60
-      WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}" ENVIRONMENT "${CMDR_AW_ENV}")
+    add_test(NAME example_agent_claude_${case} COMMAND cmdr "${CMDR_AGENT_CLI}" ${cmd})
+    set_tests_properties(example_agent_claude_${case} PROPERTIES TIMEOUT 60
+      WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}" ENVIRONMENT "${CMDR_AGENT_ENV}")
   endforeach()
-  set_tests_properties(example_aw_claude_auto PROPERTIES
+  set_tests_properties(example_agent_claude_auto PROPERTIES
     PASS_REGULAR_EXPRESSION "stub claude ran.*--permission-mode auto")
-  set_tests_properties(example_aw_claude_read PROPERTIES
+  set_tests_properties(example_agent_claude_read PROPERTIES
     PASS_REGULAR_EXPRESSION "stub claude ran.*--permission-mode plan")
-  set_tests_properties(example_aw_claude_accept PROPERTIES
+  set_tests_properties(example_agent_claude_accept PROPERTIES
     PASS_REGULAR_EXPRESSION "stub claude ran.*--permission-mode acceptEdits"
-    ENVIRONMENT "${CMDR_AW_ENV};AW_CLAUDE_WRITE_MODE=acceptEdits")
-  set_tests_properties(example_aw_claude_bad PROPERTIES
-    PASS_REGULAR_EXPRESSION "AW_CLAUDE_WRITE_MODE must be auto or acceptEdits" FAIL_REGULAR_EXPRESSION "stub claude ran"
-    ENVIRONMENT "${CMDR_AW_ENV};AW_CLAUDE_WRITE_MODE=bypassPermissions")
+    ENVIRONMENT "${CMDR_AGENT_ENV};CMDR_AGENT_CLAUDE_WRITE_MODE=acceptEdits")
+  set_tests_properties(example_agent_claude_bad PROPERTIES
+    PASS_REGULAR_EXPRESSION "CMDR_AGENT_CLAUDE_WRITE_MODE must be auto or acceptEdits" FAIL_REGULAR_EXPRESSION "stub claude ran"
+    ENVIRONMENT "${CMDR_AGENT_ENV};CMDR_AGENT_CLAUDE_WRITE_MODE=bypassPermissions")
   # Detached runs: a dry agent, and a stub claude that sleeps until cancelled.
   add_test(NAME example_agent_runs
     COMMAND cmdr "${PROJECT_SOURCE_DIR}/examples/agent/tests/test_runs.cmdr")
-  add_test(NAME example_aw_start
+  add_test(NAME example_agent_start
     COMMAND sh -c "id=$(\"$1\" \"$2\" start ask . dry where is it) && \"$1\" \"$2\" wait \"$id\" && \"$1\" \"$2\" status \"$id\" && \"$1\" \"$2\" result \"$id\"" sh
-            $<TARGET_FILE:cmdr> "${CMDR_AW}")
-  set_tests_properties(example_agent_runs example_aw_start PROPERTIES TIMEOUT 60
+            $<TARGET_FILE:cmdr> "${CMDR_AGENT_CLI}")
+  set_tests_properties(example_agent_runs example_agent_start PROPERTIES TIMEOUT 60
     WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
-    ENVIRONMENT "${CMDR_AW_ENV};AW_RUNS=${CMAKE_CURRENT_BINARY_DIR}/agent-detached;AW_CMDR=$<TARGET_FILE:cmdr>;AW_STUB_SLEEP=30;CMDR_PATH=${PROJECT_SOURCE_DIR}/examples/agent")
-  set_tests_properties(example_aw_start PROPERTIES
+    ENVIRONMENT "${CMDR_AGENT_ENV};CMDR_AGENT_RUNS=${CMAKE_CURRENT_BINARY_DIR}/agent-detached;CMDR_AGENT_CMDR=$<TARGET_FILE:cmdr>;CMDR_AGENT_STUB_SLEEP=30;CMDR_PATH=${PROJECT_SOURCE_DIR}/examples/agent")
+  set_tests_properties(example_agent_start PROPERTIES
     PASS_REGULAR_EXPRESSION "\tdone\t[0-9]+s\task@dry\task [.] dry where is it\n.*dry read [.] .*where is it")
 endif()
 # The llama agent, with a stub curl; jq and git are real.
 if(CMDR_GIT AND CMDR_JQ)
-  set(CMDR_AW_STUBS "${PROJECT_SOURCE_DIR}/examples/agent/tests/stubs")
+  set(CMDR_AGENT_STUBS "${PROJECT_SOURCE_DIR}/examples/agent/tests/stubs")
   add_test(NAME example_agent_llama
     COMMAND cmdr "${PROJECT_SOURCE_DIR}/examples/agent/tests/test_llama.cmdr")
   set_tests_properties(example_agent_llama PROPERTIES TIMEOUT 60 FIXTURES_SETUP aw_llama_project
-    ENVIRONMENT "AW_RUNS=${CMAKE_CURRENT_BINARY_DIR}/agent-llama;CMDR_PATH=${PROJECT_SOURCE_DIR}/examples/agent;PATH=${CMDR_AW_STUBS}:$ENV{PATH}")
+    ENVIRONMENT "CMDR_AGENT_RUNS=${CMAKE_CURRENT_BINARY_DIR}/agent-llama;CMDR_PATH=${PROJECT_SOURCE_DIR}/examples/agent;PATH=${CMDR_AGENT_STUBS}:$ENV{PATH}")
   # An edit rejected twice fails with the reasons and the reply.
-  add_test(NAME example_aw_llama_rejected
-    COMMAND cmdr "${CMDR_AW}" edit "${CMAKE_CURRENT_BINARY_DIR}/agent-llama/llama-project" llama ALWAYSBAD)
-  set_tests_properties(example_aw_llama_rejected PROPERTIES TIMEOUT 60 FIXTURES_REQUIRED aw_llama_project
+  add_test(NAME example_agent_llama_rejected
+    COMMAND cmdr "${CMDR_AGENT_CLI}" edit "${CMAKE_CURRENT_BINARY_DIR}/agent-llama/llama-project" llama ALWAYSBAD)
+  set_tests_properties(example_agent_llama_rejected PROPERTIES TIMEOUT 60 FIXTURES_REQUIRED aw_llama_project
     PASS_REGULAR_EXPRESSION "edits not applied:.*SEARCH must match exactly one place in stats.py.*Reply:"
-    ENVIRONMENT "AW_RUNS=${CMAKE_CURRENT_BINARY_DIR}/agent-llama;PATH=${CMDR_AW_STUBS}:$ENV{PATH}")
+    ENVIRONMENT "CMDR_AGENT_RUNS=${CMAKE_CURRENT_BINARY_DIR}/agent-llama;PATH=${CMDR_AGENT_STUBS}:$ENV{PATH}")
   if(EXISTS "${PROJECT_SOURCE_DIR}/.git")
-    add_test(NAME example_aw_llama_too_large COMMAND cmdr "${CMDR_AW}" ask . llama where is it)
-    set_tests_properties(example_aw_llama_too_large PROPERTIES TIMEOUT 60
+    add_test(NAME example_agent_llama_too_large COMMAND cmdr "${CMDR_AGENT_CLI}" ask . llama where is it)
+    set_tests_properties(example_agent_llama_too_large PROPERTIES TIMEOUT 60
       WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
-      PASS_REGULAR_EXPRESSION "project exceeds AW_LLAMA_MAX_BYTES" FAIL_REGULAR_EXPRESSION "off by one"
-      ENVIRONMENT "AW_RUNS=${CMAKE_CURRENT_BINARY_DIR}/agent-runs;PATH=${CMDR_AW_STUBS}:$ENV{PATH};AW_LLAMA_MAX_BYTES=10")
+      PASS_REGULAR_EXPRESSION "project exceeds CMDR_AGENT_LLAMA_MAX_BYTES" FAIL_REGULAR_EXPRESSION "off by one"
+      ENVIRONMENT "CMDR_AGENT_RUNS=${CMAKE_CURRENT_BINARY_DIR}/agent-runs;PATH=${CMDR_AGENT_STUBS}:$ENV{PATH};CMDR_AGENT_LLAMA_MAX_BYTES=10")
   endif()
 endif()
 # Embedding checks; threads exercise the per-thread call depth.

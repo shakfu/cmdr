@@ -22,8 +22,12 @@ def tmp { (p) out-dir | path-join $p } "Path P in the test directory"
 # Items and their fields.
 midi.note C4 | join , | equals "note 0 1 60 100 1"
 midi.note 61 2 80 3 | join , | equals "note 0 2 61 80 3"
-midi.note C4 | first | midi.put 5 90 | equals "note 0 1 60 90 1"
-midi.note C4 | first | midi.field 4 | equals 60
+midi.note C4 | first | midi.put velocity 90 | equals "note 0 1 60 90 1"
+midi.note C4 | first | midi.field key | equals 60
+midi.cc 7 100 | first | midi.field kind | equals cc
+midi.tempo 90 | first | midi.put start 2 | equals "tempo 2 90"
+# A kind without the field mismatches, so or keeps the item.
+or { () midi.cc 7 100 | first | midi.field key } none | equals none
 midi.cc 7 100 | join , | equals "cc 0 7 100 1"
 midi.program 33 2 | join , | equals "program 0 33 2"
 midi.bend -8192 | join , | equals "bend 0 -8192 1"
@@ -82,7 +86,7 @@ midi.pick "C4 E4 ." 6 0.5 | join , | equals "note 0 0.5 60 100 1,note 0.5 0.5 64
 random.seed 4
 midi.seq "C4 D4" | midi.humanize 0.1 10 | join , | equals "note 0 1 60 93 1,note 1.0442433810175333 1 62 105 1"
 random.seed 5
-repeat 4 { () midi.scale C4 | midi.walk 4 } | each { (ks) midi.seq $ks 0.25 } | midi.sequence | each { (n) midi.field $n 4 } | join , | equals 60,60,62,64,60,62,64,65,60,60,60,62,60,60,62,60
+repeat 4 { () midi.scale C4 | midi.walk 4 } | each { (ks) midi.seq $ks 0.25 } | midi.sequence | each { (n) midi.field $n key } | join , | equals 60,60,62,64,60,62,64,65,60,60,60,62,60,60,62,60
 # chance keeps the length; other kinds pass through.
 midi.cc 7 1 | midi.stack $(midi.seq "C4 D4") | midi.chance 0 | join , | equals "cc 0 7 1 1,rest 0 1,rest 1 1"
 midi.seq "C4 D4" | midi.chance 1 | join , | equals "note 0 1 60 100 1,note 1 1 62 100 1"

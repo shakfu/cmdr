@@ -45,10 +45,10 @@ Decision record, 2026-10-19. `script-dir | path-join workflows.cmdr | load` work
 
 | Choice | Over | Because |
 |-|-|-|
-| Qualified names, `aw.fix` | A prefix rule, `aw-fix`, checked at import | A prefix rule makes every module carry its prefix in every internal name. Moving to qualified names later would rewrite every module and every importer. Today there is one module and three importers |
+| Qualified names, `agent.fix` | A prefix rule, `agent-fix`, checked at import | A prefix rule makes every module carry its prefix in every internal name. Moving to qualified names later would rewrite every module and every importer. Today there is one module and three importers |
 | Qualified names | Flat names, as Ruby's `require` | `chain`, `target`, and `agent` in the example would shadow the importer's names without warning |
 | Export every definition | Hide names starting with `_` | Python exports all names to `M.name`; `_` is a convention. One rule fewer |
-| Package directories first | `NAME.cmdr` first | Python's order. A package's command-line script can share its name: `aw.cmdr` next to `aw/` imports the package |
+| Package directories first | `NAME.cmdr` first | Python's order. A package's command-line script can share its name: `agent.cmdr` next to `agent/` imports the package |
 | One alias layer per definition | One layer per import | Session layers hold one command each; lookup cost is the same as for that many `def`s |
 
 ## Mechanism

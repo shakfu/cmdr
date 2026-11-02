@@ -13,11 +13,11 @@ Run coding agents on a project with cmdr. You can send one prompt, or run a chai
 | [tests/](tests) | Checks every entry point of `agent` with the `dry` agent, and the `claude` and `llama` adapters with stub binaries |
 
 ```sh
-AW_RUNS=/tmp/agent-runs ./build/cmdr examples/agent/demo.cmdr                # dry run
-AW_RUNS=/tmp/agent-runs ./build/cmdr examples/agent/demo.cmdr claude:sonnet  # real run
+CMDR_AGENT_RUNS=/tmp/agent-runs ./build/cmdr examples/agent/demo.cmdr                # dry run
+CMDR_AGENT_RUNS=/tmp/agent-runs ./build/cmdr examples/agent/demo.cmdr claude:sonnet  # real run
 ```
 
-The demo copies `sample/` into `$AW_RUNS/demo-project` and commits it. It then asks the agent about the project and runs `reproduce`, `diagnose`, `patch`, and `review` on `BUG.md`. Last, it prints `git status` and the exit status of the sample's tests. Without an argument every step uses `dry`, which prints its prompt and changes nothing.
+The demo copies `sample/` into `$CMDR_AGENT_RUNS/demo-project` and commits it. It then asks the agent about the project and runs `reproduce`, `diagnose`, `patch`, and `review` on `BUG.md`. Last, it prints `git status` and the exit status of the sample's tests. Without an argument every step uses `dry`, which prints its prompt and changes nothing.
 
 CTest runs `tests/test_workflows.cmdr`, the demo, and `agent.cmdr`, all with `dry`. It runs `tests/test_llama.cmdr` and the claude preflight with `tests/stubs/` first on `PATH`.
 
@@ -61,7 +61,7 @@ agent.cmdr wait $id ...      # wait for each; exit 1 unless all are done
 agent.cmdr cancel $id        # stop it
 ```
 
-A state is `running`, `done`, `failed`, `cancelled`, or `lost`: recorded as running, but its process is gone. A run lives in `$AW_RUNS/ID` and survives the terminal closing. `start` refuses a command other than `ask` while another such run is live in the same directory. A detached `edit` in `auto` mode can run Bash with no one watching. The design is in [docs/dev/agent-runs.md](../../docs/dev/agent-runs.md).
+A state is `running`, `done`, `failed`, `cancelled`, or `lost`: recorded as running, but its process is gone. A run lives in `$CMDR_AGENT_RUNS/ID` and survives the terminal closing. `start` refuses a command other than `ask` while another such run is live in the same directory. A detached `edit` in `auto` mode can run Bash with no one watching. The design is in [docs/dev/agent-runs.md](../../docs/dev/agent-runs.md).
 
 From cmdr, the same commands take a command line as a list and return values:
 
@@ -73,13 +73,13 @@ each $dirs { (d) agent.start $(list ask $d claude summarise) } | each { (r) agen
 
 | Variable | Default | Meaning |
 |-|-|-|
-| `AW_RUNS` | `~/.cmdr/runs` | Directory for run logs and detached runs |
-| `AW_CMDR` | `cmdr` | The cmdr a detached run starts |
-| `AW_TIMEOUT` | `1800` | Seconds before an agent is stopped |
-| `AW_SANDBOX` | `0` | `1` runs claude in its sandbox; see [Agents](#agents) |
-| `AW_CLAUDE_WRITE_MODE` | `auto` | claude's WRITE_MODE: `auto` or `acceptEdits` |
-| `AW_LLAMA_URL` | `http://127.0.0.1:8080` | llama-server base URL |
-| `AW_LLAMA_MAX_BYTES` | `200000` | Largest project text the `llama` agent sends |
+| `CMDR_AGENT_RUNS` | `~/.cmdr/runs` | Directory for run logs and detached runs |
+| `CMDR_AGENT_CMDR` | `cmdr` | The cmdr a detached run starts |
+| `CMDR_AGENT_TIMEOUT` | `1800` | Seconds before an agent is stopped |
+| `CMDR_AGENT_SANDBOX` | `0` | `1` runs claude in its sandbox; see [Agents](#agents) |
+| `CMDR_AGENT_CLAUDE_WRITE_MODE` | `auto` | claude's WRITE_MODE: `auto` or `acceptEdits` |
+| `CMDR_AGENT_LLAMA_URL` | `http://127.0.0.1:8080` | llama-server base URL |
+| `CMDR_AGENT_LLAMA_MAX_BYTES` | `200000` | Largest project text the `llama` agent sends |
 
 ## Model
 
@@ -123,7 +123,7 @@ cmdr> read spec.md | agent.target-feature ~/src/app | with { (t) list plan@claud
 
 In the REPL, `import` searches the current directory first; run it from `examples/agent`, or set `CMDR_PATH`.
 
-`chain` parses and checks every step before any agent runs. It checks that the step matches the grammar, that the agent is known, and that the action file exists with a valid mode. A typo in step 4 costs no agent time on steps 1 to 3. An agent that exits nonzero or times out stops the chain, with the last 20 lines of its stderr in the error. Each run also writes `$AW_RUNS/STAMP-XXXXXX`, or a detached run's `log`, with each `## STEP` heading written before its agent starts.
+`chain` parses and checks every step before any agent runs. It checks that the step matches the grammar, that the agent is known, and that the action file exists with a valid mode. A typo in step 4 costs no agent time on steps 1 to 3. An agent that exits nonzero or times out stops the chain, with the last 20 lines of its stderr in the error. Each run also writes `$CMDR_AGENT_RUNS/STAMP-XXXXXX`, or a detached run's `log`, with each `## STEP` heading written before its agent starts.
 
 ## Agents
 
@@ -139,12 +139,12 @@ An adapter is `agent-NAME PROMPT DIR MODEL MODE`. `agent NAME ...` dispatches to
 
 Every adapted agent that runs commands has its own sandbox; agents without one are not adapted:
 
-- `claude`: with `AW_SANDBOX=1`, SANDBOX is `--settings claude-sandbox`, Claude Code's sandbox for Bash; otherwise it is empty. In plan mode claude runs no commands. In `auto` mode, claude's classifier may approve Bash calls, which then run unsandboxed as your user; `acceptEdits` with `--permission-prompts none` should refuse them. None of this is tested against a live claude. Bash may write only in DIR and a temp directory, and a blocked command is never retried unsandboxed. The sandbox does not cover the Edit and Write tools; WRITE_MODE decides edits in DIR, and `--permission-prompts none` refuses anything that would prompt. `--safe-mode` skips CLAUDE.md files, including `~/.claude/CLAUDE.md`, but keeps the login. The output is stream-json, so a detached run's `log` shows each tool call as it happens; The adapter reads the final text from its `result` event with the `json` extension. The event format was checked against claude 2.1.309 on 2026-10-23.
+- `claude`: with `CMDR_AGENT_SANDBOX=1`, SANDBOX is `--settings claude-sandbox`, Claude Code's sandbox for Bash; otherwise it is empty. In plan mode claude runs no commands. In `auto` mode, claude's classifier may approve Bash calls, which then run unsandboxed as your user; `acceptEdits` with `--permission-prompts none` should refuse them. None of this is tested against a live claude. Bash may write only in DIR and a temp directory, and a blocked command is never retried unsandboxed. The sandbox does not cover the Edit and Write tools; WRITE_MODE decides edits in DIR, and `--permission-prompts none` refuses anything that would prompt. `--safe-mode` skips CLAUDE.md files, including `~/.claude/CLAUDE.md`, but keeps the login. The output is stream-json, so a detached run's `log` shows each tool call as it happens; The adapter reads the final text from its `result` event with the `json` extension. The event format was checked against claude 2.1.309 on 2026-10-23.
 
-  With `AW_SANDBOX=1` on Linux, each step first runs `bwrap --unshare-net` and fails with its stderr if that fails. Ubuntu 24.04's `kernel.apparmor_restrict_unprivileged_userns=1` makes bwrap fail with `loopback: Failed RTM_NEWADDR`. Claude Code's `failIfUnavailable` misses this: claude exits 0 after every Bash call has failed. To fix the host, give `/usr/bin/bwrap` an AppArmor profile that allows `userns`.
+  With `CMDR_AGENT_SANDBOX=1` on Linux, each step first runs `bwrap --unshare-net` and fails with its stderr if that fails. Ubuntu 24.04's `kernel.apparmor_restrict_unprivileged_userns=1` makes bwrap fail with `loopback: Failed RTM_NEWADDR`. Claude Code's `failIfUnavailable` misses this: claude exits 0 after every Bash call has failed. To fix the host, give `/usr/bin/bwrap` an AppArmor profile that allows `userns`.
 - `codex`: `-s read-only` or `-s workspace-write`.
 - `cursor`: `--sandbox enabled`.
-- `llama`: runs no commands. Every `git` call in `agent` disables `core.fsmonitor` and hooks, so a target's `.git/config` runs nothing. It sends every file from `git ls-files` in DIR that is a regular file, not reached through a symbolic link, then the prompt, to llama-server, and fails if the text exceeds `AW_LLAMA_MAX_BYTES`. MODEL becomes the request's `model`. Every prompt says it cannot run commands, since the action templates ask it to run tests. `reproduce` and `verify` steps only write code.
+- `llama`: runs no commands. Every `git` call in `agent` disables `core.fsmonitor` and hooks, so a target's `.git/config` runs nothing. It sends every file from `git ls-files` in DIR that is a regular file, not reached through a symbolic link, then the prompt, to llama-server, and fails if the text exceeds `CMDR_AGENT_LLAMA_MAX_BYTES`. MODEL becomes the request's `model`. Every prompt says it cannot run commands, since the action templates ask it to run tests. `reproduce` and `verify` steps only write code.
 
   In write mode the reply gives each change as an edit block, the format aider uses:
 
@@ -157,8 +157,8 @@ Every adapted agent that runs commands has its own sandbox; agents without one a
   >>>>>>> REPLACE
   ```
 
-  SEARCH must match whole lines at exactly one place in the file; an empty SEARCH creates a file. A block without a path line uses the previous block's path, or else the one tracked file that contains its SEARCH lines. Edit blocks over unified diffs, because Qwen3-Coder-30B-A3B wrote diffs that `git apply` rejected in 4 of 6 live steps: hunks that ended without context, or repeated a line. A path is rejected if it is absolute, has a `.`, `..`, or `.git` component in any case, has non-ASCII bytes in a component starting with `.`, passes through a symbolic link, or names an existing file that is not a regular file. Blocks apply in order to a copy in `AW_RUNS`, and DIR changes only if every block applies. The copy is deleted after a success and kept after a failure. Otherwise the step asks once more with the reasons; a second failure fails the step, with the reasons and the reply in the message.
+  SEARCH must match whole lines at exactly one place in the file; an empty SEARCH creates a file. A block without a path line uses the previous block's path, or else the one tracked file that contains its SEARCH lines. Edit blocks over unified diffs, because Qwen3-Coder-30B-A3B wrote diffs that `git apply` rejected in 4 of 6 live steps: hunks that ended without context, or repeated a line. A path is rejected if it is absolute, has a `.`, `..`, or `.git` component in any case, has non-ASCII bytes in a component starting with `.`, passes through a symbolic link, or names an existing file that is not a regular file. Blocks apply in order to a copy in `CMDR_AGENT_RUNS`, and DIR changes only if every block applies. The copy is deleted after a success and kept after a failure. Otherwise the step asks once more with the reasons; a second failure fails the step, with the reasons and the reply in the message.
 
-Each adapter builds an argument list and calls `launch`, which runs it with `run-with` in DIR under `AW_TIMEOUT`. No shell is involved, so a prompt with quotes or `$` is passed unchanged. `opt FLAG VALUE` gives an empty list for an empty VALUE, which `run-with` drops. Add an agent with one `def agent-NAME` and its name in `agents`.
+Each adapter builds an argument list and calls `launch`, which runs it with `run-with` in DIR under `CMDR_AGENT_TIMEOUT`. No shell is involved, so a prompt with quotes or `$` is passed unchanged. `opt FLAG VALUE` gives an empty list for an empty VALUE, which `run-with` drops. Add an agent with one `def agent-NAME` and its name in `agents`.
 
 The action declares the mode, not the step, so a `review` cannot get write access.

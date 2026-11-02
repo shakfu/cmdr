@@ -55,7 +55,7 @@ cmdr> midi.scale A4 minor-pentatonic 2 | midi.walk 16 | midi.pick 16 0.25 | midi
 | Chance | `pick KEYS N [...]`: N keys drawn from KEYS. `walk SCALE N [START STEP]`: N keys by a random walk over SCALE. `chance SCORE P`: each note kept with probability P, else a rest. `humanize SCORE [TIME VELOCITY]`: random offsets to starts and velocities. |
 | Changing | `transpose`, `shift BEATS`, `stretch FACTOR`, `velocity`, `channel`, `end` |
 | Combining | `stack A B` plays together; `then A B` plays B after A; `sequence SCORES` plays a list in order; `loop SCORE N` |
-| Fields | `field ITEM I`, `put ITEM I V`, `edit SCORE KIND I BLOCK` on field I of items of KIND; field 1 is the kind, 2 the start |
+| Fields | `field ITEM NAME`, `put ITEM NAME V`, `edit SCORE KIND NAME BLOCK` on field NAME of items of KIND. NAME is `kind` or a field from the item table, lowercased, as `key`; `layouts` lists them. An item without NAME mismatches. |
 | Output | `play SCORE [BPM PORT]`, `write SCORE PATH [BPM]`, `read PATH`, `ports`: the C commands, with BPM 120 by default |
 
 `help midi.NAME` gives a definition's arguments and defaults.

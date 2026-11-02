@@ -319,7 +319,9 @@ cmdr> list | run-with printf '%s ' $(list --model opus) x | nth 2
 **`run-all JOBS N`** runs programs in parallel, at most N at once, and returns each job's `STATUS STDOUT STDERR` in the order of JOBS.
 
 - Each job is a list `OPTIONS PROGRAM [ARG ...]`, as `run-with` takes. Each job's timeout runs from its own start.
+
 - N is a whole number from 1 to 64.
+
 - A job that cannot start fails the stage. The running jobs then get SIGTERM, then SIGKILL a second later, as on Ctrl-C.
 
 ```text

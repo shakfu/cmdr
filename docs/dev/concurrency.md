@@ -36,7 +36,7 @@ cmdr evaluates sequentially, one thread per session. The language has no concurr
 | Wake pipe | `wake_read`, `wake_write` in `src/primitives.c` | Made once, on the first wait. A set flag wakes every thread's wait in `run`. |
 | SIGCHLD | `include/cmdr.h:75-76` | The host must not ignore SIGCHLD or reap `run`'s children. |
 | `random` generator | `ext/random/README.md:29` | One per thread. Sessions on a thread share it. |
-| `snd` lock | `examples/sox-dsl/ext/snd/README.md:38` | libsox keeps global state, so `snd` commands run one at a time. |
+| `snd` lock | `examples/snd/ext/snd/README.md:38` | libsox keeps global state, so `snd` commands run one at a time. |
 | fd 2 during `snd.report` | same | Every thread's stderr goes into the result while it runs. |
 | umask | `snd.c`, `midi.c` | Set to 077 for one moment, on the first output file. |
 

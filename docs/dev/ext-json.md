@@ -4,7 +4,7 @@ Design sketch, 2026-10-21. Status: implemented in `ext/json` on 2026-10-25; [ext
 
 ## Problem
 
-JSON goes through `jq` with `run`. `llama-chat` (`examples/agent-workflows/aw/__init__.cmdr:37`) runs `jq` twice: once to build a request body, once to read `.choices[0].message.content`. A script without `jq` installed cannot read an API response.
+Before this extension, JSON went through `jq` with `run`. `llama-chat` (`examples/agent/agent/__init__.cmdr:49`) ran `jq` twice: once to build a request body, once to read `.choices[0].message.content`. A script without `jq` installed could not read an API response. `llama-chat` now uses `json.*` and runs only `curl`.
 
 [TODO.md](../../TODO.md) names two options: a map value kind, which [rich-types.md](rich-types.md) sketches, or an extension that converts JSON to lists of key and value pairs. Pairs lose JSON's distinctions: `list a b` could be the array `["a", "b"]` or the object `{"a": "b"}`, and `3` could be a number or a string.
 

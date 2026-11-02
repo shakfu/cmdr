@@ -1,5 +1,5 @@
 # Checks detached runs with the dry agent and a stub claude that sleeps for
-# AW_STUB_SLEEP seconds. CTest runs it as example_agent_runs, with AW_CMDR set
+# CMDR_AGENT_STUB_SLEEP seconds. CTest runs it as example_agent_runs, with CMDR_AGENT_CMDR set
 # to the cmdr under test.
 
 import agent

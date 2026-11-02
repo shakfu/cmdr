@@ -1,5 +1,5 @@
 # The process agent.start spawns: runs its arguments as a command line and
-# records the outcome in $AW_RUNS/$AW_RUN_ID.
+# records the outcome in $CMDR_AGENT_RUNS/$CMDR_AGENT_RUN_ID.
 
 import agent
 

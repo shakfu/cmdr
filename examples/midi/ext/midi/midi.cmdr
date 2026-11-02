@@ -14,10 +14,15 @@ import lists
 import num
 import random
 
-# Items. Field 1 is the kind and field 2 the start.
-def field { (n i) words $n | nth $i } "Field I of item N"
-def put { (n i v) words $n | lists.set-at $i $v | unwords } "Item N with field I set to V"
-def edit { (score kind i f) each $score { (n) or { () field $n 1 | equals $kind | $n | field $i | with $f | with { (v) put $n $i $v } } $n } } "SCORE with block F applied to field I of each item of KIND"
+# Tables of words, each row NAME then its values.
+def lookup { (table name) keep $table { (l) words $l | first | equals $name } | check { nonempty } $(concat "unknown name: " $name) | first | words | rest } "The words after NAME in TABLE"
+
+# Items. Each layout is KIND, then the names of its fields in order.
+list "note kind start length key velocity channel" "cc kind start controller value channel" "program kind start program channel" "bend kind start value channel" "tempo kind start bpm" "rest kind start length" | as layouts "Item layouts, as KIND then field names"
+def slot { (n name) words $n | first | with { (k) layouts | lookup $k } | lists.index-of $name } "The position of field NAME in item N; a mismatch if its kind has none"
+def field { (n name) slot $n $name | with { (i) words $n | nth $i } } "Field NAME of item N"
+def put { (n name v) slot $n $name | with { (i) words $n | lists.set-at $i $v | unwords } } "Item N with field NAME set to V"
+def edit { (score kind name f) each $score { (n) or { () field $n kind | equals $kind | $n | field $name | with $f | with { (v) put $n $name $v } } $n } } "SCORE with block F applied to field NAME of each item of KIND"
 def append { (a b) lists.chain $a $b } "The items of A, then those of B"
 def flatten { (scores) lists.flatten $scores } "Join a list of scores into one"
 def keys { (k) try $k { words } $k } "KEYS as a list: a list as is, or text split into words"
@@ -25,12 +30,12 @@ def at-least { (x lo) list $x $lo | max } "X, or LO if X is below it"
 def clamp { (x lo hi) at-least $x $lo | list $hi | min } "X limited to LO to HI"
 
 # Changing a score.
-def shift { (score beats) each $score { (n) put $n 2 $(field $n 2 | add $beats) } } "Start every item BEATS later"
-def stretch { (score factor) each $score { (n) put $n 2 $(field $n 2 | mul $factor) | with { (m) or { () matches $m "^(note|rest) " | field 3 | mul $factor | with { (l) put $m 3 $l } } $m } } } "Multiply starts and lengths by FACTOR"
-def transpose { (score n) edit $score note 4 { add $n } } "Move every key by N semitones"
-def velocity { (score v) each $score { (n) or { () matches $n "^note " | put 5 $v } $n } } "Set every note's velocity to V"
-def channel { (score c) each $score { (n) or { () matches $n "^(note|cc|program|bend) " | words | count | with { (i) put $n $i $c } } $n } } "Set every channel to C"
-def end { (score) each $score { (n) field $n 2 | with { (s) or { () matches $n "^(note|rest) " | field 3 | add $s } $s } } | fold 0 { (a x) or $a { gt $x } $x } } "The beat at which the last item, rests included, ends"
+def shift { (score beats) each $score { (n) put $n start $(field $n start | add $beats) } } "Start every item BEATS later"
+def stretch { (score factor) each $score { (n) put $n start $(field $n start | mul $factor) | with { (m) or { () field $m length | mul $factor | with { (l) put $m length $l } } $m } } } "Multiply starts and lengths by FACTOR"
+def transpose { (score n) edit $score note key { add $n } } "Move every key by N semitones"
+def velocity { (score v) each $score { (n) or { () put $n velocity $v } $n } } "Set every note's velocity to V"
+def channel { (score c) each $score { (n) or { () put $n channel $c } $n } } "Set every channel to C"
+def end { (score) each $score { (n) field $n start | with { (s) or { () field $n length | add $s } $s } } | fold 0 { (a x) or $a { gt $x } $x } } "The beat at which the last item, rests included, ends"
 def stack { (a b) append $a $b } "Play scores A and B together"
 def then { (a b) shift $b $(end $a) | with { (s) append $a $s } } "Play B after A ends"
 def sequence { (scores) fold $scores $(list) { (c s) then $c $s } } "Play a list of scores one after another"
@@ -50,7 +55,6 @@ def ramp { (controller from to length steps=16 channel=1) num.seq 0 $steps | eac
 # Pitch sets: lists of keys, as numbers.
 list "major 0 2 4 5 7 9 11" "minor 0 2 3 5 7 8 10" "harmonic-minor 0 2 3 5 7 8 11" "dorian 0 2 3 5 7 9 10" "phrygian 0 1 3 5 7 8 10" "lydian 0 2 4 6 7 9 11" "mixolydian 0 2 4 5 7 9 10" "locrian 0 1 3 5 6 8 10" "pentatonic 0 2 4 7 9" "minor-pentatonic 0 3 5 7 10" "blues 0 3 5 6 7 10" "whole-tone 0 2 4 6 8 10" "chromatic 0 1 2 3 4 5 6 7 8 9 10 11" | as scales "Scales, as NAME then semitones above the root"
 list "major 0 4 7" "minor 0 3 7" "dim 0 3 6" "aug 0 4 8" "sus2 0 2 7" "sus4 0 5 7" "maj7 0 4 7 11" "min7 0 3 7 10" "dom7 0 4 7 10" "dim7 0 3 6 9" "min7b5 0 3 6 10" | as chords "Chords, as NAME then semitones above the root"
-def lookup { (table name) keep $table { (l) words $l | first | equals $name } | check { nonempty } $(concat "unknown name: " $name) | first | words | rest } "The semitones of NAME in TABLE"
 def over { (root steps) _midi.key $root | with { (r) each $steps { (s) add $r $s } } } "STEPS as keys above ROOT"
 def scale { (root kind=major octaves=1) scales | lookup $kind | with { (s) num.seq 0 $(sub $octaves 1) | each { (o) mul $o 12 | with { (d) each $s { (x) add $x $d } } } | flatten | with { (all) over $root $all } } } "OCTAVES of scale KIND from ROOT, as keys"
 def chord-keys { (root kind=major) over $root $(chords | lookup $kind) } "The keys of chord KIND on ROOT"
@@ -63,10 +67,10 @@ def euclid { (k n key rotate=0) _midi.bjorklund $k $n | rotate $rotate | each { 
 # Chance. random.seed N makes these repeat.
 def pick { (ks n length=1 velocity=100 channel=1) keys $ks | random.choices $n | seq $length $velocity $channel } "N keys drawn from KEYS, played in turn; a . drawn is a rest"
 def walk { (scale n start=1 step=1) count $scale | with { (c) sub 0 $step | num.seq $step | random.choices $(sub $n 1) | fold $(list $start) { (acc d) push $acc $(last $acc | add $d | clamp 1 $c) } } | each { (i) nth $scale $i } } "N keys of SCALE by a random walk from item START, moving up to STEP items at a time"
-def chance { (score p) each $score { (n) or { () random.random | ge $p | $n | matches "^note " | words | with { (w) list rest $(nth $w 2) $(nth $w 3) | unwords } } $n } } "Keep each note with probability P; the others become rests"
+def chance { (score p) each $score { (n) or { () random.random | ge $p | $n | matches "^note " | with { (m) list rest $(field $m start) $(field $m length) | unwords } } $n } } "Keep each note with probability P; the others become rests"
 def jitter { (x amount) sub 0 $amount | random.uniform $amount | add $x } "X plus a uniform draw within AMOUNT"
 def jitter-int { (x amount) sub 0 $amount | random.int $amount | add $x } "X plus a whole number within AMOUNT"
-def humanize { (score time=0.02 velocity=10) each $score { (n) or { () matches $n "^note " | field 2 | jitter $time | at-least 0 | with { (s) put $n 2 $s } | with { (m) field $m 5 | jitter-int $velocity | clamp 1 127 | with { (v) put $m 5 $v } } } $n } } "Move each note's start by up to TIME beats and velocity by up to VELOCITY"
+def humanize { (score time=0.02 velocity=10) each $score { (n) or { () matches $n "^note " | field start | jitter $time | at-least 0 | with { (s) put $n start $s } | with { (m) field $m velocity | jitter-int $velocity | clamp 1 127 | with { (v) put $m velocity $v } } } $n } } "Move each note's start by up to TIME beats and velocity by up to VELOCITY"
 
 
 # Last, since it shadows the prelude's rest, which lookup uses.

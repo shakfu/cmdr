@@ -29,8 +29,8 @@ A `def` cannot take an optional argument, so modules work around it:
 
 | Where | Workaround |
 |-|-|
-| `examples/agent-workflows/aw` | Two defs for one default: `def chain { (t specs) chain-from $t $specs "" }` |
-| `examples/sox-dsl/snd` | `reverb` requires AMOUNT, though sox defaults it to 50; `fade IN OUT` cannot take sox's optional curve type; other arguments go through `effect "..."` |
+| `examples/agent/agent` | Two defs for one default: `def chain { (t specs) chain-from $t $specs "" }` |
+| `examples/snd/ext/snd` | `reverb` requires AMOUNT, though sox defaults it to 50; `fade IN OUT` cannot take sox's optional curve type; other arguments go through `effect "..."` |
 | Prelude and extension wrappers | A def that wraps `num-seq FIRST LAST [STEP]`, `str-pad-left TEXT WIDTH [FILL]`, or `files [DIR]` must fix the optional argument or add a second def |
 
 Eight C commands take an optional argument: `num-seq`, `str-pad-left`, `str-pad-right`, `files`, and `fs-dirs` take a trailing one; `try`, `or`, and `check` take a leading INPUT. A `def` cannot have either signature. Defaults give it the trailing form.
@@ -68,7 +68,7 @@ a ?,b ?
 | Choice | Over | Because |
 |-|-|-|
 | Literal text, fixed when the block compiles | An expression evaluated at each call | Python evaluates defaults once, at `def`. cmdr values are immutable, so Python's mutable-default trap does not arise |
-| A bare word, or `""` or `''` for empty text | Any quoted string | Five tokenisers read parameter lists: `src/cmdr.c`, `src/editor.c`, and the Vim, Sublime, and VS Code grammars. The last three match up to the first `)`, and `editor.c` splits on whitespace. A bare word changes none of these rules. `aw`'s `chain-from` needs `""` |
+| A bare word, or `""` or `''` for empty text | Any quoted string | Five tokenisers read parameter lists: `src/cmdr.c`, `src/editor.c`, and the Vim, Sublime, and VS Code grammars. The last three match up to the first `)`, and `editor.c` splits on whitespace. A bare word changes none of these rules. `agent`'s `chain-from` needs `""` |
 | `$name` and `{ ... }` rejected as defaults | References to enclosing parameters | A default that captures would need the capture machinery at every call. No case needs it yet |
 
 A bare default excludes whitespace, quotes, `\`, `|`, `$`, `{`, `}`, and `)`. Allowing quoted defaults later breaks nothing, because a quote in a default is an error now.
@@ -85,7 +85,7 @@ A bare default excludes whitespace, quotes, `\`, `|`, `$`, `{`, `}`, and `)`. Al
 
 ### Keyword arguments at the call site
 
-`reverb $c amount=60` is not proposed. A word such as `user.name=demo` is an ordinary argument today: the `aw` demo passes `-c user.name=demo` to git. Reading `NAME=VALUE` words as keywords would change those calls.
+`reverb $c amount=60` is not proposed. A word such as `user.name=demo` is an ordinary argument today: the `agent` demo passes `-c user.name=demo` to git. Reading `NAME=VALUE` words as keywords would change those calls.
 
 ### Help and the API
 
@@ -491,7 +491,7 @@ These are optional; none is required.
 | `snd` | `def reverb { (chain amount) ... }` | `def reverb { (chain amount=50) ... }`, so `reverb` alone is sox's default |
 | `snd` | `def norm { (chain db) ... }` | `(chain db=0)`, sox's default level |
 | `snd` | `def fade { (chain in out) ... }` | `(chain in out=0)`: fade in only |
-| `aw` | `chain` and `chain-from` | `def chain { (t specs input="") ... }`; keep `chain-from` as an alias for importers |
+| `agent` | `chain` and `chain-from` | `def chain { (t specs input="") ... }`; keep `chain-from` as an alias for importers |
 
 ### Implementation notes
 
@@ -501,7 +501,7 @@ These are optional; none is required.
 
 - The editor tests check only the prompt's colour, so `scan`'s split at `=` has no test of its own.
 
-- Running the suite under ASan and UBSan found undefined behaviour outside this change: `examples/sox-dsl/ext/snd` used libsox's `SOX_ROUND_CLIP_COUNT` and `SOX_SAMPLE_MIN`, which shift 1 by 31 bits in an `int`. It now clips with its own function.
+- Running the suite under ASan and UBSan found undefined behaviour outside this change: `examples/snd/ext/snd` used libsox's `SOX_ROUND_CLIP_COUNT` and `SOX_SAMPLE_MIN`, which shift 1 by 31 bits in an `int`. It now clips with its own function.
 
 - `help` showed defaults in the overview at first. `snd.reverb`'s six sox parameter names made its row about 115 characters wide, and every row was padded to it. The overview now shows `...`, and `help NAME` gives the full signature. The help test above is as first written; the merged one checks both forms.
 

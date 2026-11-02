@@ -20,9 +20,9 @@ Parallelism alone does not meet the need. `run-all` already runs N `agent.cmdr` 
 
 2. A child's output goes to a temporary file that is read after it exits ([concurrency.md](concurrency.md)). No one can follow a run while it is running.
 
-3. `AW_RUNS` defaults to `agent-runs`, a path relative to the working directory (`examples/agent/agent/__init__.cmdr:11`). A `status` query from another directory would not find the run.
+3. The runs directory, `AW_RUNS` at the time, defaulted to `agent-runs`, a path relative to the working directory. A `status` query from another directory would not find the run. It now defaults to `~/.cmdr/runs` (`examples/agent/agent/__init__.cmdr:16`); see [Run directory](#run-directory).
 
-4. The steps of a chain cannot overlap, since step k reads step k-1's output (`examples/agent/agent/__init__.cmdr:108`).
+4. The steps of a chain cannot overlap, since step k reads step k-1's output (`examples/agent/agent/__init__.cmdr:121`).
 
 5. A block cannot cross threads (`src/cmdr.c:205`). A redraw thread inside cmdr is not an option.
 
@@ -78,7 +78,7 @@ each $runs { (r) agent.result $r }
 
 ### Run directory
 
-`agent.start` checks CMD and DIR, makes `$AW_RUNS/ID/`, and spawns `env AW_RUN_ID=ID cmdr agent/run.cmdr ARGS`. ARGS go through argv, so a prompt with newlines needs no encoding. `run.cmdr` sits in the package, beside `actions/`, so it does not depend on where `agent.cmdr` is installed. `AW_CMDR` names the cmdr to start; cmdr cannot name its own executable.
+`agent.start` checks CMD and DIR, makes `$CMDR_AGENT_RUNS/ID/`, and spawns `env CMDR_AGENT_RUN_ID=ID cmdr agent/run.cmdr ARGS`. ARGS go through argv, so a prompt with newlines needs no encoding. `run.cmdr` sits in the package, beside `actions/`, so it does not depend on where `agent.cmdr` is installed. `CMDR_AGENT_CMDR` names the cmdr to start; cmdr cannot name its own executable.
 
 | File | Written by | Content |
 |-|-|-|
@@ -96,7 +96,7 @@ Every file is replaced by a rename, so a reader never sees part of one. The run 
 
 `out` and `err` hold only the current step; earlier steps' outputs are in `log`. claude runs with `--output-format stream-json --verbose`, so `out` gains a line per event. `agent.log` renders text and tool calls with the `json` extension and passes other agents' lines unchanged.
 
-`AW_RUNS` defaults to `~/.cmdr/runs`, so that `status` works from any directory. This also moves the blocking calls' logs.
+`CMDR_AGENT_RUNS` defaults to `~/.cmdr/runs`, so that `status` works from any directory. This also moves the blocking calls' logs.
 
 ### Core changes
 
@@ -124,4 +124,4 @@ Everything else is in cmdr, in `agent.cmdr` and `agent/__init__.cmdr`.
 
 - Adapters other than claude: codex and cursor have their own streaming formats. `log` shows their raw output until a filter is needed.
 
-- A `cmdr-exe` primitive, from `/proc/self/exe` or `_NSGetExecutablePath`, would replace `AW_CMDR`.
+- A `cmdr-exe` primitive, from `/proc/self/exe` or `_NSGetExecutablePath`, would replace `CMDR_AGENT_CMDR`.

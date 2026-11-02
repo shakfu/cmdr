@@ -4,7 +4,7 @@
 #   cmdr demo.cmdr                  dry run: each step prints its prompt
 #   cmdr demo.cmdr claude:sonnet    every step runs claude with sonnet
 #
-# sample/ is copied into a fresh git repository under AW_RUNS (default
+# sample/ is copied into a fresh git repository under CMDR_AGENT_RUNS (default
 # agent-runs/ in the current directory), so agents never touch your files.
 
 import agent

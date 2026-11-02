@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### Changed
+
+- Breaking: the `agent` example's environment variables take the prefix `CMDR_AGENT_`, as `CMDR_AGENT_RUNS`, in place of `AW_`, which named the module before its rename. Old names are not read. `CMDR_AGENT_` over `AGENT_`, because Azure Pipelines sets `AGENT_*` variables on its build agents.
+
+- `midi.field`, `midi.put`, and `midi.edit` take a field name, such as `key` or `velocity`, in place of a position. An item whose kind lacks the field mismatches, so `or` keeps it unchanged. Names over JSON items, because the C parser and `midi.read` keep the text format, and a JSON note is about 4 times longer at the REPL.
+
+  ```text
+  midi.note C4 | first | midi.put velocity 90
+  ```
+
 ## [0.5.0]
 
 ### Added
@@ -31,8 +41,11 @@
 ### Changed
 
 - The `agent` example no longer runs `jq`, `mktemp`, `find`, `ps`, `kill`, `test -L`, `uname`, `rm -rf`, `cp -R`, or `sh` for `pwd -P`; it uses `json`, `fs`, `os`, and `proc`. Only its stub claude, a test fixture, still needs jq. Three results differ:
+
   - A llama reply without `choices[0].message.content` fails the step. jq printed `null`, which became the reply.
+
   - A tracked file that is not UTF-8 goes to llama as `(not UTF-8)`. jq replaced its invalid bytes with U+FFFD.
+
   - A tracked file missing from disk is left out of llama's context, not sent as `(unreadable)`.
 
 ## [0.4.0]
@@ -275,8 +288,11 @@
   Supporting changes:
 
   - `from` inside a module binds names the module exports, as in Python. `from M import f as f` shadows an existing `f`, which a module needs to re-export `_re`'s `split`; without `as`, an existing name is still an error.
+
   - A host's built-in modules are found before files, so a local `random.cmdr` cannot hide `random`. `cmdr_session_add_module` and `cmdr_session_add_source` add them.
+
   - `-c` runs several lines, as a script does, so `cmdr -c $'import fs\nfs.exists /tmp'` works. A newline inside quotes or a block stays in its pipeline, as before.
+
   - `examples/sox-dsl` and `examples/midi` keep their modules in `ext/snd/snd.cmdr` and `ext/midi/midi.cmdr`, built in, so they need no `CMDR_PATH`. `midi.play` and `midi.write` take BPM 120 by default.
 
 - Extensions `re`, `num`, `fs`, `time`, and `str`. Each covers a gap a `def` cannot fill: `matches` returns no captures, a `def` cannot loop N times, and no primitive calls `stat`. Every command starts with its extension's name, so a later primitive cannot collide with it. `time.local` and `time.utc` take `[EPOCH] FORMAT` over `FORMAT [EPOCH]`, so a piped time is formatted: `fs.mtime f | time.local %F`. See [README.md](README.md#extensions).

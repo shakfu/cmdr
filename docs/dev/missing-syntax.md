@@ -181,15 +181,15 @@ Each before is a line from this repository; the after is equivalent.
 before: gt $n 0 | $xs | count | with { (c) le $n $c } | $xs | head $n | last
 after:  gt $n 0 | le $(count $xs) | $xs | head $n | last
 
-# examples/sox-dsl/demo.cmdr: write-to
+# examples/snd/demo.cmdr: write-to
 before: def write-to { (chain p) at $p | with { (o) snd.out $chain $o } }
 after:  def write-to { (chain p) snd.out $chain $(at $p) }
 
-# examples/sox-dsl/demo.cmdr: report's line per file
+# examples/snd/demo.cmdr: report's line per file
 before: snd.info $p | head 3 | rest | unwords | with { (i) path-basename $p | with { (b) list $b $i | unwords } }
 after:  list $(path-basename $p) $(snd.info $p | head 3 | rest | unwords) | unwords
 
-# examples/agent-workflows/aw/__init__.cmdr: action-file
+# examples/agent/agent/__init__.cmdr: action-file
 before: list $a .md | concat | with { (f) home-dir | path-join actions | path-join $f }
 after:  path-join $home-dir actions | path-join $(list $a .md | concat)
 
@@ -274,7 +274,7 @@ concat $base $(by-mode $mode "" $llama-format)
 
 #### Problem
 
-`try [INPUT] BLOCK FALLBACK` returns FALLBACK on any failure, and the reason is lost. The scripts hold 39 `try`. `aw`'s `edit-stage` replaces every parse failure with one fixed message, though `edit-parse` reports which part was missing:
+`try [INPUT] BLOCK FALLBACK` returns FALLBACK on any failure, and the reason is lost. The scripts hold 39 `try`. `agent`'s `edit-stage` replaces every parse failure with one fixed message, though `edit-parse` reports which part was missing:
 
 ```text
 list "" "" "" "malformed edit block: expected a file path alone on a line, SEARCH, =======, and REPLACE" | with { (bad) try $c { (x) edit-parse $d $x } $bad }
@@ -301,7 +301,7 @@ try { () read config.txt } { (e) concat "# defaults: " $e }
 
 #### Problem
 
-A `def` cannot call itself, and `repeat` runs a fixed number of times, so "until it succeeds" cannot be written. `aw`'s llama adapter retries once by hand; a script that polls a server or a file cannot poll at all.
+A `def` cannot call itself, and `repeat` runs a fixed number of times, so "until it succeeds" cannot be written. `agent`'s llama adapter retries once by hand; a script that polls a server or a file cannot poll at all.
 
 #### Proposal
 

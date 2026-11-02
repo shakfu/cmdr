@@ -4,11 +4,11 @@ Design, 2026-10-21. Status: SIGTERM handling and A (`run-all`) implemented; B to
 
 ## Problem
 
-A script waits for each program before it starts the next. Agent workflows spend nearly all their time in programs: one `aw` step runs an agent for minutes, while cmdr's own commands take microseconds. This is inferred from `aw`'s design, not measured. Asking three agents the same question takes the sum of their times, not the longest.
+A script waits for each program before it starts the next. Agent workflows spend nearly all their time in programs: one `agent` step runs an agent for minutes, while cmdr's own commands take microseconds. This is inferred from `agent`'s design, not measured. Asking three agents the same question takes the sum of their times, not the longest.
 
 Today's workaround loses structure: `run sh -c 'a & b & wait'` returns one combined stdout, with no per-program status.
 
-`aw`'s chains pass each step's output to the next (`examples/agent-workflows/aw/__init__.cmdr:108`), so one chain cannot overlap. The need is fan-out. The main case is one workflow on several projects, such as `audit` on every repository in a directory; see [One workflow on several projects](#one-workflow-on-several-projects). Smaller cases are one prompt to several agents, and one render per input file.
+`agent`'s chains pass each step's output to the next (`examples/agent/agent/__init__.cmdr:121`), so one chain cannot overlap. The need is fan-out. The main case is one workflow on several projects, such as `audit` on every repository in a directory; see [One workflow on several projects](#one-workflow-on-several-projects). Smaller cases are one prompt to several agents, and one render per input file.
 
 ## Constraints in the current code
 
@@ -42,7 +42,7 @@ Run a list of jobs at once, at most N at a time, and return each job's `STATUS S
 cmdr> list codex cursor claude | each { (a) list $(list stdin $q timeout 600) $(agent-argv $a) } | run-all 3
 ```
 
-`agent-argv` stands for a definition that returns an agent's command line; `aw` has none today.
+`agent-argv` stands for a definition that returns an agent's command line; `agent` has none today.
 
 - Results are data, as for `run-with`, so one failed job does not discard the others. The caller decides with `keep` or `each`.
 
@@ -100,21 +100,21 @@ A lazy list kind, so `read` and `run` could yield lines as they arrive. Every li
 
 ## One workflow on several projects
 
-A workflow is cmdr code, not one program. `chain-from` folds over the steps, and cmdr code applies edits between agents (`aw/__init__.cmdr:109`, `:56`). There are three ways to run it on N projects.
+A workflow is cmdr code, not one program. `chain-from` folds over the steps, and cmdr code applies edits between agents (`agent/__init__.cmdr:122`, `:68`). There are three ways to run it on N projects.
 
 | | How | Verdict |
 |-|-|-|
 | 1 | One cmdr process per project, as A's jobs | Yes |
-| 2 | One process in lockstep: step k for every project through A, then step k + 1 | No: `aw` must be rebuilt around batches, the llama adapter runs three programs per step (`:37`), and the slowest project holds up every step |
+| 2 | One process in lockstep: step k for every project through A, then step k + 1 | No: `agent` must be rebuilt around batches, the llama adapter runs `git` and `curl` within each step (`:42`, `:49`), and the slowest project holds up every step |
 | 3 | One session, a thread per project, as C | No: every cost of C |
 
 With 1, each project gets its own session, so no code needs to be thread-safe:
 
 ```text
-cmdr> list ~/src/a ~/src/b ~/src/c | each { (d) list $(list group 1 timeout 7200) $(list aw.cmdr audit $d) } | run-all 3
+cmdr> list ~/src/a ~/src/b ~/src/c | each { (d) list $(list group 1 timeout 7200) $(list agent.cmdr audit $d) } | run-all 3
 ```
 
-This works today without new code: `printf '%s\n' ~/src/a ~/src/b ~/src/c | xargs -P 3 -I{} aw.cmdr audit {}`. A adds, over `xargs`:
+This works today without new code: `printf '%s\n' ~/src/a ~/src/b ~/src/c | xargs -P 3 -I{} agent.cmdr audit {}`. A adds, over `xargs`:
 
 - each project's status and output as a cmdr value, not one exit code (123 if any failed) and mixed output;
 
@@ -146,8 +146,8 @@ A different view: parallelism is a property of a host, not of the language. A ho
 
 ## Open questions
 
-- Should `aw` gain an entry point for this, such as `aw.cmdr audit-all N DIR ...`, or should users write the `run-all` line?
+- Should `agent` gain an entry point for this, such as `agent.cmdr audit-all N DIR ...`, or should users write the `run-all` line?
 
-- Should a child cmdr be found on `PATH`, as `aw.cmdr`'s shebang assumes, or should cmdr expose its own executable path?
+- Should a child cmdr be found on `PATH`, as `agent.cmdr`'s shebang assumes, or should cmdr expose its own executable path?
 
 - Should `run-all` gain a fail-fast option, killing the other jobs when one exits nonzero? As built, a nonzero status is data, as for `run-with`, and only a job that cannot start fails the stage.

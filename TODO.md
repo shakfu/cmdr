@@ -4,16 +4,14 @@
 
 ## High
 
-- [ ] **Structured data.** Records are words in text, read with `words | nth` (15 places), and JSON goes through `jq` with `run`. JSON is what glue scripts most exchange: APIs and agents' output. See [docs/dev/missing-syntax.md](docs/dev/missing-syntax.md), "Library gaps".
-  - Decide between a map value beside text and lists, which changes the value model, `cmdr_value`, and every list command's contract, and a `json` extension that converts JSON to and from lists of key and value pairs, with no new value type.
-  - A third option keeps JSON as text, read and built by path: [docs/dev/ext-json.md](docs/dev/ext-json.md). It is `ext/json`, which works under either outcome; the value-model decision remains.
-  - The pairs form keeps values printable and checkable; its cost is linear lookup and no way to tell an empty object from an empty array.
-  - `agent` now uses `ext/json`. `midi`'s items are the next user to convert.
-
 ## Medium
 
+- [ ] **Value model.** Decide on [docs/dev/rich-types.md](docs/dev/rich-types.md) when a script needs sorting by number or stored booleans. JSON no longer depends on it: `ext/json` keeps JSON as text.
+
 - [ ] **Tree-sitter follow-ups.**
+
   - Zed: set `rev` in `editors/zed/extension.toml` once a commit contains `editors/tree-sitter-cmdr`, and install the dev extension. Zed is untested; Helix builds the grammar and finds the queries.
+
   - Neovim could use the grammar through nvim-treesitter in place of `editors/vim/syntax/cmdr.vim`. `queries/highlights.scm` already uses its capture names.
 
 - [ ] Extension modules run at their first `import`, after the prelude, which `--user` may replace. So `ext/*/*.cmdr` use only primitives and other modules, not prelude definitions such as `first`; nothing checks this. A check could import every extension module under an empty `--user` prelude in `make test`.

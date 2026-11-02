@@ -13,7 +13,7 @@ def requests { () agent.runs-dir | path-join llama-requests.log | try { read | l
 def reset { () project | with { (d) list "checkout -q -- ." "clean -fdq" | each { (c) git-in $d $(shlex.split $c) } } } "Undo edits to the copy"
 def stats { () project | path-join stats.py | read }
 def edit-fails { (q) project | agent.target-path | try { (t) agent.edit $t llama $q } rejected | check { equals rejected } "a bad edit was accepted" } "Fail unless edit Q is rejected"
-def stages { () agent.runs-dir | fs.dirs | keep { matches 'llama-stage-' } | count } "Staging copies left in AW_RUNS"
+def stages { () agent.runs-dir | fs.dirs | keep { matches 'llama-stage-' } | count } "Staging copies left in CMDR_AGENT_RUNS"
 def absent { (p) try { () fs.exists $p | $p } absent | check { equals absent } "a file was written outside the project" }
 
 project | with { (d) or { () fs.exists $d | fs.remove-tree } "" | with { (_) script-dir | path-join ../sample | fs.copy $d } }
