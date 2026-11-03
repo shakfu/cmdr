@@ -44,12 +44,13 @@ COMMAND(input_command)
     }
     char *line = NULL;
     size_t size = 0;
-    ssize_t length = getline(&line, &size, stdin);
+    /* SIGINT ends a blocking read with EINTR, since cmdr's handler lacks SA_RESTART.
+     * One that came before the read sets only the flag, so check it first and last. */
+    ssize_t length = cmdr_interrupted() ? -1 : getline(&line, &size, stdin);
     int status = 0;
     if (length < 0) {
-        /* SIGINT ends a blocking read with EINTR, since cmdr's handler lacks SA_RESTART. */
-        if (!ferror(stdin)) status = (cmdr_error(error, "io.input: end of input"), CMDR_MISMATCH);
-        else if (cmdr_interrupted()) status = cmdr_error(error, "io.input: interrupted");
+        if (cmdr_interrupted()) status = cmdr_error(error, "io.input: interrupted");
+        else if (!ferror(stdin)) status = (cmdr_error(error, "io.input: end of input"), CMDR_MISMATCH);
         else status = cmdr_error(error, "io.input: read failed");
         clearerr(stdin); /* A REPL reads on after end of input. */
     } else if (memchr(line, '\0', (size_t)length)) {

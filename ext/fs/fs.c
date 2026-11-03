@@ -556,7 +556,7 @@ static int per_line(const char *name, size_t argc, const cmdr_value *argv, size_
     ssize_t length;
     int status = 0;
     if (!acc) *result = cmdr_list();
-    while (!status && (length = getline(&line, &size, file)) >= 0) {
+    while (!status && !cmdr_interrupted() && (length = getline(&line, &size, file)) >= 0) {
         ++number;
         if (memchr(line, '\0', (size_t)length)) {
             status = cmdr_error(error, "%s %s: binary data is not supported", name, path);
@@ -586,8 +586,9 @@ static int per_line(const char *name, size_t argc, const cmdr_value *argv, size_
         free(detail);
         detail = NULL;
     }
-    /* SIGINT ends a blocking read with EINTR, since cmdr's handler lacks SA_RESTART. */
-    if (!status && ferror(file))
+    /* SIGINT ends a blocking read with EINTR, since cmdr's handler lacks SA_RESTART.
+     * One that came before the read sets only the flag, which the loop checks. */
+    if (!status && (ferror(file) || cmdr_interrupted()))
         status = cmdr_interrupted() ? cmdr_error(error, "%s %s: interrupted", name, path)
                                     : cmdr_error(error, "%s %s: read failed", name, path);
     if (is_stdin) clearerr(stdin); /* A REPL reads on after end of input. */

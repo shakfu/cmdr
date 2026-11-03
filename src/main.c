@@ -224,7 +224,8 @@ static int run(cmdr_session *session, const char *banner)
 #endif
         {
             if (interactive) { fputs(prompt, stdout); fflush(stdout); }
-            n = getline(&line, &capacity, stdin);
+            /* A SIGINT before the read sets only the flag; the read would block. */
+            n = cmdr_interrupted() ? -1 : getline(&line, &capacity, stdin);
         }
         /* Ctrl-C at an interactive prompt drops the pipeline: a key (-2) to the
          * editor in raw mode, else SIGINT, which ends a cooked read with EINTR. */

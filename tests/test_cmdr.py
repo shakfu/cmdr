@@ -939,13 +939,14 @@ class Commands(unittest.TestCase):
         result = subprocess.run([str(BINARY)], input='import fs\nfs.each-line - { (l) upper $l } | join ,\nx\ny\n',
                                 capture_output=True, text=True, timeout=20)
         self.assertEqual((result.returncode, result.stdout), (0, 'X,Y\n'), result.stderr)
-        # SIGINT ends a read that blocks on an open pipe.
-        process = subprocess.Popen([str(BINARY), '-c', 'import fs\nfs.each-line - { (l) $l }'],
+        # SIGINT ends a read that blocks on an open pipe. The echoed line shows
+        # the handler is installed; the signal may still come before the next read.
+        process = subprocess.Popen([str(BINARY), '-c', 'import fs\nimport io\nfs.each-line - { (l) io.etee $l }'],
                                    stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         try:
             process.stdin.write(b'a\n')
             process.stdin.flush()
-            time.sleep(0.3)
+            self.assertEqual(process.stderr.read(2), b'a\n')
             process.send_signal(signal.SIGINT)
             _, stderr = process.communicate(timeout=5)
         finally:
@@ -974,11 +975,12 @@ class Commands(unittest.TestCase):
         result = run('import dict\ndict.of a "x\ty" | io.print')
         self.assertEqual((result.returncode, result.stdout), (1, ''))
         self.assertIn('io.print: cannot print dict', result.stderr)
-        # SIGINT ends a read that blocks on an open pipe.
-        process = subprocess.Popen([str(BINARY), '-c', 'import io\nio.input'],
+        # SIGINT ends a read that blocks on an open pipe. The prompt shows the
+        # handler is installed; the signal may still come before the read.
+        process = subprocess.Popen([str(BINARY), '-c', 'import io\nio.input go'],
                                    stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         try:
-            time.sleep(0.3)
+            self.assertEqual(process.stderr.read(2), b'go')
             process.send_signal(signal.SIGINT)
             _, stderr = process.communicate(timeout=5)
         finally:
