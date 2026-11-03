@@ -218,7 +218,8 @@ static int run(cmdr_session *session, const char *banner)
         const char *prompt = used ? "...> " : "cmdr> ";
         ssize_t n;
 #ifdef CMDR_EDITOR
-        if (ed) {
+        /* On a plain terminal linenoise reads without checking the flag first. */
+        if (color) {
             n = editor_read(ed, editor_prompt(ed, used != 0), &line, &capacity);
         } else
 #endif
