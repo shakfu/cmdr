@@ -4,7 +4,7 @@ project(cmdr_consumer LANGUAGES C)
 enable_testing()
 
 # The consumer test passes the version it built; before 1.0 only the same
-# minor version is compatible.
+# minor version is compatible, and from 1.0 the same major.
 find_package(cmdr ${CMDR_REQUIRED_VERSION} CONFIG REQUIRED)
 set(targets cmdr::static)
 if(TARGET cmdr::shared)
@@ -21,5 +21,7 @@ foreach(target IN LISTS targets)
   add_executable(${name} consumer.c)
   set_target_properties(${name} PROPERTIES C_STANDARD 11)
   target_link_libraries(${name} PRIVATE ${target})
+  # The installed header must name the version find_package found.
+  target_compile_definitions(${name} PRIVATE CMDR_PACKAGE_VERSION="${cmdr_VERSION}")
   add_test(NAME ${name} COMMAND ${name})
 endforeach()

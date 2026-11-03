@@ -1,0 +1,6 @@
+name,qty
+bolt,3
+"a, ""quoted"" one",4
+
+"multi
+line",5

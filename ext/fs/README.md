@@ -20,6 +20,8 @@ Test, inspect, list, create, copy, move, and delete paths.
 | `fs.remove PATH` | Delete a file, link, or empty directory, and return PATH. |
 | `fs.move SOURCE DESTINATION` | Rename SOURCE, and return DESTINATION. |
 | `fs.remove-tree PATH` | Delete PATH and everything below it, as `rm -r` does, and return PATH. |
+| `fs.each-line PATH BLOCK [ARG ...]` | Call BLOCK with each line of the file at PATH, then ARGs, and list the results. A line where BLOCK mismatches is dropped, so one pass both filters and maps. |
+| `fs.fold-lines PATH INIT BLOCK [ARG ...]` | Combine the file's lines as `fold` combines items: BLOCK takes the result so far, a line, then ARGs. A mismatch is an error. |
 
 ```text
 cmdr> import fs
@@ -28,6 +30,18 @@ cmdr> files . | keep { (f) fs.size $f | gt 1000 } | count
 cmdr> list a b | prefix build/ | each { fs.mkdir }
 build/a
 build/b
+```
+
+`fs.each-line` and `fs.fold-lines` read one line at a time, so memory grows with the results, not the file: counting a 5.6 GB log's lines with `fs.fold-lines` peaked at 7 MB, where `read` took 6 GB. Lines split as `lines` splits text: at `\n`, keeping any `\r`, with no item for a final newline. A NUL byte is an error, as for `read`. An error in BLOCK stops the read and names the line.
+
+PATH `-` reads stdin; a file named `-` is `./-`. A line's result prints when the line ends, so to see matches as a growing log arrives, write them from BLOCK with `io.tee`, as [ext/io](../io/README.md) shows. When cmdr reads its pipelines from stdin, the lines after the pipeline are its input, as when a Python script read from stdin reads `sys.stdin`. SIGINT stops a read that waits for input.
+
+```text
+cmdr> fs.each-line app.log { matches ' ERROR ' | split ' ' | nth 4 } | distinct
+cache
+db
+cmdr> fs.fold-lines app.log 0 { (n _) add $n 1 }
+5
 ```
 
 The predicates fail with an error, not a mismatch, when PATH cannot be checked, such as when a parent directory denies search. So `not { fs.exists }` holds only when PATH is absent.

@@ -528,6 +528,91 @@ COMMAND(remove_tree_command)
     return status ? 1 : same(&argv[0], result);
 }
 
+/* Call block argv[at] once per line of the file at argv[0], or of stdin for
+ * "-", with the fold's accumulator first if acc is not NULL, then the line,
+ * then argv[at+1..]. A line splits as lines splits text, so neither holds the
+ * whole file. */
+static int per_line(const char *name, size_t argc, const cmdr_value *argv, size_t at,
+                    cmdr_value *acc, cmdr_value *result, char **error)
+{
+    size_t fixed = acc ? 2 : 1, n = fixed + argc - at - 1;
+    const char *path = cmdr_text_of(&argv[0]);
+    if (!path || cmdr_kind_of(&argv[0]) != CMDR_TEXT) return cmdr_error(error, "%s: PATH must be text", name);
+    if (cmdr_kind_of(&argv[at]) != CMDR_BLOCK) return cmdr_error(error, "%s: expected a block { ... }", name);
+    char *detail = NULL;
+    if (cmdr_block_arity(&argv[at], n, &detail)) {
+        cmdr_error(error, "%s: %s", name, detail);
+        free(detail);
+        return 1;
+    }
+    int is_stdin = !strcmp(path, "-");
+    FILE *file = is_stdin ? stdin : fopen(path, "rb");
+    if (!file) return cmdr_error(error, "%s %s: %s", name, path, strerror(errno));
+    if (is_stdin) path = "stdin";
+    cmdr_value *args = cmdr_realloc(NULL, n, sizeof(*args));
+    for (size_t k = at + 1; k < argc; ++k) args[fixed + k - at - 1] = argv[k];
+    char *line = NULL;
+    size_t size = 0, number = 0;
+    ssize_t length;
+    int status = 0;
+    if (!acc) *result = cmdr_list();
+    while (!status && (length = getline(&line, &size, file)) >= 0) {
+        ++number;
+        if (memchr(line, '\0', (size_t)length)) {
+            status = cmdr_error(error, "%s %s: binary data is not supported", name, path);
+            break;
+        }
+        if (length && line[length - 1] == '\n') line[--length] = '\0';
+        cmdr_value text = cmdr_text(line, (size_t)length), out;
+        if (acc) args[0] = *acc;
+        args[fixed - 1] = text;
+        int failed = cmdr_run(&argv[at], n, args, &out, &detail);
+        cmdr_free(&text);
+        if (failed == CMDR_MISMATCH && !acc) {
+            /* each-line drops the line. */
+        } else if (failed) {
+            status = cmdr_error(error, "%s line %zu: %s", name, number, detail);
+        } else if (cmdr_kind_of(&out) == CMDR_NONE) {
+            status = cmdr_error(error, "%s line %zu: block returned no value", name, number);
+        } else if (acc) {
+            cmdr_free(acc);
+            *acc = out;
+            out = (cmdr_value){0};
+        } else {
+            cmdr_push(result, out);
+            out = (cmdr_value){0};
+        }
+        cmdr_free(&out);
+        free(detail);
+        detail = NULL;
+    }
+    /* SIGINT ends a blocking read with EINTR, since cmdr's handler lacks SA_RESTART. */
+    if (!status && ferror(file))
+        status = cmdr_interrupted() ? cmdr_error(error, "%s %s: interrupted", name, path)
+                                    : cmdr_error(error, "%s %s: read failed", name, path);
+    if (is_stdin) clearerr(stdin); /* A REPL reads on after end of input. */
+    else fclose(file);
+    free(line);
+    free(args);
+    if (status && !acc) cmdr_free(result);
+    return status;
+}
+
+COMMAND(each_line_command)
+{
+    if (argc < 2) return cmdr_error(error, "usage: fs.each-line PATH BLOCK [ARG ...]");
+    return per_line("fs.each-line", argc, argv, 1, NULL, result, error);
+}
+
+COMMAND(fold_lines_command)
+{
+    if (argc < 3) return cmdr_error(error, "usage: fs.fold-lines PATH INIT BLOCK [ARG ...]");
+    if (cmdr_clone(&argv[1], result, error)) return 1;
+    int status = per_line("fs.fold-lines", argc, argv, 2, result, result, error);
+    if (status) cmdr_free(result);
+    return status;
+}
+
 #define TEXT(n, u, d, f) {.name = n, .usage = u, .docstring = d, .run = f, .text = 1}
 static const cmdr_command commands[] = {
     TEXT("exists", "exists PATH", "Return PATH if it exists", exists_command),
@@ -547,5 +632,9 @@ static const cmdr_command commands[] = {
     TEXT("temp-dir", "temp-dir [TEMPLATE]", "Create a new directory; return its path", temp_dir_command),
     TEXT("copy", "copy SOURCE DESTINATION", "Copy a file, link, or tree to a new DESTINATION", copy_command),
     TEXT("remove-tree", "remove-tree PATH", "Delete PATH and everything below it", remove_tree_command),
+    {.name = "each-line", .usage = "each-line PATH BLOCK [ARG ...]",
+     .docstring = "Call a block per line of a file; list the results, dropping mismatches", .run = each_line_command},
+    {.name = "fold-lines", .usage = "fold-lines PATH INIT BLOCK [ARG ...]",
+     .docstring = "Combine a file's lines, left to right", .run = fold_lines_command},
 };
 const cmdr cmdr_ext_fs = {commands, sizeof(commands) / sizeof(commands[0]), NULL};

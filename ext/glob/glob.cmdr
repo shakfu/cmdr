@@ -1,0 +1,2 @@
+# The glob module: import glob. C commands come from _glob.
+from _glob import glob

@@ -210,7 +210,7 @@ read bug-142.md | target-bug ~/src/app | fix
 | Call depth in a `static` | E1, E2 | `_Thread_local` depth | Done |
 | All primitives always present | E2 | `cmdr_pure`; `effects` flag for `load` and `prelude-effects.cmdr` | Done |
 | No per-line memory or time limit | E2 | Allocation budget per session; needs error returns, as above | Open |
-| `double` numbers | E3 | Integer path in `arithmetic` when both operands are integers | Open |
+| `double` numbers | E3 | Integer path in `arithmetic` when both operands are integers | Rejected: [stability.md](stability.md), decision 6 |
 | No regex capture | D1 | `re-groups TEXT REGEX` in `ext/re` | Done |
 | No environment access | D3 | `env NAME` in `ext/env` | Done |
 | `run` stderr not captured | D3 | `run-with`, returning status, stdout, and stderr | Done |
@@ -219,7 +219,8 @@ read bug-142.md | target-bug ~/src/app | fix
 | No list append | D5 | `push` | Done |
 | Loading a library by path | D5 | `import`, with qualified names; see [import.md](import.md) | Done |
 | `nth` cannot return a list item | D5 | `last` without `join` | Open |
-| Whole-file `read` | D1 | Line-at-a-time reading; changes the value model, so last | Open |
+| Whole-file `read` | D1 | `fs.each-line` and `fs.fold-lines`, which call a block per line | Done |
+| Quoted CSV fields | D2 | `csv.rows` and `csv.dicts` in `ext/csv` | Done |
 
 Resuming after allocation failure and per-line limits need the same change: an error return after every allocation. Each DSL scenario works within its stated limits, and none needs that change.
 

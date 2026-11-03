@@ -1,5 +1,23 @@
 cmake_minimum_required(VERSION 3.16)
-project(cmdr VERSION 0.5.0 LANGUAGES C)
+# include/cmdr.h holds the version, so hosts can check it at compile time.
+file(STRINGS include/cmdr.h CMDR_VERSION_LINES REGEX "^#define CMDR_VERSION")
+foreach(part MAJOR MINOR PATCH)
+  string(REGEX MATCH "CMDR_VERSION_${part} ([0-9]+)" _ "${CMDR_VERSION_LINES}")
+  set(CMDR_VERSION_${part} ${CMAKE_MATCH_1})
+endforeach()
+set(CMDR_VERSION_NUMBERS "${CMDR_VERSION_MAJOR}.${CMDR_VERSION_MINOR}.${CMDR_VERSION_PATCH}")
+if(NOT CMDR_VERSION_LINES MATCHES "CMDR_VERSION \"${CMDR_VERSION_NUMBERS}\"")
+  message(FATAL_ERROR "include/cmdr.h: CMDR_VERSION does not match its MAJOR, MINOR, and PATCH")
+endif()
+project(cmdr VERSION ${CMDR_VERSION_NUMBERS} LANGUAGES C)
+# Before 1.0, a minor release may break the API and ABI; from 1.0, only a major one.
+if(PROJECT_VERSION_MAJOR EQUAL 0)
+  set(CMDR_SOVERSION ${PROJECT_VERSION_MAJOR}.${PROJECT_VERSION_MINOR})
+  set(CMDR_COMPATIBILITY SameMinorVersion)
+else()
+  set(CMDR_SOVERSION ${PROJECT_VERSION_MAJOR})
+  set(CMDR_COMPATIBILITY SameMajorVersion)
+endif()
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
@@ -56,9 +74,8 @@ add_library(cmdr_static STATIC $<TARGET_OBJECTS:cmdr_objects>)
 set(CMDR_LIBRARIES cmdr_static)
 if(CMDR_SHARED)
   add_library(cmdr_shared SHARED $<TARGET_OBJECTS:cmdr_objects>)
-  # Before 1.0, a minor version may break the API.
   set_target_properties(cmdr_shared PROPERTIES VERSION ${PROJECT_VERSION}
-    SOVERSION ${PROJECT_VERSION_MAJOR}.${PROJECT_VERSION_MINOR})
+    SOVERSION ${CMDR_SOVERSION})
   list(APPEND CMDR_LIBRARIES cmdr_shared)
 endif()
 
@@ -129,7 +146,7 @@ file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/cmdrConfig.cmake"
      "include(\"\${CMAKE_CURRENT_LIST_DIR}/cmdrTargets.cmake\")\n")
 include(CMakePackageConfigHelpers)
 write_basic_package_version_file("${CMAKE_CURRENT_BINARY_DIR}/cmdrConfigVersion.cmake"
-                                 COMPATIBILITY SameMinorVersion)
+                                 COMPATIBILITY ${CMDR_COMPATIBILITY})
 install(FILES "${CMAKE_CURRENT_BINARY_DIR}/cmdrConfig.cmake"
               "${CMAKE_CURRENT_BINARY_DIR}/cmdrConfigVersion.cmake"
         DESTINATION ${CMDR_CMAKE_DIR})

@@ -12,3 +12,14 @@ not no-such-path { fs.exists }
 fs.dirs .. | filter tests | join '' | equals ../tests
 fs.size test.cmdr | gt 0
 fs.mtime test.cmdr | gt 1000000000
+# each-line and fold-lines split as lines does: lines.txt is a, bb, a blank
+# line, then ccc without a final newline.
+fs.each-line lines.txt { (l) length $l } | join , | equals 1,2,0,3
+fs.each-line lines.txt { (l) $l } | join , | equals $(read lines.txt | lines | join ,)
+fs.each-line lines.txt { nonempty } | join , | equals a,bb,ccc
+fs.each-line lines.txt { (l p) concat $p $l } - | join , | equals -a,-bb,-,-ccc
+fs.each-line lines.txt { equals zz } | count | equals 0
+fs.fold-lines lines.txt 0 { (n _) add $n 1 } | equals 4
+fs.fold-lines lines.txt '' { (acc l) concat $acc $l } | equals abbccc
+fs.fold-lines lines.txt 0 { (n l k) length $l | mul $k | add $n } 10 | equals 60
+fs.fold-lines lines.txt $(list) { (acc l) push $acc $l } | count | equals 4

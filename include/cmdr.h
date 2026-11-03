@@ -4,6 +4,12 @@
 #include <stddef.h>
 #include <stdio.h>
 
+/* The API version. CMakeLists.txt reads it from here. */
+#define CMDR_VERSION_MAJOR 0
+#define CMDR_VERSION_MINOR 5
+#define CMDR_VERSION_PATCH 0
+#define CMDR_VERSION "0.5.0"
+
 /* Status for a predicate that does not hold, as opposed to an error (1).
  * keep, not, and try treat only this status as false. */
 #define CMDR_MISMATCH 2

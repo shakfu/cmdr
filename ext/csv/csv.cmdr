@@ -1,0 +1,3 @@
+# The csv module: import csv. C commands come from _csv; as names a
+# re-export that shadows a built-in name, which from otherwise refuses.
+from _csv import rows dicts format as format

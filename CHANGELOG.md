@@ -10,6 +10,22 @@
   read reply.json | json.to-dict | dict.get model | json.text
   ```
 
+- Modules `base64`, `hashlib`, `glob`, and `csv`, after Python's modules of those names. Each command that reads data also has a file form, `base64.encode-file` and `hashlib.sha256-file`, since text cannot hold a NUL byte. `glob.glob` refuses `**`, which glob(3) reads as `*`, so a recursive meaning can come in 1.x without changing a result. `csv` follows Python's `excel` dialect, but writes `\n` line endings and rejects malformed quoting and ragged `csv.dicts` rows where Python is lenient. See each module's README.
+
+  ```text
+  read data.csv | csv.dicts | each { dict.get qty } | sum
+  ```
+
+- `fs.each-line PATH BLOCK` and `fs.fold-lines PATH INIT BLOCK` read a file, or stdin for PATH `-`, one line at a time, so memory grows with the results, not the file. `fs.each-line` drops lines where BLOCK mismatches, so one pass filters and maps. Block commands over a lazy value kind, which would change what `read` returns.
+
+- Module `io`: `io.input [PROMPT]` reads a line of stdin, and `io.print`, `io.tee`, `io.eprint`, and `io.etee` write to stdout or stderr at once, where a line's result waits for the line to end. The `tee` forms return their VALUE, since `each` and `fs.each-line` reject a block that returns nothing. The prompt goes to stderr, as Bash's `read -p` writes it, not to stdout as Python's `input` does, so it stays out of piped output.
+
+  ```text
+  fs.each-line - { (l) matches $l ERROR | io.tee } | count
+  ```
+
+- Embedding: `CMDR_VERSION_MAJOR`, `CMDR_VERSION_MINOR`, `CMDR_VERSION_PATCH`, and `CMDR_VERSION` in `cmdr.h`, so a host or extension can check the API version at compile time. The build reads the version from them. From 1.0, the soname and `find_package(cmdr)` compatibility follow the major version alone: `libcmdr.so.1`.
+
 - Embedding: `CMDR_DICT`, `cmdr_dict_put`, `cmdr_dict_get`, and `cmdr_renderable`. A host that prints values calls `cmdr_renderable` first; `cmdr_print` cannot report why a dict does not print.
 
 ### Changed

@@ -1,0 +1,15 @@
+# Each line must succeed; cmdr stops at the first that fails.
+# Digests from FIPS 180-4's examples and Python's hashlib.
+
+import hashlib
+import str
+
+hashlib.sha256 '' | equals e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+hashlib.sha256 abc | equals ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad
+hashlib.sha256 abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq | equals 248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1
+hashlib.sha256-file data.bin | equals a95803d91f2a2eb57d42e2a799bb0d42e2acc37c22aa9d433a4173e5db794f28
+hashlib.sha256-file data.bin | equals $(hashlib.sha256-file data.bin)
+# 56 and 64 bytes need an extra padding block; a million bytes span many.
+str.repeat a 56 | hashlib.sha256 | equals b35439a4ac6f0948b6d6f9e3c6af0f5f590ce20f1bde7090ef7970686ec6738a
+str.repeat a 64 | hashlib.sha256 | equals ffe054fe7ae0cb6dc65c3af9b61d5209f439851db43d0ba5997337df154668eb
+str.repeat a 1000000 | hashlib.sha256 | equals cdc76e5c9914fb9281a1c7e284d73e67f1809a48a497200e046d39ccc7112cd0

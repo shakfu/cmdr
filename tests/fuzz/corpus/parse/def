@@ -1,0 +1,3 @@
+def greet { (name="world" _) format "hi {}" $name } "Say hi"
+# comment
+if $x { () a } elif { () b } { () c } else { () d }

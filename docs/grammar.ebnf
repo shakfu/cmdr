@@ -1,7 +1,7 @@
 /* cmdr grammar, in W3C EBNF notation: https://www.w3.org/TR/xml/#sec-notation
  *
  * This file and README.md define cmdr's syntax. Where the code disagrees with
- * them, the code has a bug; see docs/dev/stability.md.
+ * them, the code has a bug; see docs/stability.md.
  *
  * The rules live in these functions:
  *   src/session.c  cmdr_join        line joining (section 1)

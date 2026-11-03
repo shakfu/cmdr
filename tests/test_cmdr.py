@@ -901,6 +901,91 @@ class Commands(unittest.TestCase):
             result = run('--user', '-c', 'import probe\nprobe.twice', env={**os.environ, 'HOME': home})
             self.assertEqual((result.returncode, result.stdout), (0, 'probed probed\n'), result.stderr)
 
+    def test_modules_without_prelude(self):
+        # A module runs at its first import, after the prelude, which --user may
+        # replace. So ext/ modules may use only primitives and other modules.
+        modules = sorted(path.stem for path in ROOT.glob('ext/*/*.cmdr'))
+        self.assertGreater(len(modules), 0)
+        with tempfile.TemporaryDirectory() as home:
+            prelude = Path(home) / '.cmdr' / 'prelude.cmdr'
+            prelude.parent.mkdir()
+            prelude.write_text('')
+            for module in modules:
+                with self.subTest(module=module):
+                    result = subprocess.run([str(BINARY), '--user', '-c', f'import {module}'],
+                                            capture_output=True, text=True, timeout=20,
+                                            env={**os.environ, 'HOME': home})
+                    self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_fs_lines_stdin(self):
+        # PATH - reads stdin, which ext tests/ cannot feed.
+        def run(line, data):
+            return subprocess.run([str(BINARY), '-c', 'import fs\n' + line], input=data,
+                                  capture_output=True, text=True, timeout=20)
+        result = run('fs.each-line - { (l) length $l } | join ,', 'a\nbb\n\nccc')
+        self.assertEqual((result.returncode, result.stdout), (0, '1,2,0,3\n'), result.stderr)
+        result = run('fs.fold-lines - 0 { (n _) add $n 1 }', 'a\nb\n')
+        self.assertEqual((result.returncode, result.stdout), (0, '2\n'), result.stderr)
+        result = run('fs.each-line - { (l) $l } | count', '')
+        self.assertEqual((result.returncode, result.stdout), (0, '0\n'), result.stderr)
+        # ./- is a file named -.
+        with tempfile.TemporaryDirectory() as directory:
+            (Path(directory) / '-').write_text('file\n')
+            result = subprocess.run([str(BINARY), '-c', 'import fs\nfs.each-line ./- { (l) $l }'],
+                                    input='stdin\n', capture_output=True, text=True, timeout=20,
+                                    cwd=directory)
+            self.assertEqual((result.returncode, result.stdout), (0, 'file\n'), result.stderr)
+        # A script read from stdin shares it: the lines after the pipeline are its input.
+        result = subprocess.run([str(BINARY)], input='import fs\nfs.each-line - { (l) upper $l } | join ,\nx\ny\n',
+                                capture_output=True, text=True, timeout=20)
+        self.assertEqual((result.returncode, result.stdout), (0, 'X,Y\n'), result.stderr)
+        # SIGINT ends a read that blocks on an open pipe.
+        process = subprocess.Popen([str(BINARY), '-c', 'import fs\nfs.each-line - { (l) $l }'],
+                                   stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        try:
+            process.stdin.write(b'a\n')
+            process.stdin.flush()
+            time.sleep(0.3)
+            process.send_signal(signal.SIGINT)
+            _, stderr = process.communicate(timeout=5)
+        finally:
+            process.kill()
+        self.assertEqual(process.returncode, -signal.SIGINT)
+        self.assertIn(b'fs.each-line stdin: interrupted', stderr)
+
+    def test_io(self):
+        # ext/io/tests cannot feed stdin or read stderr.
+        def run(source, data=''):
+            return subprocess.run([str(BINARY), '-c', 'import io\n' + source], input=data,
+                                  capture_output=True, text=True, timeout=20)
+        result = run('io.input "Name: " | upper', 'bob\nrest\n')
+        self.assertEqual((result.returncode, result.stdout, result.stderr), (0, 'BOB\n', 'Name: '))
+        # Lines are read in turn; the last has no newline; \r stays.
+        result = run('io.input | concat 1\nio.input\nio.input | length', 'a\nb\nc\r')
+        self.assertEqual((result.returncode, result.stdout), (0, 'a1\nb\n2\n'), result.stderr)
+        # End of input mismatches.
+        result = run('or { () io.input } done')
+        self.assertEqual((result.returncode, result.stdout), (0, 'done\n'), result.stderr)
+        result = run('io.input', 'a\0b\n')
+        self.assertEqual((result.returncode, result.stderr), (1, 'cmdr: io.input: binary data is not supported\n'))
+        # Output comes before the line's result, on the stream each command names.
+        result = run('list a b | each { (s) io.etee $s | io.tee } | count\nio.print c\nio.eprint d')
+        self.assertEqual((result.returncode, result.stdout, result.stderr), (0, 'a\nb\n2\nc\n', 'a\nb\nd\n'))
+        result = run('import dict\ndict.of a "x\ty" | io.print')
+        self.assertEqual((result.returncode, result.stdout), (1, ''))
+        self.assertIn('io.print: cannot print dict', result.stderr)
+        # SIGINT ends a read that blocks on an open pipe.
+        process = subprocess.Popen([str(BINARY), '-c', 'import io\nio.input'],
+                                   stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        try:
+            time.sleep(0.3)
+            process.send_signal(signal.SIGINT)
+            _, stderr = process.communicate(timeout=5)
+        finally:
+            process.kill()
+        self.assertEqual(process.returncode, -signal.SIGINT)
+        self.assertIn(b'io.input: interrupted', stderr)
+
     def test_mk_ext(self):
         # CMake also builds a fresh skeleton with --c-test and runs its tests:
         # ext_mk-ext-skeleton_test and ext_mk-ext-skeleton_test_mk-ext-skeleton.
@@ -968,7 +1053,8 @@ class Commands(unittest.TestCase):
     def version(self):
         result = subprocess.run([str(BINARY), '--version'], capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertRegex(result.stdout, r'^cmdr \d+\.\d+\.\d+\n$')
+        header = re.search(r'^#define CMDR_VERSION "(.*)"$', (ROOT / 'include' / 'cmdr.h').read_text(), re.M)
+        self.assertEqual(result.stdout, f'cmdr {header[1]}\n')
         return result.stdout.strip()
 
     def test_user_prelude(self):
@@ -1444,17 +1530,17 @@ class Commands(unittest.TestCase):
             # spawn returns at once, with the pid of a program in its own session.
             start = time.monotonic()
             result = self.run_line(spawn(f'dir {quote(here)} out {quote(out)} err {quote(out)}',
-                                         'sh -c "pwd; ps -o sid= -p $$; echo e >&2; read x || echo eof; sleep 30"'))
+                                         'sh -c "pwd; echo e >&2; read x || echo eof; sleep 30"'))
             self.assertLess(time.monotonic() - start, 2)
             pid = int(result.stdout)
             try:
                 deadline = time.monotonic() + 5
-                while out.read_text().count('\n') < 4 and time.monotonic() < deadline:
+                while out.read_text().count('\n') < 3 and time.monotonic() < deadline:
                     time.sleep(0.02)
                 lines = out.read_text().splitlines()
                 self.assertEqual(lines[0], str(here))
-                self.assertEqual(int(lines[1]), pid)
-                self.assertEqual(lines[2:], ['e', 'eof'])
+                self.assertEqual(lines[1:], ['e', 'eof'])
+                self.assertEqual(os.getsid(pid), pid)  # macOS ps has no sid keyword.
             finally:
                 os.killpg(pid, 9)  # The session's group: sh and its sleep.
             # Without out and err, output goes nowhere.

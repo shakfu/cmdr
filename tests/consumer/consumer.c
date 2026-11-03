@@ -16,6 +16,10 @@ int main(void)
         return 1;
     }
     failed = strcmp(cmdr_text_of(&value), "a b c") != 0;
+    if (strcmp(CMDR_VERSION, CMDR_PACKAGE_VERSION)) {
+        fprintf(stderr, "consumer: cmdr.h is %s, the package %s\n", CMDR_VERSION, CMDR_PACKAGE_VERSION);
+        failed = 1;
+    }
     cmdr_free(&value);
     if (!cmdr_session_eval(session, "run true", &value, &error)) failed = 1;
     free(error);

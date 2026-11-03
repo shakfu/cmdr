@@ -1,0 +1,19 @@
+# Each line must succeed; cmdr stops at the first that fails.
+
+import base64
+
+base64.encode '' | equals ''
+base64.encode f | equals Zg==
+base64.encode fo | equals Zm8=
+base64.encode foo | equals Zm9v
+base64.encode foobar | equals Zm9vYmFy
+base64.encode '~~~???' | equals fn5+Pz8/
+base64.decode '' | equals ''
+base64.decode Zg== | equals f
+base64.decode Zm8= | equals fo
+base64.decode Zm9vYmFy | equals foobar
+base64.decode fn5+Pz8/ | equals '~~~???'
+base64.decode "Zm9v\nYmFy\n" | equals foobar
+base64.decode ' Zm 9v ' | equals foo
+base64.encode "a\nb\tc" | base64.decode | equals "a\nb\tc"
+base64.encode-file data.bin | equals AAH/Cg==

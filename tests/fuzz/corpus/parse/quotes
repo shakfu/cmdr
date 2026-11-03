@@ -1,0 +1,2 @@
+echo "a\tb" 'single' $(list x | count) \
+  | upper

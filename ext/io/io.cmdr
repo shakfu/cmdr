@@ -1,0 +1,2 @@
+# The io module: import io. C commands come from _io.
+from _io import input print tee eprint etee

@@ -1,0 +1,2 @@
+# The hashlib module: import hashlib. C commands come from _hashlib.
+from _hashlib import sha256 sha256-file

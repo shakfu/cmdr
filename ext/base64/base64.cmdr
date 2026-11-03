@@ -1,0 +1,2 @@
+# The base64 module: import base64. C commands come from _base64.
+from _base64 import encode encode-file decode

@@ -1,0 +1,16 @@
+# Each line must succeed; cmdr stops at the first that fails.
+# Run in tests/, which holds tree/.
+
+import glob
+
+glob.glob 'tree/*.c' | join , | equals tree/a.c,tree/b.c
+glob.glob 'tree/?.h' | join , | equals tree/c.h
+glob.glob 'tree/[ab].c' | join , | equals tree/a.c,tree/b.c
+glob.glob 'tree/[!a].c' | join , | equals tree/b.c
+glob.glob 'tree/.*.c' | join , | equals tree/.dot.c
+glob.glob 'tree/*/*.c' | join , | equals tree/sub/d.c
+glob.glob 'tree/*/' | join , | equals tree/sub/
+glob.glob tree/sub | join , | equals tree/sub
+glob.glob 'tree/*.zip' | count | equals 0
+glob.glob '' | count | equals 0
+glob.glob 'tree/\*.c' | count | equals 0

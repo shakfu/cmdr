@@ -1,0 +1,30 @@
+# Each line must succeed; cmdr stops at the first that fails.
+
+import csv
+import dict
+
+csv.rows '' | count | equals 0
+csv.rows "a,b\nc,d\n" | each { join '|' } | join ';' | equals 'a|b;c|d'
+csv.rows "a,b\nc,d" | count | equals 2
+csv.rows 'a,,b' | first | join '|' | equals 'a||b'
+csv.rows 'a,' | first | join '|' | equals 'a|'
+csv.rows '"a,b",c' | first | join '|' | equals 'a,b|c'
+csv.rows '"say ""hi""",x' | first | first | equals 'say "hi"'
+csv.rows "\"a\nb\",c\nd" | first | first | equals "a\nb"
+csv.rows "\"a\nb\",c\nd" | count | equals 2
+csv.rows 'a"b,c' | first | join '|' | equals 'a"b|c'
+csv.rows "a\n\nb" | each { count } | join , | equals 1,0,1
+csv.rows '""' | first | count | equals 1
+read endings.csv | csv.rows | each { join '|' } | join ';' | equals 'a;b;c'
+csv.rows "a\tb" "\t" | first | join '|' | equals 'a|b'
+csv.rows 'a;b' ';' | first | join '|' | equals 'a|b'
+csv.dicts "name,qty\napple,3\n\npear,2\n" | each { dict.get qty } | join , | equals 3,2
+csv.dicts "name,qty\n" | count | equals 0
+csv.dicts '' | count | equals 0
+list $(list a b) $(list 'c,d' 'e"f') | csv.format | equals "a,b\n\"c,d\",\"e\"\"f\"\n"
+list $(list '') | csv.format | equals "\"\"\n"
+list $(list '' '') | csv.format | equals ",\n"
+list $(list) | csv.format | equals "\n"
+list | csv.format | equals ''
+list $(list a b) | csv.format ';' | equals "a;b\n"
+csv.rows "x,\"y\nz\"\n\"\"\"\"\n" | csv.format | csv.rows | csv.format | equals "x,\"y\nz\"\n\"\"\"\"\n"

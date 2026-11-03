@@ -149,6 +149,21 @@ int main(void)
     expect_error(table, "fs.remove-tree //", 1, "refusing to remove //");
     expect_error(table, "fs.remove-tree ''", 1, "refusing to remove ''");
     expect_error(table, at("fs.remove-tree %s/none"), 1, "No such file or directory");
+    /* each-line and fold-lines. */
+    expect(table, at("write \"x\\ny\" %s/lines"), "x\ny");
+    expect_error(table, at("fs.each-line %s/lines { (l) add $l 1 }"), 1,
+                 "fs.each-line line 1: invalid finite number: x");
+    expect_error(table, at("fs.fold-lines %s/lines 0 { (_ l) equals $l z }"), 1,
+                 "fs.fold-lines line 1: equals: x differs from z");
+    expect_error(table, at("fs.each-line %s/lines { (a _) $a }"), 1, "fs.each-line:");
+    expect_error(table, at("fs.each-line %s/lines upper"), 1, "fs.each-line: expected a block { ... }");
+    expect_error(table, at("fs.each-line $(list a) { (l) $l }"), 1, "fs.each-line: PATH must be text");
+    expect_error(table, at("fs.each-line %s/none { (l) $l }"), 1, "No such file or directory");
+    expect_error(table, at("fs.fold-lines %s/lines 0"), 1, "usage: fs.fold-lines PATH INIT BLOCK [ARG ...]");
+    FILE *binary = fopen(at("%s/binary"), "wb");
+    CHECK(binary && fwrite("a\nb\0c\n", 1, 6, binary) == 6 && !fclose(binary));
+    expect_error(table, at("fs.each-line %s/binary { (l) $l }"), 1, "binary data is not supported");
+    CHECK(!remove(at("%s/binary")) && !remove(at("%s/lines")));
     expect(table, at("list a ro ro2 f2 fifo | each { (p) fs.remove-tree $(concat %s/ $p) } | count"), "5");
     expect(table, at("fs.walk %s | count"), "0");
     free(real);

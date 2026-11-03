@@ -1,0 +1,7 @@
+# Each line must succeed; cmdr stops at the first that fails.
+
+import io
+
+io.tee tee | equals tee
+io.etee etee | equals etee
+list a b | io.tee | join , | equals a,b

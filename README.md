@@ -30,6 +30,8 @@ The language also has `def`, which names a command; `as`, which names a value; `
 
 Start with [Quick start](#quick-start), then [The language](#the-language).
 
+[docs/stability.md](docs/stability.md) states what 1.x releases keep stable.
+
 ## Quick start
 
 cmdr needs a C11 compiler and CMake 3.16 or later, on Linux or macOS. Make is an optional frontend for the same CMake build.
@@ -420,10 +422,15 @@ The table summarizes each module; its README lists the commands.
 
 | Module | Commands |
 |-|-|
+| [base64](ext/base64/README.md) | Base64 encoding and decoding of text and files |
+| [csv](ext/csv/README.md) | Read CSV into rows or dicts and write rows, as Python's `csv` |
 | [dict](ext/dict/README.md) | Dicts: text keys mapped to values, in insertion order |
 | [env](ext/env/README.md) | Environment variables |
 | [fnmatch](ext/fnmatch/README.md) | Shell-style name patterns, with fnmatch(3) |
-| [fs](ext/fs/README.md) | Path tests, sizes, times, links, recursive listing, temporary paths, `fs.mkdir`, `fs.copy`, `fs.move`, `fs.remove`, `fs.remove-tree` |
+| [fs](ext/fs/README.md) | Path tests, sizes, times, links, recursive listing, temporary paths, `fs.mkdir`, `fs.copy`, `fs.move`, `fs.remove`, `fs.remove-tree`, and reading a file line by line |
+| [glob](ext/glob/README.md) | Paths that match a shell-style pattern, as Python's `glob` |
+| [hashlib](ext/hashlib/README.md) | SHA-256 digests of text and files |
+| [io](ext/io/README.md) | Read a line of stdin; write to stdout or stderr before a line ends |
 | [json](ext/json/README.md) | Read JSON by path and build it, keeping it as text; convert objects to and from dicts |
 | [lists](ext/lists/README.md) | Enumerate, zip, chain, flatten, replace an item, sort and group by a key, batch, accumulate |
 | [num](ext/num/README.md) | `num.seq`, modulo, rounding |
@@ -659,6 +666,8 @@ cmdr_session_close(session);
 - `cmdr_check_syntax` checks a pipeline's syntax without resolving names; [docs/grammar.ebnf](docs/grammar.ebnf) lists what it checks. `cmdr_format` returns source in the multiline or flat layout of `cmdr --fmt`; a host that generates cmdr can emit flat lines and format them for people.
 
 - `cmdr_session_add_module` makes a C table importable as a module, and `cmdr_session_add_source` makes a script's source one. They are found before files. Extensions are part of the executable, not `libcmdr`, so a host adds its own this way.
+
+- `CMDR_VERSION_MAJOR`, `CMDR_VERSION_MINOR`, and `CMDR_VERSION_PATCH` give the header's version, and `CMDR_VERSION` the same as text, so a host can check it with `#if`.
 
 - [src/main.c](src/main.c) is the cmdr executable, built on this API.
 

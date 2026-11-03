@@ -1,0 +1,76 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+      # PyYAML, vim, and tree-sitter let the editor-grammar tests run; sox and
+      # ALSA let the snd and midi examples build. Each is skipped when absent.
+      - name: Install dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y vim libsox-dev libsoxr-dev libasound2-dev
+      - name: Install dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: brew install sox libsoxr
+      - run: pip install pyyaml
+      - run: npm install -g tree-sitter-cli@0.27.1
+      - run: make test
+      - run: make check-format BUILD_DIR=build-all
+
+  # Linux only: macOS gives secondary threads 512 KiB, which sanitizer frames
+  # overflow in test_api's 100-deep chain. No tree-sitter: it reads CFLAGS and
+  # would load a sanitized grammar into an unsanitized process.
+  sanitize:
+    runs-on: ubuntu-latest
+    env:
+      CFLAGS: -fsanitize=address,undefined -fno-sanitize-recover=undefined -fno-omit-frame-pointer
+      LDFLAGS: -fsanitize=address,undefined
+      UBSAN_OPTIONS: print_stacktrace=1
+    steps:
+      - uses: actions/checkout@v4
+      - run: make check BUILD_DIR=build-asan BUILD_TYPE=Debug
+
+  # libFuzzer, 2 minutes per target. -rss_limit_mb=0 stops libFuzzer's RSS
+  # thread, which LeakSanitizer reports at exit. A crash uploads its input.
+  fuzz:
+    runs-on: ubuntu-latest
+    env:
+      CC: clang
+      CFLAGS: -fsanitize=fuzzer-no-link,address,undefined -fno-sanitize-recover=undefined -g -O1
+      UBSAN_OPTIONS: print_stacktrace=1
+    steps:
+      - uses: actions/checkout@v4
+      - run: cmake -S . -B build-fuzz -DCMDR_FUZZ=ON -DCMAKE_BUILD_TYPE=Debug
+      - run: cmake --build build-fuzz -j --target fuzz_parse fuzz_json fuzz_csv fuzz_base64
+      - name: Fuzz
+        run: |
+          mkdir -p artifacts
+          for t in parse json csv base64; do
+            cp -R tests/fuzz/corpus/$t corpus-$t
+            build-fuzz/tests/fuzz_$t -max_total_time=120 -timeout=10 -rss_limit_mb=0 \
+              -malloc_limit_mb=2048 -artifact_prefix=artifacts/$t- corpus-$t
+          done
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-artifacts
+          path: artifacts/
